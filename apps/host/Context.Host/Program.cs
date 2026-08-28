@@ -100,17 +100,8 @@ try
     app.MapGraphEndpoints();
     app.MapHealthEndpoints();
 
-    // NOTE: the generated .mcp.json entry (Context.Claude.Installation.ClaudeIntegrationInstaller /
-    // ClaudeIntegrationOptions.McpCommand+McpArgs) assumes a stdio-launched MCP server
-    // ("dotnet Context.Host.dll --stdio"), matching the spec's stated default transport. The
-    // ModelContextProtocol.AspNetCore package actually installed (0.2.0-preview.3) instead offers
-    // an HTTP/SSE transport that composes cleanly with this same ASP.NET Core app (WithHttpTransport
-    // + MapMcp), which is what's wired here. These two don't match yet: as shipped, a project's
-    // .mcp.json will try to spawn a second stdio process rather than talking to this endpoint.
-    // Follow-up (tracked, not fixed here - Context.Claude is out of this task's scope): either give
-    // Context.Host a "--stdio" launch mode that runs a stdio McpServer sharing the same DI
-    // container, or change the installer to emit an HTTP-type .mcp.json entry
-    // (`{"type":"http","url":"http://127.0.0.1:{port}/mcp"}`) pointing at the route mapped below.
+    // ClaudeIntegrationInstaller writes .mcp.json as {"type":"http","url":"http://127.0.0.1:{port}/mcp"},
+    // matching this route — no separate stdio process is spawned.
     app.MapMcp("/mcp");
 
     await app.RunAsync().ConfigureAwait(false);
@@ -210,3 +201,6 @@ static async Task<(Guid? ProjectId, string? BearerToken)> TryReadLocalConfigAsyn
         return (null, null);
     }
 }
+
+// Exposes the top-level-statement Program to WebApplicationFactory<Program> in Context.IntegrationTests.
+public partial class Program;

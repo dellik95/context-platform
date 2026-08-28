@@ -54,8 +54,12 @@ internal static class SettingsJsonMerger
         }
     }
 
-    /// <summary>Adds/overwrites the "context-platform" entry under mcpConfig["mcpServers"].</summary>
-    public static void MergeMcpServer(JsonObject mcpConfig, string command, IReadOnlyList<string> args)
+    /// <summary>
+    /// Adds/overwrites the "context-platform" entry under <c>mcpConfig["mcpServers"]</c> as an
+    /// HTTP-type server pointing at Context.Host's own MCP endpoint (see
+    /// <see cref="ClaudeIntegrationOptions.McpPath"/>) — there is no separate process to spawn.
+    /// </summary>
+    public static void MergeMcpServer(JsonObject mcpConfig, string url)
     {
         if (mcpConfig["mcpServers"] is not JsonObject servers)
         {
@@ -63,16 +67,10 @@ internal static class SettingsJsonMerger
             mcpConfig["mcpServers"] = servers;
         }
 
-        var argsArray = new JsonArray();
-        foreach (var arg in args)
-        {
-            argsArray.Add(JsonValue.Create(arg));
-        }
-
         servers["context-platform"] = new JsonObject
         {
-            ["command"] = command,
-            ["args"] = argsArray,
+            ["type"] = "http",
+            ["url"] = url,
         };
     }
 

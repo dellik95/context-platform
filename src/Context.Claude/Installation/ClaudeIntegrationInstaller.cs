@@ -86,7 +86,8 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         var mcpPath = Path.Combine(projectRoot, ".mcp.json");
         BackupIfExists(mcpPath, projectRoot, backupRoot);
         var mcpConfig = await ReadOrCreateJsonObjectAsync(mcpPath, ct).ConfigureAwait(false);
-        SettingsJsonMerger.MergeMcpServer(mcpConfig, _options.McpCommand, _options.McpArgs ?? DefaultMcpArgs());
+        var mcpUrl = $"http://127.0.0.1:{_options.HostPort}{_options.McpPath}";
+        SettingsJsonMerger.MergeMcpServer(mcpConfig, mcpUrl);
         await WriteJsonAsync(mcpPath, mcpConfig, ct).ConfigureAwait(false);
 
         // 4) .claude-plugin/plugin.json manifest.
@@ -114,9 +115,6 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         _logger.LogInformation(
             "Installed Claude Code integration for project {ProjectId} at {ProjectRoot}", projectId, projectRoot);
     }
-
-    private static string[] DefaultMcpArgs() =>
-        [Path.Combine(AppContext.BaseDirectory, "Context.Host.dll"), "--stdio"];
 
     private JsonObject BuildPluginManifest() => new()
     {

@@ -24,14 +24,13 @@ public class ClaudeIntegrationOptions
     /// </summary>
     public int HookTimeoutSeconds { get; set; } = 2;
 
-    /// <summary>Command used to launch the Context.Host MCP stdio server from <c>.mcp.json</c>.</summary>
-    public string McpCommand { get; set; } = "dotnet";
-
     /// <summary>
-    /// Arguments passed to <see cref="McpCommand"/>. When <c>null</c>, the installer defaults to
-    /// <c>["&lt;AppContext.BaseDirectory&gt;/Context.Host.dll", "--stdio"]</c> — i.e. it assumes
-    /// Context.Host is deployed alongside whatever process runs the installer (Context.Cli).
-    /// Override for custom deployment layouts (e.g. a published self-contained Context.Host).
+    /// Path (relative to <see cref="HostPort"/>'s origin) that Context.Host maps its MCP endpoint
+    /// to — see <c>app.MapMcp(...)</c> in <c>Context.Host/Program.cs</c>. The installer writes
+    /// <c>.mcp.json</c> as an HTTP-type server entry (<c>http://127.0.0.1:{HostPort}{McpPath}</c>)
+    /// rather than a spawned stdio command, because Context.Host already serves MCP over HTTP on
+    /// this same always-running process (the spec's "one host process" decision) — there is no
+    /// separate stdio server to launch.
     /// </summary>
-    public string[]? McpArgs { get; set; }
+    public string McpPath { get; set; } = "/mcp";
 }
