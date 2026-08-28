@@ -11,6 +11,7 @@
 
     <!-- ASP.NET / SignalR client (server libs come from the shared framework) -->
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.0" />
 
     <!-- CLI -->
     <PackageVersion Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
@@ -28,6 +29,17 @@
 
     <!-- Utilities -->
     <PackageVersion Include="System.IO.Abstractions" Version="21.1.7" />
+
+    <!-- Microsoft.Extensions (DI/Options/Logging abstractions, used outside ASP.NET hosts too) -->
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+    <!-- Context.Application: JobDispatcher is a hosted-service-friendly IJobQueue (see JobDispatcher.cs) -->
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0" />
+
+    <!-- Providers (Context.Providers): DI/HTTP plumbing for provider implementations -->
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.20.1" />
 
     <!-- Testing -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />

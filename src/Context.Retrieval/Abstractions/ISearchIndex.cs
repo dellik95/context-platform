@@ -1,0 +1,27 @@
+namespace Context.Retrieval.Abstractions;
+
+/// <summary>
+/// Persistence-facing seam for candidate retrieval. Context.Retrieval does not reference
+/// Context.Infrastructure (see CONTRACTS.md dependency graph); Context.Application implements
+/// this interface against Context.Infrastructure + SQLite FTS5, wiring the real BM25 lexical
+/// query and the vector-similarity scan. Context.Retrieval only consumes the results — the
+/// scoring/merge/rerank/budget logic lives here.
+/// </summary>
+public interface ISearchIndex
+{
+    /// <summary>
+    /// SQLite FTS5 / BM25 lexical search scoped to a project. Each result identifies a chunk and,
+    /// where resolvable, the symbol/file it belongs to (<c>SymbolId</c> and/or <c>FileId</c> may be
+    /// null for chunks that are not attached to a resolved symbol).
+    /// </summary>
+    Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double BM25Score)>> LexicalSearchAsync(
+        Guid projectId, string text, CancellationToken ct);
+
+    /// <summary>
+    /// Vector-similarity search scoped to a project, using a pre-computed query embedding.
+    /// <c>CosineScore</c> is the cosine similarity between the query embedding and the chunk's
+    /// stored embedding, typically in [-1, 1].
+    /// </summary>
+    Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double CosineScore)>> VectorSearchAsync(
+        Guid projectId, float[] queryEmbedding, CancellationToken ct);
+}

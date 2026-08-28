@@ -1,0 +1,18 @@
+using Context.Domain.Enums;
+
+namespace Context.Domain.Entities;
+
+public class Job
+{
+    public Guid Id { get; set; }
+    public JobType Type { get; set; }
+    public required string PayloadJson { get; set; }
+    public JobStatus Status { get; set; } = JobStatus.Pending;
+    public int Priority { get; set; }
+    public int Attempts { get; set; }
+    public string? LastError { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? StartedAt { get; set; }
+    public DateTimeOffset? FinishedAt { get; set; }
+    public DateTimeOffset? NextRetryAt { get; set; }
+}
