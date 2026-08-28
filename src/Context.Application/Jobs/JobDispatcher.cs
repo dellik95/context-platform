@@ -57,6 +57,15 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     private CancellationTokenSource? _lifetimeCts;
     private Task? _processingTask;
 
+    // JobDispatcher is deliberately registered under three singleton service types
+    // (JobDispatcher, IJobQueue, IHostedService) that all resolve to this same instance
+    // (see ServiceCollectionExtensions.AddJobDispatcher). Microsoft.Extensions.DependencyInjection
+    // tracks each singleton call site's resolved disposable separately, so a container disposing
+    // its root ServiceProvider calls DisposeAsync on this same object once per call site — i.e.
+    // up to three times. Both StopAsync and DisposeAsync must therefore tolerate repeat calls.
+    private int _stopped;
+    private int _disposed;
+
     public JobDispatcher(IServiceScopeFactory scopeFactory, ILogger<JobDispatcher>? logger = null)
     {
         _scopeFactory = scopeFactory;
@@ -331,7 +340,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (_lifetimeCts is null)
+        if (_lifetimeCts is null || Interlocked.Exchange(ref _stopped, 1) != 0)
         {
             return;
         }
@@ -354,7 +363,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (_lifetimeCts is null)
+        if (_lifetimeCts is null || Interlocked.Exchange(ref _disposed, 1) != 0)
         {
             return;
         }

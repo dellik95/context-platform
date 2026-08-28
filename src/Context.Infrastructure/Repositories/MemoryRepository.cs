@@ -38,9 +38,10 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
             q = q.Where(m => m.SupersededById == null);
         }
 
-        return await q.OrderByDescending(m => m.Pinned)
-            .ThenByDescending(m => m.LastReinforcedAt)
-            .ToListAsync(ct);
+        // SQLite's EF Core provider cannot translate ORDER BY over DateTimeOffset columns
+        // (LastReinforcedAt), so results are ordered client-side after filtering server-side.
+        var results = await q.ToListAsync(ct);
+        return [.. results.OrderByDescending(m => m.Pinned).ThenByDescending(m => m.LastReinforcedAt)];
     }
 
     public async Task<IReadOnlyList<Memory>> ListByProjectAsync(Guid projectId, bool includeSuperseded, CancellationToken ct)
@@ -51,8 +52,7 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
             q = q.Where(m => m.SupersededById == null);
         }
 
-        return await q.OrderByDescending(m => m.Pinned)
-            .ThenByDescending(m => m.LastReinforcedAt)
-            .ToListAsync(ct);
+        var results = await q.ToListAsync(ct);
+        return [.. results.OrderByDescending(m => m.Pinned).ThenByDescending(m => m.LastReinforcedAt)];
     }
 }

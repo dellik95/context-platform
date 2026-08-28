@@ -33,11 +33,16 @@ public class JobRepository(ContextDbContext db) : IJobRepository
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         var now = DateTimeOffset.UtcNow;
-        var job = await db.Jobs
+        // SQLite's EF Core provider cannot translate ORDER BY over DateTimeOffset columns
+        // (CreatedAt), so candidates are filtered server-side and ordered client-side.
+        var candidates = await db.Jobs
             .Where(j => j.Status == JobStatus.Pending && (j.NextRetryAt == null || j.NextRetryAt <= now))
+            .ToListAsync(ct);
+
+        var job = candidates
             .OrderByDescending(j => j.Priority)
             .ThenBy(j => j.CreatedAt)
-            .FirstOrDefaultAsync(ct);
+            .FirstOrDefault();
 
         if (job is null)
         {
@@ -53,10 +58,12 @@ public class JobRepository(ContextDbContext db) : IJobRepository
         return job;
     }
 
-    public async Task<IReadOnlyList<Job>> ListByStatusAsync(JobStatus status, CancellationToken ct) =>
-        await db.Jobs.AsNoTracking()
+    public async Task<IReadOnlyList<Job>> ListByStatusAsync(JobStatus status, CancellationToken ct)
+    {
+        var jobs = await db.Jobs.AsNoTracking()
             .Where(j => j.Status == status)
-            .OrderByDescending(j => j.Priority)
-            .ThenBy(j => j.CreatedAt)
             .ToListAsync(ct);
+
+        return [.. jobs.OrderByDescending(j => j.Priority).ThenBy(j => j.CreatedAt)];
+    }
 }

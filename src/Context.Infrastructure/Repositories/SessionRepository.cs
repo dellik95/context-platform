@@ -38,11 +38,16 @@ public class SessionRepository(ContextDbContext db) : ISessionRepository
         await db.SaveChangesAsync(ct);
     }
 
-    public async Task<IReadOnlyList<SessionEvent>> GetEventsAsync(Guid sessionId, CancellationToken ct) =>
-        await db.SessionEvents.AsNoTracking()
+    public async Task<IReadOnlyList<SessionEvent>> GetEventsAsync(Guid sessionId, CancellationToken ct)
+    {
+        // SQLite's EF Core provider cannot translate ORDER BY over DateTimeOffset columns,
+        // so the (bounded, per-session) result set is ordered client-side instead.
+        var events = await db.SessionEvents.AsNoTracking()
             .Where(e => e.SessionId == sessionId)
-            .OrderBy(e => e.Timestamp)
             .ToListAsync(ct);
+
+        return [.. events.OrderBy(e => e.Timestamp)];
+    }
 
     public async Task UpsertSummaryAsync(SessionSummary summary, CancellationToken ct)
     {

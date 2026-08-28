@@ -26,7 +26,8 @@ public static class ServiceCollectionExtensions
         }
 
         services.AddDbContextPool<ContextDbContext>(options =>
-            options.UseSqlite($"Data Source={dbPath}"));
+            options.UseSqlite($"Data Source={dbPath}")
+                   .AddInterceptors(new ContextDbContext.SqlitePragmaConnectionInterceptor()));
 
         services.AddScoped<IProjectRepository, ProjectRepository>();
         services.AddScoped<IFileRepository, FileRepository>();

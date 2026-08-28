@@ -36,15 +36,6 @@ public class ContextDbContext : DbContext
     public DbSet<ProviderModel> ProviderModels => Set<ProviderModel>();
     public DbSet<ClaudeIntegration> ClaudeIntegrations => Set<ClaudeIntegration>();
 
-    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
-    {
-        base.OnConfiguring(optionsBuilder);
-
-        // Ensure WAL mode + FK enforcement are applied on every physical connection this
-        // context opens, regardless of how the DbContextOptions were built (pooled or not).
-        optionsBuilder.AddInterceptors(new SqlitePragmaConnectionInterceptor());
-    }
-
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -56,8 +47,12 @@ public class ContextDbContext : DbContext
     /// Applies the pragmas required for correct concurrent SQLite access as soon as a
     /// connection is physically opened: WAL journaling (readers don't block writers) and
     /// foreign-key constraint enforcement (off by default per-connection in SQLite).
+    /// Registered at <see cref="DbContextOptionsBuilder"/> configuration time (see
+    /// <c>ServiceCollectionExtensions.AddContextInfrastructure</c>) rather than via an
+    /// <c>OnConfiguring</c> override, because EF Core forbids mutating options in
+    /// <c>OnConfiguring</c> when the context is registered with <c>AddDbContextPool</c>.
     /// </summary>
-    private sealed class SqlitePragmaConnectionInterceptor : Microsoft.EntityFrameworkCore.Diagnostics.DbConnectionInterceptor
+    internal sealed class SqlitePragmaConnectionInterceptor : Microsoft.EntityFrameworkCore.Diagnostics.DbConnectionInterceptor
     {
         public override void ConnectionOpened(System.Data.Common.DbConnection connection, Microsoft.EntityFrameworkCore.Diagnostics.ConnectionEndEventData eventData)
         {
