@@ -45,6 +45,13 @@ try
 
     builder.Host.UseSerilog();
 
+    // Both calls are no-ops unless the process was actually launched by that platform's service
+    // manager (Windows SCM / systemd), so it's safe to call both on every OS — this is what lets
+    // the exact same published binary run interactively, as a Windows Service, or as a systemd
+    // unit. See deploy/ for the corresponding service definitions.
+    builder.Host.UseWindowsService(o => o.ServiceName = "ContextPlatformHost");
+    builder.Host.UseSystemd();
+
     builder.Services.AddSingleton(hostOptions);
     builder.Services.AddSingleton<HostProjectContext>();
     builder.Services.AddSingleton<ClaudeSessionMap>();

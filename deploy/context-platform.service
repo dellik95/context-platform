@@ -1,0 +1,19 @@
+[Unit]
+Description=Context Platform Host (%i)
+After=network.target
+
+[Service]
+# UseSystemd() in Program.cs sends the READY=1 notification this Type expects.
+Type=notify
+# %i = the systemd instance name, e.g. `systemctl enable --now context-platform@myproject`.
+# CONTEXT_PLATFORM_ROOT/CONTEXT_PLATFORM_PORT/provider keys all come from this per-instance file
+# (see install-systemd-service.sh, which generates it from --project-root/--port).
+EnvironmentFile=/etc/context-platform/%i.env
+ExecStart=/opt/context-platform/Context.Host
+WorkingDirectory=/opt/context-platform
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
