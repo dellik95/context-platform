@@ -1,0 +1,30 @@
+<Solution>
+  <Folder Name="/apps/" />
+  <Folder Name="/apps/cli/">
+    <Project Path="apps/cli/Context.Cli/Context.Cli.csproj" />
+  </Folder>
+  <Folder Name="/apps/host/">
+    <Project Path="apps/host/Context.Host/Context.Host.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Context.Application/Context.Application.csproj" />
+    <Project Path="src/Context.Claude/Context.Claude.csproj" />
+    <Project Path="src/Context.Domain/Context.Domain.csproj" />
+    <Project Path="src/Context.Graph/Context.Graph.csproj" />
+    <Project Path="src/Context.Indexing/Context.Indexing.csproj" />
+    <Project Path="src/Context.Infrastructure/Context.Infrastructure.csproj" />
+    <Project Path="src/Context.Memory/Context.Memory.csproj" />
+    <Project Path="src/Context.Providers/Context.Providers.csproj" />
+    <Project Path="src/Context.Retrieval/Context.Retrieval.csproj" />
+    <Project Path="src/Context.Shared/Context.Shared.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Context.Application.Tests/Context.Application.Tests.csproj" />
+    <Project Path="tests/Context.Domain.Tests/Context.Domain.Tests.csproj" />
+    <Project Path="tests/Context.Graph.Tests/Context.Graph.Tests.csproj" />
+    <Project Path="tests/Context.Indexing.Tests/Context.Indexing.Tests.csproj" />
+    <Project Path="tests/Context.IntegrationTests/Context.IntegrationTests.csproj" />
+    <Project Path="tests/Context.Memory.Tests/Context.Memory.Tests.csproj" />
+    <Project Path="tests/Context.Retrieval.Tests/Context.Retrieval.Tests.csproj" />
+  </Folder>
+</Solution>

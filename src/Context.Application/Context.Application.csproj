@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Context.Domain\Context.Domain.csproj" />
+    <ProjectReference Include="..\Context.Shared\Context.Shared.csproj" />
+    <ProjectReference Include="..\Context.Infrastructure\Context.Infrastructure.csproj" />
+    <ProjectReference Include="..\Context.Indexing\Context.Indexing.csproj" />
+    <ProjectReference Include="..\Context.Graph\Context.Graph.csproj" />
+    <ProjectReference Include="..\Context.Retrieval\Context.Retrieval.csproj" />
+    <ProjectReference Include="..\Context.Memory\Context.Memory.csproj" />
+    <ProjectReference Include="..\Context.Providers\Context.Providers.csproj" />
+    <ProjectReference Include="..\Context.Claude\Context.Claude.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
