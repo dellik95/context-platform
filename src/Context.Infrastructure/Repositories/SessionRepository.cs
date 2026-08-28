@@ -23,7 +23,22 @@ public class SessionRepository(ContextDbContext db) : ISessionRepository
 
     public async Task UpdateAsync(Session session, CancellationToken ct)
     {
-        db.Sessions.Update(session);
+        // GetByIdAsync is AsNoTracking, so within a single scope a caller can hold a Session
+        // instance from a prior AddAsync/query that the context is *already* tracking under the
+        // same key as the one passed here. Blindly calling Update(session) would then try to
+        // attach a second instance with the same key and throw ("another instance with the same
+        // key value is already being tracked"). Route through the existing tracked entry when
+        // there is one; otherwise attach as usual.
+        var tracked = db.ChangeTracker.Entries<Session>().FirstOrDefault(e => e.Entity.Id == session.Id);
+        if (tracked is not null)
+        {
+            tracked.CurrentValues.SetValues(session);
+        }
+        else
+        {
+            db.Sessions.Update(session);
+        }
+
         await db.SaveChangesAsync(ct);
     }
 
