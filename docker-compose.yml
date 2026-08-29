@@ -1,0 +1,22 @@
+services:
+  context-platform:
+    build: .
+    image: context-platform:local
+    restart: unless-stopped
+    # Loopback-only publish keeps the exact same effective security boundary as the bare-metal
+    # default (Kestrel binds 0.0.0.0 *inside* the container only because loopback there would be
+    # unreachable from outside it — see ContextHostOptions.BindHost's remarks) — nothing beyond
+    # this machine can ever reach it.
+    ports:
+      - "127.0.0.1:${CONTEXT_PLATFORM_PORT:-47923}:47923"
+    environment:
+      CONTEXT_PLATFORM_PORT: "47923"
+      # Uncomment to use real providers instead of the offline/no-op defaults:
+      # CONTEXT_EMBEDDING_PROVIDER: openai
+      # CONTEXT_LLM_PROVIDER: anthropic
+      # CONTEXT_OPENAI_API_KEY: ${CONTEXT_OPENAI_API_KEY}
+      # CONTEXT_ANTHROPIC_API_KEY: ${CONTEXT_ANTHROPIC_API_KEY}
+    volumes:
+      # Defaults to this repo itself — dogfooding Context Platform on its own codebase. Point
+      # HOST_PROJECT_PATH (env var or a .env file) at any other repo to index that one instead.
+      - "${HOST_PROJECT_PATH:-.}:/workspace"

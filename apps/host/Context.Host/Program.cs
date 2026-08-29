@@ -15,6 +15,7 @@ using Context.Infrastructure.Abstractions;
 using Context.Memory;
 using Context.Providers;
 using Context.Retrieval;
+using Microsoft.EntityFrameworkCore;
 using Serilog;
 
 var hostOptions = ContextHostOptions.FromEnvironment(new ConfigurationBuilder().AddEnvironmentVariables().Build());
@@ -35,13 +36,15 @@ Log.Logger = new LoggerConfiguration()
 try
 {
     Log.Information(
-        "Starting Context.Host — project root {ProjectRoot}, port {Port}", hostOptions.ProjectRoot, hostOptions.Port);
+        "Starting Context.Host — project root {ProjectRoot}, bind {BindHost}:{Port}",
+        hostOptions.ProjectRoot, hostOptions.BindHost, hostOptions.Port);
 
     var builder = WebApplication.CreateBuilder(args);
 
-    // Single-process, local-only host (spec's "one host process" decision): bind Kestrel to
-    // loopback only, on the configured/default port.
-    builder.WebHost.UseUrls($"http://127.0.0.1:{hostOptions.Port}");
+    // Single-process, local-only host (spec's "one host process" decision): bind Kestrel per
+    // ContextHostOptions.BindHost — loopback-only bare-metal, 0.0.0.0 in a container (see that
+    // property's remarks for how the container case still keeps the same effective boundary).
+    builder.WebHost.UseUrls($"http://{hostOptions.BindHost}:{hostOptions.Port}");
 
     builder.Host.UseSerilog();
 
@@ -85,6 +88,16 @@ try
         .WithToolsFromAssembly();
 
     var app = builder.Build();
+
+    // Unlike Context.Cli (which migrates explicitly per command), this is the only entrypoint
+    // that owns the database for as long as the host process runs, so it must bring the schema
+    // up to date itself on every startup — MigrateAsync is a no-op once already current, so this
+    // is safe to run unconditionally (including on every container restart).
+    await using (var migrationScope = app.Services.CreateAsyncScope())
+    {
+        var db = migrationScope.ServiceProvider.GetRequiredService<ContextDbContext>();
+        await db.Database.MigrateAsync().ConfigureAwait(false);
+    }
 
     await InitializeHostProjectContextAsync(app, hostOptions.ProjectRoot).ConfigureAwait(false);
 
@@ -148,7 +161,28 @@ static async Task InitializeHostProjectContextAsync(WebApplication app, string p
     using var scope = app.Services.CreateScope();
     var projects = scope.ServiceProvider.GetRequiredService<IProjectRepository>();
 
-    var project = await projects.GetByRootPathAsync(projectRoot, CancellationToken.None).ConfigureAwait(false);
+    // Look up by the id from .claude/context-platform.local.json FIRST, before falling back to
+    // root-path matching: the same mounted repo (and thus the same local config file) can be
+    // served from different effective root paths across environments — e.g. a bare-metal run
+    // sees "C:\...\repo" while a container run of the identical repo sees "/workspace" — so a
+    // root-path-only lookup would treat them as two different projects and then fail inserting a
+    // second row with the SAME configProjectId (UNIQUE constraint on Projects.Id). Reusing the
+    // existing row (and just updating its RootPath) keeps memories/sessions/index data attached
+    // to the one logical project regardless of which environment last touched it.
+    var project = configProjectId is { } id
+        ? await projects.GetByIdAsync(id, CancellationToken.None).ConfigureAwait(false)
+        : null;
+    project ??= await projects.GetByRootPathAsync(projectRoot, CancellationToken.None).ConfigureAwait(false);
+
+    if (project is not null && !string.Equals(project.RootPath, projectRoot, StringComparison.Ordinal))
+    {
+        logger.LogInformation(
+            "Project {ProjectId} root path changed from '{OldRoot}' to '{NewRoot}' (different environment serving the same project).",
+            project.Id, project.RootPath, projectRoot);
+        project.RootPath = projectRoot;
+        await projects.UpdateAsync(project, CancellationToken.None).ConfigureAwait(false);
+    }
+
     if (project is null)
     {
         project = await projects.AddAsync(new Project

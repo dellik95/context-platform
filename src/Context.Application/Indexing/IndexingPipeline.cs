@@ -6,6 +6,8 @@ using Context.Indexing;
 using Context.Indexing.Abstractions;
 using Context.Infrastructure.Abstractions;
 using Context.Shared;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using DomainFile = Context.Domain.Entities.File;
 
 namespace Context.Application.Indexing;
@@ -46,10 +48,13 @@ public sealed class IndexingPipeline(
     Func<string, IIgnoreMatcher> ignoreFactory,
     IEnumerable<ILanguageParser> parsers,
     IContentHasher hasher,
-    IJobQueue jobQueue) : IIndexingPipeline
+    IJobQueue jobQueue,
+    ILogger<IndexingPipeline>? logger = null) : IIndexingPipeline
 {
     /// <summary>Safety cap on a single chunk's text so one pathological symbol/file can't blow up storage/search.</summary>
     private const int MaxChunkChars = 20_000;
+
+    private readonly ILogger<IndexingPipeline> _logger = logger ?? NullLogger<IndexingPipeline>.Instance;
 
     public Task IndexFileAsync(Guid projectId, string relativePath, CancellationToken ct) =>
         IndexFileInternalAsync(projectId, relativePath, forceReprocess: false, ct);
@@ -181,7 +186,13 @@ public sealed class IndexingPipeline(
         var previous = await LoadPreviousSymbolDraftsAsync(fileEntity.Id, ct).ConfigureAwait(false);
 
         var ast = parser.Parse(sourceText);
-        var currentDrafts = parser.ExtractSymbols(ast);
+        // A parser can legitimately extract two declarations under one QualifiedName (most
+        // commonly method overloads, which this pipeline's QualifiedName scheme doesn't
+        // disambiguate by parameter list) — SymbolDiffer.Diff already documents and accepts
+        // "last one wins" for that case; deduplicate here too, on the SAME raw list SymbolDiffer
+        // is about to see, so every symbol id assigned below is unique and this pipeline's own
+        // Symbol/Chunk rows never try to attach two EF-tracked entities under one key.
+        var currentDrafts = DeduplicateByQualifiedName(parser.ExtractSymbols(ast), fileEntity.RelativePath, _logger);
         var diff = SymbolDiffer.Diff(previous.Drafts, currentDrafts);
 
         // Preserve symbol identity by QualifiedName across reindex: a matched Added/Changed/
@@ -324,6 +335,38 @@ public sealed class IndexingPipeline(
             await jobQueue.EnqueueAsync(JobType.EmbedChunk, new EmbedChunkPayload(chunk.Id, chunk.ContentHash, chunk.Text), ct: ct)
                 .ConfigureAwait(false);
         }
+    }
+
+    private static IReadOnlyList<SymbolDraft> DeduplicateByQualifiedName(
+        IReadOnlyList<SymbolDraft> drafts, string relativePath, ILogger logger)
+    {
+        if (drafts.Count < 2)
+        {
+            return drafts;
+        }
+
+        var byQualifiedName = new Dictionary<string, SymbolDraft>(drafts.Count, StringComparer.Ordinal);
+        var duplicateCount = 0;
+        foreach (var draft in drafts)
+        {
+            if (byQualifiedName.ContainsKey(draft.QualifiedName))
+            {
+                duplicateCount++;
+            }
+
+            byQualifiedName[draft.QualifiedName] = draft; // last one wins, matching SymbolDiffer.Diff's own policy
+        }
+
+        if (duplicateCount > 0)
+        {
+            logger.LogWarning(
+                "{File}: {Count} symbol(s) shared a QualifiedName with another symbol in the same file " +
+                "(most commonly an overload — QualifiedName here doesn't encode the parameter list) and were " +
+                "collapsed to the last-parsed declaration; only one is indexed.",
+                relativePath, duplicateCount);
+        }
+
+        return [.. byQualifiedName.Values];
     }
 
     private static string Cap(string text, int maxChars) => text.Length > maxChars ? text[..maxChars] : text;
