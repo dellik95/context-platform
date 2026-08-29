@@ -79,9 +79,16 @@ try
 
     builder.Services.AddOpenApi();
 
+    // Every JSON response (Memory.Type/Tier, GraphNode.Kind, etc.) should read as "Decision"/
+    // "Class", not a bare ordinal — the Dashboard and any other API consumer shouldn't need to
+    // hardcode this project's enum member order.
+    builder.Services.ConfigureHttpJsonOptions(o =>
+        o.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
+
     // Dashboard live updates (spec §13) — Angular clients join a per-project group and receive
     // ProjectStatusChanged pushes from ProjectEndpoints' background reindex, instead of polling.
-    builder.Services.AddSignalR();
+    builder.Services.AddSignalR()
+        .AddJsonProtocol(o => o.PayloadSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
     builder.Services.AddSingleton<IndexingHubNotifier>();
 
     // The API/hub is loopback-only at the network level (ContextHostOptions.BindHost/Docker port
