@@ -25,8 +25,12 @@ RUN dotnet restore apps/host/Context.Host/Context.Host.csproj -r linux-x64 \
 
 COPY apps/ apps/
 
+# SkipDashboardBuild=true: the dotnet SDK image has no Node/npm, and the dashboard-build stage
+# above already produced the exact same output (copied into wwwroot in the runtime stage below) —
+# Context.Host.csproj's own dashboard-build MSBuild target is for a plain local `dotnet build`/
+# `publish` outside Docker, where Node is expected to already be on PATH.
 RUN dotnet publish apps/host/Context.Host/Context.Host.csproj \
-      -c Release -r linux-x64 --self-contained false --no-restore -o /app/host \
+      -c Release -r linux-x64 --self-contained false --no-restore -o /app/host -p:SkipDashboardBuild=true \
  && dotnet publish apps/cli/Context.Cli/Context.Cli.csproj \
       -c Release -r linux-x64 --self-contained false --no-restore -o /app/cli
 

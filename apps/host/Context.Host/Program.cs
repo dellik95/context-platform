@@ -40,7 +40,16 @@ try
         "Starting Context.Host — project root {ProjectRoot}, bind {BindHost}:{Port}",
         hostOptions.ProjectRoot, hostOptions.BindHost, hostOptions.Port);
 
-    var builder = WebApplication.CreateBuilder(args);
+    // ContentRootPath must NOT default to the current working directory: that's
+    // CONTEXT_PLATFORM_ROOT's mounted project (e.g. Docker's WORKDIR /workspace), which has
+    // nothing to do with where this executable — and the wwwroot published beside it — actually
+    // live. Pin it to the binary's own directory so UseStaticFiles/MapFallbackToFile below (and
+    // the Directory.Exists("wwwroot") check) resolve correctly regardless of the launch cwd.
+    var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+    {
+        Args = args,
+        ContentRootPath = AppContext.BaseDirectory,
+    });
 
     // Single-process, local-only host (spec's "one host process" decision): bind Kestrel per
     // ContextHostOptions.BindHost — loopback-only bare-metal, 0.0.0.0 in a container (see that

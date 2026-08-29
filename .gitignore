@@ -9,6 +9,7 @@ out/
 node_modules/
 dist/
 .angular/
+apps/host/Context.Host/wwwroot/
 
 *.db
 *.db-shm

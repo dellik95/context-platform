@@ -26,4 +26,56 @@
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
+  <!--
+    Builds the Angular Dashboard (apps/dashboard) as part of this project's own build/publish,
+    the same way the classic `dotnet new angular` template wired an SPA into an ASP.NET Core host:
+    a pre-Build target runs `ng build` (skipped via MSBuild's own Inputs/Outputs staleness check
+    when the Dashboard's source hasn't changed, so an unrelated backend-only rebuild stays fast),
+    copies the result into wwwroot/ (served by Program.cs's UseStaticFiles/MapFallbackToFile), and
+    a ComputeFilesToPublish hook re-adds those files to the publish output — required because the
+    Web SDK's own implicit "wwwroot/**" Content glob is evaluated before this target ever runs, so
+    files that only start existing in wwwroot during THIS build would otherwise be silently
+    dropped from a `dotnet publish`.
+    Set -p:SkipDashboardBuild=true to opt out (e.g. an environment with no Node/npm installed).
+  -->
+  <PropertyGroup>
+    <SpaRoot>$(MSBuildProjectDirectory)\..\..\dashboard\</SpaRoot>
+    <DashboardDistDir>$(SpaRoot)dist\dashboard\browser\</DashboardDistDir>
+    <SkipDashboardBuild Condition="'$(SkipDashboardBuild)' == ''">false</SkipDashboardBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <DashboardSourceFiles Include="$(SpaRoot)src\**\*.*" Condition="Exists('$(SpaRoot)src')" />
+  </ItemGroup>
+
+  <Target Name="BuildDashboard" BeforeTargets="Build"
+          Condition="'$(SkipDashboardBuild)' != 'true' AND Exists('$(SpaRoot)package.json')"
+          Inputs="@(DashboardSourceFiles);$(SpaRoot)package.json;$(SpaRoot)angular.json"
+          Outputs="$(DashboardDistDir)index.html">
+    <Exec Command="npm ci" WorkingDirectory="$(SpaRoot)" Condition="!Exists('$(SpaRoot)node_modules')" />
+    <Exec Command="npx ng build" WorkingDirectory="$(SpaRoot)" />
+  </Target>
+
+  <Target Name="CopyDashboardToWwwroot" AfterTargets="BuildDashboard"
+          Condition="'$(SkipDashboardBuild)' != 'true' AND Exists('$(DashboardDistDir)index.html')">
+    <ItemGroup>
+      <DashboardDistFiles Include="$(DashboardDistDir)**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(DashboardDistFiles)"
+          DestinationFolder="$(MSBuildProjectDirectory)\wwwroot\%(RecursiveDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="AddDashboardFilesToPublish" AfterTargets="ComputeFilesToPublish"
+          DependsOnTargets="CopyDashboardToWwwroot"
+          Condition="'$(SkipDashboardBuild)' != 'true' AND Exists('$(MSBuildProjectDirectory)\wwwroot')">
+    <ItemGroup>
+      <DashboardPublishFiles Include="$(MSBuildProjectDirectory)\wwwroot\**\*.*" />
+      <ResolvedFileToPublish Include="@(DashboardPublishFiles)" Exclude="@(ResolvedFileToPublish)">
+        <RelativePath>wwwroot\%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
 </Project>
