@@ -23,6 +23,7 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton(options.OpenAi);
         services.AddSingleton(options.Ollama);
+        services.AddSingleton(options.OllamaChat);
         services.AddSingleton(options.LocalOnnx);
         services.AddSingleton(options.Anthropic);
 
@@ -55,6 +56,9 @@ public static class ServiceCollectionExtensions
         {
             case "anthropic":
                 services.AddHttpClient<ILlmProvider, AnthropicLlmProvider>();
+                break;
+            case "ollama":
+                services.AddHttpClient<ILlmProvider, OllamaLlmProvider>();
                 break;
             case "noop":
             default:

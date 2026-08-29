@@ -8,6 +8,7 @@ using Context.Host;
 using Context.Host.Api;
 using Context.Host.BackgroundServices;
 using Context.Host.Hooks;
+using Context.Host.Hubs;
 using Context.Host.Mcp;
 using Context.Indexing;
 using Context.Infrastructure;
@@ -78,6 +79,23 @@ try
 
     builder.Services.AddOpenApi();
 
+    // Dashboard live updates (spec §13) — Angular clients join a per-project group and receive
+    // ProjectStatusChanged pushes from ProjectEndpoints' background reindex, instead of polling.
+    builder.Services.AddSignalR();
+    builder.Services.AddSingleton<IndexingHubNotifier>();
+
+    // The API/hub is loopback-only at the network level (ContextHostOptions.BindHost/Docker port
+    // publish) — CORS here only governs which *browser origins* may call it, and a locally-run
+    // Angular dev server (ng serve, a different port on the same machine) is exactly that case.
+    // Permissive by design: anything that can already reach this loopback-bound port is already
+    // within the same local-first trust boundary the rest of the app assumes.
+    const string DashboardCorsPolicy = "Dashboard";
+    builder.Services.AddCors(o => o.AddPolicy(DashboardCorsPolicy, p => p
+        .SetIsOriginAllowed(_ => true)
+        .AllowAnyHeader()
+        .AllowAnyMethod()
+        .AllowCredentials()));
+
     // MCP server hosted inside this same ASP.NET Core process (spec §9.14/§10): the installed
     // ModelContextProtocol.AspNetCore preview exposes a streamable-HTTP transport that maps onto
     // the existing app via WithHttpTransport()/MapMcp() rather than stdio - see the remarks below
@@ -106,12 +124,16 @@ try
         app.MapOpenApi();
     }
 
+    app.UseCors(DashboardCorsPolicy);
+
     app.MapHookEndpoints();
     app.MapProjectEndpoints();
     app.MapSearchEndpoints();
     app.MapMemoryEndpoints();
     app.MapGraphEndpoints();
+    app.MapSessionEndpoints();
     app.MapHealthEndpoints();
+    app.MapHub<IndexingHub>("/hubs/indexing");
 
     // ClaudeIntegrationInstaller writes .mcp.json as {"type":"http","url":"http://127.0.0.1:{port}/mcp"},
     // matching this route — no separate stdio process is spawned.
@@ -133,12 +155,31 @@ static ContextProvidersOptions BuildProvidersOptions(IConfiguration configuratio
     var openAiKey = configuration["CONTEXT_OPENAI_API_KEY"];
     var anthropicKey = configuration["CONTEXT_ANTHROPIC_API_KEY"];
 
+    // A local Ollama install (CONTEXT_EMBEDDING_PROVIDER=ollama and/or CONTEXT_LLM_PROVIDER=ollama)
+    // is the fully-offline, no-API-key upgrade path over the noop defaults: real embeddings for
+    // search, and a real model for session summarization/memory extraction (Context.Memory) that
+    // currently degrade to templated heuristics under noop. Base URL/model are overridable in case
+    // Ollama isn't on localhost:11434 or a different model was pulled.
+    var ollamaBaseUrl = configuration["CONTEXT_OLLAMA_BASE_URL"];
+    var ollamaEmbeddingModel = configuration["CONTEXT_OLLAMA_EMBEDDING_MODEL"];
+    var ollamaChatModel = configuration["CONTEXT_OLLAMA_CHAT_MODEL"];
+
     return new ContextProvidersOptions
     {
         EmbeddingProvider = configuration["CONTEXT_EMBEDDING_PROVIDER"] is { Length: > 0 } embedding ? embedding : "noop",
         LlmProvider = configuration["CONTEXT_LLM_PROVIDER"] is { Length: > 0 } llm ? llm : "noop",
         OpenAi = new Context.Providers.Embeddings.OpenAiOptions { ApiKey = openAiKey },
-        Anthropic = new Context.Providers.Llm.AnthropicOptions { ApiKey = anthropicKey }
+        Anthropic = new Context.Providers.Llm.AnthropicOptions { ApiKey = anthropicKey },
+        Ollama = new Context.Providers.Embeddings.OllamaOptions
+        {
+            BaseUrl = ollamaBaseUrl is { Length: > 0 } ? ollamaBaseUrl : "http://localhost:11434",
+            Model = ollamaEmbeddingModel is { Length: > 0 } ? ollamaEmbeddingModel : "nomic-embed-text"
+        },
+        OllamaChat = new Context.Providers.Llm.OllamaChatOptions
+        {
+            BaseUrl = ollamaBaseUrl is { Length: > 0 } ? ollamaBaseUrl : "http://localhost:11434",
+            Model = ollamaChatModel is { Length: > 0 } ? ollamaChatModel : "llama3.1"
+        }
     };
 }
 

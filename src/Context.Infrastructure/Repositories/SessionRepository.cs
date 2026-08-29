@@ -87,4 +87,15 @@ public class SessionRepository(ContextDbContext db) : ISessionRepository
 
     public Task<SessionSummary?> GetSummaryAsync(Guid sessionId, CancellationToken ct) =>
         db.SessionSummaries.AsNoTracking().FirstOrDefaultAsync(s => s.SessionId == sessionId, ct);
+
+    public async Task<IReadOnlyList<Session>> ListByProjectAsync(Guid projectId, int limit, CancellationToken ct)
+    {
+        // Same SQLite/DateTimeOffset ORDER BY limitation as GetEventsAsync above: filter
+        // server-side, sort the (bounded, per-project) result client-side.
+        var sessions = await db.Sessions.AsNoTracking()
+            .Where(s => s.ProjectId == projectId)
+            .ToListAsync(ct);
+
+        return [.. sessions.OrderByDescending(s => s.StartedAt).Take(limit)];
+    }
 }

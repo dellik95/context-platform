@@ -56,20 +56,10 @@ public static class ProjectEndpoints
         return Results.Ok(all.Select(ProjectDto.FromEntity));
     }
 
-    private static async Task<IResult> GetStatusAsync(Guid id, IProjectRepository projects, IContextEngine engine, CancellationToken ct)
+    private static async Task<IResult> GetStatusAsync(Guid id, IServiceProvider services, CancellationToken ct)
     {
-        var project = await projects.GetByIdAsync(id, ct).ConfigureAwait(false);
-        if (project is null)
-        {
-            return Results.NotFound();
-        }
-
-        var dto = ProjectDto.FromEntity(project);
-        var infoObj = await engine.ProjectInfoAsync(id, ct).ConfigureAwait(false);
-
-        return infoObj is ProjectInfo info
-            ? Results.Ok(new ProjectStatusDto(dto, info.FilesIndexed, info.SymbolsIndexed, info.MemoriesCount, info.LastIndexedAt))
-            : Results.Ok(new ProjectStatusDto(dto, FilesIndexed: 0, SymbolsIndexed: 0, MemoriesCount: 0, LastIndexedAt: null));
+        var status = await BuildStatusDtoAsync(id, services, ct).ConfigureAwait(false);
+        return status is null ? Results.NotFound() : Results.Ok(status);
     }
 
     /// <summary>
@@ -82,7 +72,8 @@ public static class ProjectEndpoints
         Guid id,
         bool? full,
         IServiceScopeFactory scopeFactory,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        Context.Host.Hubs.IndexingHubNotifier hubNotifier)
     {
         var fullReindex = full ?? false;
         var logger = loggerFactory.CreateLogger("Context.Host.ReindexProject");
@@ -95,6 +86,12 @@ public static class ProjectEndpoints
             {
                 await pipeline.ReindexProjectAsync(id, fullReindex, CancellationToken.None).ConfigureAwait(false);
                 logger.LogInformation("Reindex of project {ProjectId} (full={Full}) completed.", id, fullReindex);
+
+                var status = await BuildStatusDtoAsync(id, scope.ServiceProvider, CancellationToken.None).ConfigureAwait(false);
+                if (status is not null)
+                {
+                    await hubNotifier.ProjectStatusChangedAsync(id, status, CancellationToken.None).ConfigureAwait(false);
+                }
             }
             catch (Exception ex)
             {
@@ -103,5 +100,24 @@ public static class ProjectEndpoints
         });
 
         return Results.Accepted(value: new IndexTriggerResponse(id, fullReindex, "started"));
+    }
+
+    private static async Task<ProjectStatusDto?> BuildStatusDtoAsync(Guid id, IServiceProvider services, CancellationToken ct)
+    {
+        var projects = services.GetRequiredService<IProjectRepository>();
+        var engine = services.GetRequiredService<IContextEngine>();
+
+        var project = await projects.GetByIdAsync(id, ct).ConfigureAwait(false);
+        if (project is null)
+        {
+            return null;
+        }
+
+        var dto = ProjectDto.FromEntity(project);
+        var infoObj = await engine.ProjectInfoAsync(id, ct).ConfigureAwait(false);
+
+        return infoObj is ProjectInfo info
+            ? new ProjectStatusDto(dto, info.FilesIndexed, info.SymbolsIndexed, info.MemoriesCount, info.LastIndexedAt)
+            : new ProjectStatusDto(dto, FilesIndexed: 0, SymbolsIndexed: 0, MemoriesCount: 0, LastIndexedAt: null);
     }
 }

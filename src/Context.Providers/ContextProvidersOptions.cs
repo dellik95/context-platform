@@ -18,12 +18,14 @@ public sealed record ContextProvidersOptions
     /// <summary>"local-onnx" (default, heuristic fallback) or "noop".</summary>
     public string RerankerProvider { get; init; } = "local-onnx";
 
-    /// <summary>"noop" (default) or "anthropic".</summary>
+    /// <summary>"noop" (default), "anthropic", or "ollama".</summary>
     public string LlmProvider { get; init; } = "noop";
 
     public OpenAiOptions OpenAi { get; init; } = new();
 
     public OllamaOptions Ollama { get; init; } = new();
+
+    public OllamaChatOptions OllamaChat { get; init; } = new();
 
     public LocalOnnxRerankerOptions LocalOnnx { get; init; } = new();
 
