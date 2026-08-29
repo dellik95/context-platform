@@ -49,6 +49,11 @@
     <!-- Context.IntegrationTests: in-process HTTP testing against Context.Host's real Program. -->
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
 
+    <!-- Context.Indexing: real tree-sitter bindings + bundled native grammars for every RID
+         (win/linux/osx, x64/x86/arm64) in one self-contained package — verified working directly
+         against the real native libs, no separate language-pack/runtime-redirect package needed. -->
+    <PackageVersion Include="TreeSitter.DotNet" Version="1.3.0" />
+
     <!-- Testing -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageVersion Include="xunit" Version="2.9.2" />
