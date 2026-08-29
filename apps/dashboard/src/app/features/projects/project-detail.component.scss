@@ -1,0 +1,22 @@
+.project-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 32px 0;
+
+  h1 {
+    margin: 0;
+    font-size: 1.4rem;
+    font-weight: 600;
+  }
+}
+
+.back-link {
+  display: flex;
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.project-tabs {
+  padding: 0 24px;
+  border-bottom: 1px solid var(--mat-sys-outline-variant);
+}

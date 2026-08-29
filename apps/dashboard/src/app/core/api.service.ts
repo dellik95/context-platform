@@ -1,0 +1,72 @@
+import { HttpClient } from '@angular/common/http';
+import { Injectable, inject } from '@angular/core';
+import { Observable } from 'rxjs';
+import { environment } from '../../environments/environment';
+import {
+  ContextPack,
+  CreateProjectRequest,
+  HealthResponse,
+  ImpactSet,
+  IndexTriggerResponse,
+  Memory,
+  ProjectDto,
+  ProjectStatusDto,
+  SessionDetailDto,
+  SessionDto,
+} from './models';
+
+/**
+ * Thin typed wrapper over Context.Host's REST surface (apps/host/Context.Host/Api/*.cs).
+ * One method per endpoint, no business logic — feature components own presentation/state.
+ */
+@Injectable({ providedIn: 'root' })
+export class ApiService {
+  private readonly http = inject(HttpClient);
+  private readonly base = environment.apiBaseUrl;
+
+  health(): Observable<HealthResponse> {
+    return this.http.get<HealthResponse>(`${this.base}/health`);
+  }
+
+  listProjects(): Observable<ProjectDto[]> {
+    return this.http.get<ProjectDto[]>(`${this.base}/api/projects`);
+  }
+
+  createProject(request: CreateProjectRequest): Observable<ProjectDto> {
+    return this.http.post<ProjectDto>(`${this.base}/api/projects`, request);
+  }
+
+  getProjectStatus(id: string): Observable<ProjectStatusDto> {
+    return this.http.get<ProjectStatusDto>(`${this.base}/api/projects/${id}`);
+  }
+
+  triggerIndex(id: string, full: boolean): Observable<IndexTriggerResponse> {
+    return this.http.post<IndexTriggerResponse>(`${this.base}/api/projects/${id}/index?full=${full}`, {});
+  }
+
+  search(projectId: string, query: string, budget?: number, sessionId?: string): Observable<ContextPack> {
+    const params = new URLSearchParams({ projectId, q: query });
+    if (budget) params.set('budget', String(budget));
+    if (sessionId) params.set('sessionId', sessionId);
+    return this.http.get<ContextPack>(`${this.base}/api/search?${params.toString()}`);
+  }
+
+  searchMemories(projectId: string, query: string, includeSuperseded = false): Observable<Memory[]> {
+    const params = new URLSearchParams({ projectId, q: query, includeSuperseded: String(includeSuperseded) });
+    return this.http.get<Memory[]>(`${this.base}/api/memories?${params.toString()}`);
+  }
+
+  graphImpact(symbolId: string, maxHops = 3): Observable<ImpactSet> {
+    const params = new URLSearchParams({ symbolId, maxHops: String(maxHops) });
+    return this.http.get<ImpactSet>(`${this.base}/api/graph/impact?${params.toString()}`);
+  }
+
+  listSessions(projectId: string, limit = 50): Observable<SessionDto[]> {
+    const params = new URLSearchParams({ projectId, limit: String(limit) });
+    return this.http.get<SessionDto[]>(`${this.base}/api/sessions?${params.toString()}`);
+  }
+
+  getSession(id: string): Observable<SessionDetailDto> {
+    return this.http.get<SessionDetailDto>(`${this.base}/api/sessions/${id}`);
+  }
+}
