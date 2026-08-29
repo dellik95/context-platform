@@ -1,0 +1,133 @@
+<div class="page">
+  <mat-card class="search-card">
+    <div class="search-row">
+      <mat-form-field appearance="outline" class="symbol-field">
+        <mat-label>Search for a symbol</mat-label>
+        <input
+          matInput
+          [formControl]="searchControl"
+          [matAutocomplete]="auto"
+          placeholder="e.g. ProjectContextService"
+        />
+        <mat-autocomplete #auto="matAutocomplete" [displayWith]="displaySymbol" (optionSelected)="onSymbolSelected($event)">
+          @for (match of matches(); track match.id) {
+            <mat-option [value]="match">
+              <div class="symbol-option">
+                <span class="symbol-name">{{ match.name }}</span>
+                <mat-chip-set>
+                  <mat-chip>{{ match.kind }}</mat-chip>
+                </mat-chip-set>
+                <span class="symbol-qualified">{{ match.qualifiedName }}</span>
+              </div>
+            </mat-option>
+          }
+        </mat-autocomplete>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="hops-field">
+        <mat-label>Max hops</mat-label>
+        <input matInput type="number" min="1" max="10" [formControl]="maxHopsControl" />
+      </mat-form-field>
+
+      <button
+        mat-stroked-button
+        [disabled]="!selectedSymbol() || loadingImpact()"
+        (click)="reloadImpact()"
+      >
+        <mat-icon>refresh</mat-icon>
+        Recompute
+      </button>
+    </div>
+
+    @if (searching()) {
+      <mat-progress-bar mode="indeterminate" />
+    }
+  </mat-card>
+
+  @if (!selectedSymbol()) {
+    <mat-card class="empty-state">
+      <p>Search for a symbol to see its blast radius.</p>
+    </mat-card>
+  } @else {
+    <div class="selected-symbol">
+      <mat-icon>account_tree</mat-icon>
+      <span class="selected-name">{{ selectedSymbol()!.name }}</span>
+      <mat-chip-set>
+        <mat-chip>{{ selectedSymbol()!.kind }}</mat-chip>
+      </mat-chip-set>
+      <span class="selected-qualified">{{ selectedSymbol()!.qualifiedName }}</span>
+    </div>
+
+    @if (loadingImpact()) {
+      <mat-progress-bar mode="indeterminate" />
+    } @else if (impact(); as impactSet) {
+      <div class="impact-sections">
+        <mat-card class="impact-section">
+          <h2>Callers</h2>
+          @if (impactSet.callers.length === 0) {
+            <p class="section-empty">No callers found.</p>
+          } @else {
+            <ul class="impact-list">
+              @for (item of impactSet.callers; track item.node.id) {
+                <li class="impact-item">
+                  <div class="impact-item-header">
+                    <span class="impact-label">{{ item.node.label }}</span>
+                    <mat-chip-set>
+                      <mat-chip>{{ item.node.kind }}</mat-chip>
+                    </mat-chip-set>
+                    <span class="impact-hops">{{ item.hops }} hop{{ item.hops === 1 ? '' : 's' }} away</span>
+                  </div>
+                  <div class="impact-path">{{ item.path }}</div>
+                </li>
+              }
+            </ul>
+          }
+        </mat-card>
+
+        <mat-card class="impact-section">
+          <h2>Implementers</h2>
+          @if (impactSet.implementers.length === 0) {
+            <p class="section-empty">No implementers found.</p>
+          } @else {
+            <ul class="impact-list">
+              @for (item of impactSet.implementers; track item.node.id) {
+                <li class="impact-item">
+                  <div class="impact-item-header">
+                    <span class="impact-label">{{ item.node.label }}</span>
+                    <mat-chip-set>
+                      <mat-chip>{{ item.node.kind }}</mat-chip>
+                    </mat-chip-set>
+                    <span class="impact-hops">{{ item.hops }} hop{{ item.hops === 1 ? '' : 's' }} away</span>
+                  </div>
+                  <div class="impact-path">{{ item.path }}</div>
+                </li>
+              }
+            </ul>
+          }
+        </mat-card>
+
+        <mat-card class="impact-section">
+          <h2>Covering tests</h2>
+          @if (impactSet.coveringTests.length === 0) {
+            <p class="section-empty">No tests found.</p>
+          } @else {
+            <ul class="impact-list">
+              @for (item of impactSet.coveringTests; track item.node.id) {
+                <li class="impact-item">
+                  <div class="impact-item-header">
+                    <span class="impact-label">{{ item.node.label }}</span>
+                    <mat-chip-set>
+                      <mat-chip>{{ item.node.kind }}</mat-chip>
+                    </mat-chip-set>
+                    <span class="impact-hops">{{ item.hops }} hop{{ item.hops === 1 ? '' : 's' }} away</span>
+                  </div>
+                  <div class="impact-path">{{ item.path }}</div>
+                </li>
+              }
+            </ul>
+          }
+        </mat-card>
+      </div>
+    }
+  }
+</div>

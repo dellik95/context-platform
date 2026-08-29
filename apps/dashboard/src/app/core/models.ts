@@ -110,6 +110,16 @@ export interface ImpactSet {
   coveringTests: ImpactNode[];
 }
 
+export interface SymbolSummaryDto {
+  id: string;
+  name: string;
+  qualifiedName: string;
+  kind: string;
+  fileId: string;
+  startLine: number;
+  endLine: number;
+}
+
 export interface SessionDto {
   id: string;
   claudeSessionId: string | null;

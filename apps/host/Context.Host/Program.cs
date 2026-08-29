@@ -146,6 +146,18 @@ try
     // matching this route — no separate stdio process is spawned.
     app.MapMcp("/mcp");
 
+    // The Angular Dashboard's production build (apps/dashboard, published into wwwroot by the
+    // Dockerfile's dashboard-build stage) is served from this same origin so its environment.ts
+    // apiBaseUrl:'' (same-origin) resolves correctly with zero extra configuration. A bare-metal
+    // `dotnet run` without that wwwroot present just serves nothing at "/" — use `ng serve`
+    // separately for local Dashboard development instead (see apps/dashboard's own dev setup).
+    if (Directory.Exists(Path.Combine(app.Environment.ContentRootPath, "wwwroot")))
+    {
+        app.UseDefaultFiles();
+        app.UseStaticFiles();
+        app.MapFallbackToFile("index.html");
+    }
+
     await app.RunAsync().ConfigureAwait(false);
 }
 catch (Exception ex)

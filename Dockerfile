@@ -1,5 +1,15 @@
 # syntax=docker/dockerfile:1
 
+# ---- dashboard build --------------------------------------------------------
+# Built separately from the .NET stage below so a source-only change on one side doesn't bust the
+# other's restore/npm-ci cache layer.
+FROM node:22-slim AS dashboard-build
+WORKDIR /dashboard
+COPY apps/dashboard/package.json apps/dashboard/package-lock.json ./
+RUN npm ci
+COPY apps/dashboard/ ./
+RUN npx ng build
+
 # ---- build ----------------------------------------------------------------
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
@@ -26,6 +36,7 @@ WORKDIR /app
 
 COPY --from=build /app/host ./host
 COPY --from=build /app/cli ./cli
+COPY --from=dashboard-build /dashboard/dist/dashboard/browser ./host/wwwroot
 
 # `context ...` on PATH so `docker exec <container> context index` etc. work exactly like the
 # bare-metal CLI, without needing to know the published dll's path.

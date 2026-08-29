@@ -1,0 +1,135 @@
+.search-card {
+  padding: 20px;
+}
+
+.search-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.symbol-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.hops-field {
+  width: 110px;
+  flex: 0 0 auto;
+}
+
+.search-row button {
+  margin-top: 8px;
+}
+
+.symbol-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+
+  .symbol-name {
+    font-weight: 500;
+  }
+
+  .symbol-qualified {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--mat-sys-on-surface-variant);
+    font-size: 0.85rem;
+    font-family: ui-monospace, monospace;
+  }
+
+  mat-chip-set {
+    flex: 0 0 auto;
+  }
+}
+
+.selected-symbol {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 4px 0;
+
+  .selected-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+  }
+
+  .selected-qualified {
+    color: var(--mat-sys-on-surface-variant);
+    font-family: ui-monospace, monospace;
+    font-size: 0.85rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.impact-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.impact-section {
+  padding: 16px 20px 20px;
+
+  h2 {
+    margin: 0 0 12px;
+    font-size: 1rem;
+    font-weight: 600;
+  }
+}
+
+.section-empty {
+  color: var(--mat-sys-on-surface-variant);
+  margin: 0;
+}
+
+.impact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.impact-item {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--mat-sys-outline-variant);
+
+  &:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+}
+
+.impact-item-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.impact-label {
+  font-weight: 500;
+}
+
+.impact-hops {
+  margin-left: auto;
+  color: var(--mat-sys-on-surface-variant);
+  font-size: 0.8rem;
+}
+
+.impact-path {
+  margin-top: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  color: var(--mat-sys-on-surface-variant);
+  overflow-x: auto;
+  white-space: nowrap;
+}

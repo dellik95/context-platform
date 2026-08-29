@@ -13,6 +13,7 @@ import {
   ProjectStatusDto,
   SessionDetailDto,
   SessionDto,
+  SymbolSummaryDto,
 } from './models';
 
 /**
@@ -59,6 +60,11 @@ export class ApiService {
   graphImpact(symbolId: string, maxHops = 3): Observable<ImpactSet> {
     const params = new URLSearchParams({ symbolId, maxHops: String(maxHops) });
     return this.http.get<ImpactSet>(`${this.base}/api/graph/impact?${params.toString()}`);
+  }
+
+  searchSymbols(projectId: string, query: string, limit = 20): Observable<SymbolSummaryDto[]> {
+    const params = new URLSearchParams({ projectId, q: query, limit: String(limit) });
+    return this.http.get<SymbolSummaryDto[]>(`${this.base}/api/symbols?${params.toString()}`);
   }
 
   listSessions(projectId: string, limit = 50): Observable<SessionDto[]> {
