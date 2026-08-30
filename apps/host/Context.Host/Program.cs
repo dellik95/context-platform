@@ -78,7 +78,13 @@ try
     builder.Services.AddContextGraph();
     builder.Services.AddContextRetrieval();
     builder.Services.AddContextMemory();
-    builder.Services.AddContextProviders(BuildProvidersOptions(builder.Configuration));
+    var providersOptions = BuildProvidersOptions(builder.Configuration);
+    builder.Services.AddContextProviders(providersOptions);
+    // AddContextProviders takes the options as a plain instance (see its own signature) and never
+    // registers IOptions<ContextProvidersOptions> itself - ProjectSettingsService needs the real
+    // values (not the framework's silently-empty default IOptions<T>) to seed a project's
+    // never-configured settings from what this host is actually running with.
+    builder.Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(providersOptions));
     builder.Services.AddContextClaude(o => o.HostPort = hostOptions.Port);
 
     // Context.Application composes every layer above plus the seam adapters between them, and
