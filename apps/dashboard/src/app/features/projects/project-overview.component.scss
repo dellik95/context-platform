@@ -54,3 +54,12 @@
   display: flex;
   gap: 12px;
 }
+
+.reindex-status {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--mat-sys-on-surface-variant);
+}
