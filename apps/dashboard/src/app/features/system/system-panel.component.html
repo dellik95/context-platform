@@ -50,7 +50,7 @@
         <span class="stat-value">{{ status.jobsRunning }}</span>
         <span class="stat-label">Running</span>
       </mat-card>
-      <mat-card class="stat-card">
+      <mat-card class="stat-card" [class.stat-card--alert]="status.jobsFailed > 0">
         <span class="stat-value">{{ status.jobsFailed }}</span>
         <span class="stat-label">Failed</span>
       </mat-card>

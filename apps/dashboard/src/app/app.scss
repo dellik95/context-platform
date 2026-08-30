@@ -23,14 +23,19 @@
   flex: 1 1 auto;
 }
 
+// Tinted, not just an icon color swap — a translucent-white overlay reads as invisible against
+// the M3 toolbar's light tonal surface (this app's "primary" color renders as a pale tint, not a
+// solid fill), so the pill needs real contrast of its own to actually look like a pill.
 .health-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 0.85rem;
-  padding: 4px 10px;
+  font-weight: 500;
+  padding: 5px 12px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(211, 47, 47, 0.1);
+  color: #b71c1c;
 
   mat-icon {
     font-size: 18px;
@@ -38,8 +43,13 @@
     height: 18px;
   }
 
-  &.healthy mat-icon {
-    color: #4caf50;
+  &.healthy {
+    background: rgba(46, 125, 50, 0.1);
+    color: #1b5e20;
+
+    mat-icon {
+      color: #2e7d32;
+    }
   }
 }
 

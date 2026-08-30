@@ -24,17 +24,20 @@
   flex-wrap: wrap;
 }
 
-// Same visual pattern as the toolbar's health pill (app.html/.scss) — colored icon on a rounded
-// pill — but scoped to this component and driven per-check instead of a single healthy/degraded
-// flag, since System/health shows DB, job dispatcher, and MCP independently.
+// Same visual pattern as the toolbar's health pill (app.html/.scss) — a tinted pill, not just a
+// colored icon on a neutral-gray background — but scoped to this component and driven per-check
+// instead of a single healthy/degraded flag, since System/health shows DB, job dispatcher, and
+// MCP independently.
 .status-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 0.85rem;
+  font-weight: 500;
   padding: 6px 12px;
   border-radius: 999px;
-  background: var(--mat-sys-surface-variant);
+  background: rgba(211, 47, 47, 0.1);
+  color: #b71c1c;
 
   mat-icon {
     font-size: 18px;
@@ -43,8 +46,13 @@
     color: var(--mat-sys-error);
   }
 
-  &.healthy mat-icon {
-    color: #4caf50;
+  &.healthy {
+    background: rgba(46, 125, 50, 0.1);
+    color: #1b5e20;
+
+    mat-icon {
+      color: #2e7d32;
+    }
   }
 }
 
@@ -80,6 +88,15 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  border-left: 3px solid transparent;
+
+  &.stat-card--alert {
+    border-left-color: var(--mat-sys-error);
+
+    .stat-value {
+      color: var(--mat-sys-error);
+    }
+  }
 }
 
 .stat-value {
