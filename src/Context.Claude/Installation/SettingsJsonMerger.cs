@@ -23,12 +23,21 @@ internal static class SettingsJsonMerger
         foreach (var hook in hooks)
         {
             var command = BuildHookCommand(hook, targetIsWindows);
+            var otherPlatformCommand = BuildHookCommand(hook, !targetIsWindows);
 
             if (hooksNode[hook.ClaudeEventName] is not JsonArray eventArray)
             {
                 eventArray = new JsonArray();
                 hooksNode[hook.ClaudeEventName] = eventArray;
             }
+
+            // A repo installed from more than one OS (e.g. bare-metal Windows, then a Linux
+            // container mounting the same working tree) accumulates BOTH the .ps1 and .sh command
+            // for every hook here, since each install only ever ADDED its own platform's command -
+            // Claude Code then runs both on every single hook event. Only one variant can ever be
+            // correct for whichever machine is running right now, so installing for one removes
+            // the other rather than leaving it to double-fire alongside it.
+            RemoveCommand(eventArray, otherPlatformCommand);
 
             if (ContainsCommand(eventArray, command))
             {
@@ -77,6 +86,25 @@ internal static class SettingsJsonMerger
     private static string BuildHookCommand(HookDefinition hook, bool targetIsWindows) => targetIsWindows
         ? $"powershell -NoProfile -ExecutionPolicy Bypass -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/{hook.FileBaseName}.ps1\""
         : $"bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/{hook.FileBaseName}.sh\"";
+
+    /// <summary>Removes every top-level entry whose command matches, in place.</summary>
+    private static void RemoveCommand(JsonArray eventArray, string command)
+    {
+        for (var i = eventArray.Count - 1; i >= 0; i--)
+        {
+            if (eventArray[i] is not JsonObject entry || entry["hooks"] is not JsonArray innerHooks)
+            {
+                continue;
+            }
+
+            var matches = innerHooks.OfType<JsonObject>()
+                .Any(inner => string.Equals(inner["command"]?.GetValue<string>(), command, StringComparison.Ordinal));
+            if (matches)
+            {
+                eventArray.RemoveAt(i);
+            }
+        }
+    }
 
     private static bool ContainsCommand(JsonArray eventArray, string command)
     {
