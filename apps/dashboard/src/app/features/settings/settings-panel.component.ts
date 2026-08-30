@@ -52,6 +52,8 @@ export class SettingsPanelComponent {
     ollamaChatModel: [''],
     reindexEnabled: [false],
     reindexIntervalMinutes: [60],
+    sessionSummaryEnabled: [false],
+    sessionSummaryIntervalMinutes: [30],
   });
 
   private readonly formValue = toSignal(this.form.valueChanges, { initialValue: this.form.getRawValue() });
@@ -89,6 +91,8 @@ export class SettingsPanelComponent {
           ollamaChatModel: settings.ollamaChatModel ?? '',
           reindexEnabled: settings.reindexEnabled,
           reindexIntervalMinutes: settings.reindexIntervalMinutes,
+          sessionSummaryEnabled: settings.sessionSummaryIntervalMinutes > 0,
+          sessionSummaryIntervalMinutes: settings.sessionSummaryIntervalMinutes > 0 ? settings.sessionSummaryIntervalMinutes : 30,
         });
         this.loading.set(false);
       },
@@ -110,6 +114,7 @@ export class SettingsPanelComponent {
       reindexEnabled: raw.reindexEnabled,
       reindexIntervalMinutes: raw.reindexIntervalMinutes,
       lastReindexScheduledAt: this.lastReindexScheduledAt,
+      sessionSummaryIntervalMinutes: raw.sessionSummaryEnabled ? raw.sessionSummaryIntervalMinutes : 0,
     };
 
     this.saving.set(true);

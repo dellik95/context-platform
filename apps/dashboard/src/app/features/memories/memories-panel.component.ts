@@ -1,5 +1,6 @@
 import { CommonModule } from '@angular/common';
-import { Component, effect, inject, signal } from '@angular/core';
+import { Component, DestroyRef, effect, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormBuilder, ReactiveFormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
@@ -11,6 +12,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { ApiService } from '../../core/api.service';
 import { Memory } from '../../core/models';
+import { SignalrService } from '../../core/signalr.service';
 import { ProjectContextService } from '../projects/project-context.service';
 
 @Component({
@@ -33,6 +35,8 @@ export class MemoriesPanelComponent {
   private readonly api = inject(ApiService);
   private readonly fb = inject(FormBuilder);
   private readonly snackBar = inject(MatSnackBar);
+  private readonly signalr = inject(SignalrService);
+  private readonly destroyRef = inject(DestroyRef);
   protected readonly ctx = inject(ProjectContextService);
 
   protected readonly memories = signal<Memory[]>([]);
@@ -55,6 +59,15 @@ export class MemoriesPanelComponent {
       const id = this.ctx.projectId();
       if (id && id !== this.lastSearchedProjectId) {
         this.lastSearchedProjectId = id;
+        this.runSearch();
+      }
+    });
+
+    // A memory extracted for this project (SummarizeSession -> ExtractMemory finishing, whether
+    // from a session ending or a periodic mid-session summary) should show up here without the
+    // user having to re-run the search themselves.
+    this.signalr.projectActivity$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((event) => {
+      if (event.kind === 'MemoryCreated' && event.projectId === this.ctx.projectId()) {
         this.runSearch();
       }
     });

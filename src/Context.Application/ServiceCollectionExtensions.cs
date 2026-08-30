@@ -61,6 +61,8 @@ public static class ServiceCollectionExtensions
         // Context.Host overrides this with a SignalR-backed reporter (registration order —
         // last AddSingleton for a given interface wins).
         services.AddSingleton<IIndexingProgressReporter>(NullIndexingProgressReporter.Instance);
+        services.AddSingleton<Context.Application.Notifications.IProjectActivityNotifier>(
+            Context.Application.Notifications.NullProjectActivityNotifier.Instance);
         AddProjectSettings(services);
 
         return services;
@@ -133,6 +135,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IJobQueue>(sp => sp.GetRequiredService<JobDispatcher>());
         services.AddHostedService(sp => sp.GetRequiredService<JobDispatcher>());
         services.AddHostedService<ReindexSchedulerService>();
+        services.AddHostedService<SessionSummaryScheduler>();
     }
 
     private static void AddIndexingPipeline(IServiceCollection services)

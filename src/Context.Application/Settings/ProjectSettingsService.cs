@@ -40,7 +40,8 @@ public sealed class ProjectSettingsService(
             OllamaChatModel: null,
             ReindexEnabled: false,
             ReindexIntervalMinutes: 60,
-            LastReindexScheduledAt: null);
+            LastReindexScheduledAt: null,
+            SessionSummaryIntervalMinutes: 0);
     }
 
     public async Task UpdateAsync(Guid projectId, ProjectSettingsDto settings, CancellationToken ct)

@@ -1,5 +1,6 @@
 import { CommonModule } from '@angular/common';
-import { Component, computed, effect, inject, signal } from '@angular/core';
+import { Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { MatCardModule } from '@angular/material/card';
 import { MatIconModule } from '@angular/material/icon';
 import { MatListModule } from '@angular/material/list';
@@ -7,6 +8,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { ApiService } from '../../core/api.service';
 import { SessionDetailDto, SessionDto } from '../../core/models';
+import { SignalrService } from '../../core/signalr.service';
 import { ProjectContextService } from '../projects/project-context.service';
 
 /** Parsed result of SessionDetailDto.changedFilesJson — a free-form field the CLI writes, so a
@@ -28,6 +30,8 @@ type ChangedFiles = { kind: 'list'; items: string[] } | { kind: 'raw'; raw: stri
 export class SessionsPanelComponent {
   private readonly api = inject(ApiService);
   private readonly snackBar = inject(MatSnackBar);
+  private readonly signalr = inject(SignalrService);
+  private readonly destroyRef = inject(DestroyRef);
   protected readonly ctx = inject(ProjectContextService);
 
   protected readonly sessions = signal<SessionDto[]>([]);
@@ -58,6 +62,15 @@ export class SessionsPanelComponent {
         this.loadSessions(projectId);
       }
     });
+
+    // A new/updated summary for this project (session end, or a periodic mid-session summary)
+    // should refresh the list — and the open detail pane, if it's the session that just changed.
+    this.signalr.projectActivity$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((event) => {
+      if (event.kind !== 'SessionSummaryUpdated' || event.projectId !== this.ctx.projectId()) {
+        return;
+      }
+      this.refreshSessionsPreservingSelection(this.ctx.projectId());
+    });
   }
 
   private loadSessions(projectId: string): void {
@@ -73,6 +86,32 @@ export class SessionsPanelComponent {
         this.sessions.set([]);
         this.loading.set(false);
         this.snackBar.open('Could not load sessions — is Context.Host running?', 'Dismiss');
+      },
+    });
+  }
+
+  /** Same list refresh as loadSessions, but a live update shouldn't blow away whatever the user has open. */
+  private refreshSessionsPreservingSelection(projectId: string): void {
+    this.api.listSessions(projectId).subscribe({
+      next: (sessions) => {
+        this.sessions.set(sessions);
+        const selectedId = this.selectedId();
+        if (selectedId) {
+          this.reloadDetail(selectedId);
+        }
+      },
+      error: () => {
+        // Best-effort refresh — a failed background poll shouldn't surface a snackbar over
+        // whatever the user is already looking at.
+      },
+    });
+  }
+
+  private reloadDetail(sessionId: string): void {
+    this.api.getSession(sessionId).subscribe({
+      next: (detail) => this.detail.set(detail),
+      error: () => {
+        // Same best-effort reasoning as refreshSessionsPreservingSelection.
       },
     });
   }

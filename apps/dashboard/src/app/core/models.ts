@@ -189,9 +189,20 @@ export interface ProjectSettingsDto {
   reindexEnabled: boolean;
   reindexIntervalMinutes: number; // ignored (treated as disabled) if <= 0
   lastReindexScheduledAt: string | null; // ISO-8601
+  sessionSummaryIntervalMinutes: number; // <= 0 means "only summarize at session end"
 }
 
 // Response of POST /api/projects/{id}/claude/install.
 export interface ClaudeInstallResponse {
   installed: boolean;
+}
+
+export type ProjectActivityKind = 'SessionSummaryUpdated' | 'MemoryCreated';
+
+// Pushed over the /hubs/indexing SignalR hub's "ProjectActivity" event (Context.Host's
+// IndexingHub.ProjectActivityAsync) whenever a session gets a new summary or a memory is
+// extracted, so Sessions/Memories panels can refresh live instead of only loading once.
+export interface ProjectActivityEvent {
+  projectId: string;
+  kind: ProjectActivityKind;
 }

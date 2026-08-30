@@ -113,6 +113,7 @@ try
     // a given interface wins) - same override mechanism AddContextProviders already relies on for
     // its own placeholder-provider registrations.
     builder.Services.AddSingleton<Context.Application.Indexing.IIndexingProgressReporter, Context.Host.Hubs.SignalRIndexingProgressReporter>();
+    builder.Services.AddSingleton<Context.Application.Notifications.IProjectActivityNotifier, Context.Host.Hubs.SignalRProjectActivityNotifier>();
 
     // The API/hub is loopback-only at the network level (ContextHostOptions.BindHost/Docker port
     // publish) — CORS here only governs which *browser origins* may call it, and a locally-run

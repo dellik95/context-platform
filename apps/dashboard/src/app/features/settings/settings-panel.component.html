@@ -68,6 +68,22 @@
           </mat-form-field>
         </div>
 
+        <h2 class="section-title">Session summaries</h2>
+        <p class="provider-note">
+          <mat-icon>info</mat-icon>
+          By default a session is only summarized when it ends. Enable this to also get periodic
+          summaries (and extracted memories) for sessions that are still running.
+        </p>
+
+        <div class="field-row field-row--align-center">
+          <mat-slide-toggle formControlName="sessionSummaryEnabled">Enable periodic session summaries</mat-slide-toggle>
+
+          <mat-form-field appearance="outline" class="interval-field">
+            <mat-label>Interval (minutes)</mat-label>
+            <input matInput type="number" min="1" formControlName="sessionSummaryIntervalMinutes" />
+          </mat-form-field>
+        </div>
+
         <div class="actions">
           <button mat-flat-button color="primary" type="submit" [disabled]="saving()">
             {{ saving() ? 'Saving…' : 'Save' }}
