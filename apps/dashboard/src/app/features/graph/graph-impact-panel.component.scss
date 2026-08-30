@@ -117,6 +117,12 @@
 
 .impact-label {
   font-weight: 500;
+  // Fully-qualified labels (e.g. Namespace.Class.Method) have no whitespace for the browser to
+  // break on, so without this a long one keeps its intrinsic width (flex items don't shrink below
+  // content size by default), overflows the card, and gets visually swallowed by the next card in
+  // the .impact-sections grid instead of wrapping.
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .impact-hops {

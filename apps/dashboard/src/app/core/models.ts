@@ -190,6 +190,7 @@ export interface ProjectSettingsDto {
   reindexIntervalMinutes: number; // ignored (treated as disabled) if <= 0
   lastReindexScheduledAt: string | null; // ISO-8601
   sessionSummaryIntervalMinutes: number; // <= 0 means "only summarize at session end"
+  minEventsForSessionSummary: number; // interval is a max wait -- also needs this many new events
 }
 
 // Response of POST /api/projects/{id}/claude/install.

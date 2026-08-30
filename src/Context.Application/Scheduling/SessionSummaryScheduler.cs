@@ -123,6 +123,18 @@ public sealed class SessionSummaryScheduler : BackgroundService
                     continue;
                 }
 
+                // The interval is a MAXIMUM wait, not a guarantee: firing on elapsed time alone
+                // would summarize an idle or barely-active session just because the clock ran out,
+                // burning an LLM call on (and creating a low-value memory from) almost nothing -
+                // codemem batches raw events the same way before its own observer runs, for the
+                // same reason. A quiet session just waits longer instead of generating noise.
+                var events = await sessionRepository.GetEventsAsync(session.Id, ct).ConfigureAwait(false);
+                var newEventCount = events.Count(e => e.Timestamp > lastSummarizedAt);
+                if (newEventCount < settings.MinEventsForSessionSummary)
+                {
+                    continue;
+                }
+
                 _lastEnqueuedAt[session.Id] = DateTimeOffset.UtcNow;
                 await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(session.Id), ct: ct)
                     .ConfigureAwait(false);

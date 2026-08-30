@@ -7,7 +7,31 @@
 .sessions-list-col {
   flex: 0 0 420px;
   padding: 0;
+  // The page itself no longer scrolls this column away (project-detail's header/tabs are sticky
+  // now) — a long session history should scroll inside its own card instead of growing the page
+  // indefinitely next to a much shorter detail pane.
+  max-height: calc(100vh - 220px);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.sessions-scroll {
+  overflow-y: auto;
+}
+
+.session-group-label {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 16px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--mat-sys-on-surface-variant);
+  background: var(--mat-sys-surface-container-low, #f6f7fa);
+  border-bottom: 1px solid var(--mat-sys-outline-variant);
 }
 
 .sessions-detail-col {

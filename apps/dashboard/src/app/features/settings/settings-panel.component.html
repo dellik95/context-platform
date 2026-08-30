@@ -82,6 +82,12 @@
             <mat-label>Interval (minutes)</mat-label>
             <input matInput type="number" min="1" formControlName="sessionSummaryIntervalMinutes" />
           </mat-form-field>
+
+          <mat-form-field appearance="outline" class="interval-field">
+            <mat-label>Min. new events</mat-label>
+            <input matInput type="number" min="1" formControlName="minEventsForSessionSummary" />
+            <mat-hint>The interval above is a max wait — this many new events must also happen first</mat-hint>
+          </mat-form-field>
         </div>
 
         <div class="actions">

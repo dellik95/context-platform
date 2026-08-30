@@ -12,35 +12,42 @@
   } @else {
     <div class="sessions-layout">
       <mat-card class="sessions-list-col">
-        <mat-list>
-          @for (session of sessions(); track session.id) {
-            <button
-              type="button"
-              mat-list-item
-              class="session-item"
-              [class.session-item--selected]="selectedId() === session.id"
-              (click)="selectSession(session)"
-            >
-              <mat-icon matListItemIcon>{{ session.status === 'Active' ? 'play_circle' : 'check_circle' }}</mat-icon>
-              <span matListItemTitle class="session-title">
-                {{ session.startedAt | date: 'medium' }}
-              </span>
-              <span matListItemLine class="session-line">
-                @if (session.endedAt) {
-                  Ended {{ session.endedAt | date: 'short' }}
-                } @else {
-                  Still running
+        <div class="sessions-scroll">
+          @for (group of sessionGroups(); track group.label) {
+            <div class="session-group">
+              <div class="session-group-label">{{ group.label }}</div>
+              <mat-list>
+                @for (session of group.sessions; track session.id) {
+                  <button
+                    type="button"
+                    mat-list-item
+                    class="session-item"
+                    [class.session-item--selected]="selectedId() === session.id"
+                    (click)="selectSession(session)"
+                  >
+                    <mat-icon matListItemIcon>{{ session.status === 'Active' ? 'play_circle' : 'check_circle' }}</mat-icon>
+                    <span matListItemTitle class="session-title">
+                      {{ session.startedAt | date: 'shortTime' }}
+                    </span>
+                    <span matListItemLine class="session-line">
+                      @if (session.endedAt) {
+                        Ended {{ session.endedAt | date: 'short' }}
+                      } @else {
+                        Still running
+                      }
+                      @if (session.claudeSessionId) {
+                        <span class="claude-id">{{ session.claudeSessionId | slice: 0 : 12 }}…</span>
+                      }
+                    </span>
+                    <span matListItemMeta class="status-badge" [class.active]="session.status === 'Active'">
+                      {{ session.status }}
+                    </span>
+                  </button>
                 }
-                @if (session.claudeSessionId) {
-                  <span class="claude-id">{{ session.claudeSessionId | slice: 0 : 12 }}…</span>
-                }
-              </span>
-              <span matListItemMeta class="status-badge" [class.active]="session.status === 'Active'">
-                {{ session.status }}
-              </span>
-            </button>
+              </mat-list>
+            </div>
           }
-        </mat-list>
+        </div>
       </mat-card>
 
       <mat-card class="sessions-detail-col">

@@ -54,6 +54,7 @@ export class SettingsPanelComponent {
     reindexIntervalMinutes: [60],
     sessionSummaryEnabled: [false],
     sessionSummaryIntervalMinutes: [30],
+    minEventsForSessionSummary: [15],
   });
 
   private readonly formValue = toSignal(this.form.valueChanges, { initialValue: this.form.getRawValue() });
@@ -93,6 +94,7 @@ export class SettingsPanelComponent {
           reindexIntervalMinutes: settings.reindexIntervalMinutes,
           sessionSummaryEnabled: settings.sessionSummaryIntervalMinutes > 0,
           sessionSummaryIntervalMinutes: settings.sessionSummaryIntervalMinutes > 0 ? settings.sessionSummaryIntervalMinutes : 30,
+          minEventsForSessionSummary: settings.minEventsForSessionSummary,
         });
         this.loading.set(false);
       },
@@ -115,6 +117,7 @@ export class SettingsPanelComponent {
       reindexIntervalMinutes: raw.reindexIntervalMinutes,
       lastReindexScheduledAt: this.lastReindexScheduledAt,
       sessionSummaryIntervalMinutes: raw.sessionSummaryEnabled ? raw.sessionSummaryIntervalMinutes : 0,
+      minEventsForSessionSummary: raw.minEventsForSessionSummary,
     };
 
     this.saving.set(true);

@@ -19,4 +19,9 @@ public sealed record ProjectSettingsDto(
     DateTimeOffset? LastReindexScheduledAt,
     // <= 0 means "only summarize at session end" (today's only behavior) - a periodic
     // mid-session summary is opt-in per project, same shape as the reindex schedule above.
-    int SessionSummaryIntervalMinutes = 0);
+    int SessionSummaryIntervalMinutes = 0,
+    // The interval is a MAXIMUM wait, not a guarantee: SessionSummaryScheduler also requires at
+    // least this many new SessionEvents since the last summary before firing one, so an idle or
+    // barely-active session doesn't burn an LLM call (and produce a low-value memory) just because
+    // the clock ran out. Default chosen to represent a real batch of activity, not a single action.
+    int MinEventsForSessionSummary = 15);

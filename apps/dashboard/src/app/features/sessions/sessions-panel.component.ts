@@ -15,6 +15,47 @@ import { ProjectContextService } from '../projects/project-context.service';
  *  parse failure is expected (not exceptional) and falls back to showing the raw string. */
 type ChangedFiles = { kind: 'list'; items: string[] } | { kind: 'raw'; raw: string };
 
+interface SessionGroup {
+  label: string;
+  sessions: SessionDto[];
+}
+
+/** Buckets sessions by calendar day (in the viewer's local time zone), newest group first —
+ *  a flat list gets unreadable fast once a project has more than a handful of sessions. */
+function groupSessionsByDay(sessions: SessionDto[]): SessionGroup[] {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  const groups = new Map<string, SessionGroup>();
+  for (const session of sessions) {
+    const started = new Date(session.startedAt);
+    const dayStart = new Date(started.getFullYear(), started.getMonth(), started.getDate());
+    const key = dayStart.toISOString();
+
+    let label: string;
+    if (dayStart.getTime() === today.getTime()) {
+      label = 'Today';
+    } else if (dayStart.getTime() === yesterday.getTime()) {
+      label = 'Yesterday';
+    } else {
+      label = dayStart.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+    }
+
+    let group = groups.get(key);
+    if (!group) {
+      group = { label, sessions: [] };
+      groups.set(key, group);
+    }
+    group.sessions.push(session);
+  }
+
+  // Map preserves insertion order; sessions() is already newest-first, so the first session of
+  // each new day is encountered in newest-day-first order too — no separate sort needed.
+  return [...groups.values()];
+}
+
 @Component({
   selector: 'app-sessions-panel',
   imports: [
@@ -39,6 +80,8 @@ export class SessionsPanelComponent {
   protected readonly selectedId = signal<string | null>(null);
   protected readonly detail = signal<SessionDetailDto | null>(null);
   protected readonly detailLoading = signal(false);
+
+  protected readonly sessionGroups = computed(() => groupSessionsByDay(this.sessions()));
 
   protected readonly changedFiles = computed<ChangedFiles | null>(() => {
     const json = this.detail()?.changedFilesJson;
