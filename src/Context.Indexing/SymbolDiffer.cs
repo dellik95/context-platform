@@ -13,13 +13,36 @@ public sealed record SymbolDiffResult(
 
 /// <summary>
 /// Symbol-level diffing between a file's previously-extracted symbols and its newly-extracted
-/// ones, matched by <c>QualifiedName</c> and compared by a hash of <c>BodyText</c>. This is what
-/// lets reindexing be symbol-level rather than whole-file: only <c>Added</c>/<c>Changed</c>
-/// symbols need new embeddings/graph edges recomputed, <c>Removed</c> ones need their graph nodes
-/// invalidated, and <c>Unchanged</c> ones can be skipped entirely.
+/// ones, matched by <c>QualifiedName</c> and compared by a hash of <see cref="CombinedText"/>.
+/// This is what lets reindexing be symbol-level rather than whole-file: only
+/// <c>Added</c>/<c>Changed</c> symbols need new embeddings/graph edges recomputed,
+/// <c>Removed</c> ones need their graph nodes invalidated, and <c>Unchanged</c> ones can be
+/// skipped entirely.
 /// </summary>
 public static class SymbolDiffer
 {
+    /// <summary>
+    /// The text a symbol is diffed AND chunked/embedded on — shared by
+    /// <see cref="Diff"/> and <c>IndexingPipeline</c>'s chunk-text construction so the two always
+    /// agree on what "changed" means. A parser reports an empty <c>BodyText</c> for a bodyless
+    /// declaration (an interface member, an abstract method, an expression-bodied member folded
+    /// into <c>SignatureText</c> — see e.g. TreeSitterCSharpParser's own documented fallback for
+    /// that case); leading with the signature means those are diffed/chunked on their signature
+    /// instead of an empty string.
+    /// </summary>
+    public static string CombinedText(string? signatureText, string? bodyText)
+    {
+        var signature = signatureText?.Trim() ?? string.Empty;
+        var body = bodyText?.Trim() ?? string.Empty;
+
+        if (body.Length == 0)
+        {
+            return signature;
+        }
+
+        return signature.Length == 0 ? body : $"{signature}\n{body}";
+    }
+
     public static SymbolDiffResult Diff(IReadOnlyList<SymbolDraft> previous, IReadOnlyList<SymbolDraft> current)
     {
         var previousByQualifiedName = ToLookup(previous);
@@ -37,8 +60,8 @@ public static class SymbolDiffer
                 continue;
             }
 
-            var previousHash = Hashing.HashText(previousSymbol.BodyText);
-            var currentHash = Hashing.HashText(currentSymbol.BodyText);
+            var previousHash = Hashing.HashText(CombinedText(previousSymbol.SignatureText, previousSymbol.BodyText));
+            var currentHash = Hashing.HashText(CombinedText(currentSymbol.SignatureText, currentSymbol.BodyText));
             (previousHash == currentHash ? unchanged : changed).Add(currentSymbol);
         }
 

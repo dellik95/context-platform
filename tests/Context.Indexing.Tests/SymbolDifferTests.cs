@@ -57,12 +57,12 @@ public sealed class SymbolDifferTests
     }
 
     [Fact]
-    public void Diff_SameQualifiedNameAndSameBodyText_IsClassifiedAsUnchanged()
+    public void Diff_SameQualifiedNameAndSameCombinedText_IsClassifiedAsUnchanged()
     {
         var previous = new[] { MakeSymbol("Foo", "NS.Foo", "return 1;", startLine: 10, endLine: 12) };
-        // Same body, but different line numbers / signature text — should still be Unchanged,
-        // since SymbolDiffer compares by BodyText hash only.
-        var current = new[] { MakeSymbol("Foo", "NS.Foo", "return 1;", startLine: 20, endLine: 22, signatureText: "void Foo(int x)") };
+        // Same body AND same signature, but different line numbers — should still be Unchanged;
+        // line numbers moving alone (e.g. an unrelated edit earlier in the file) isn't a real change.
+        var current = new[] { MakeSymbol("Foo", "NS.Foo", "return 1;", startLine: 20, endLine: 22) };
 
         var result = SymbolDiffer.Diff(previous, current);
 
@@ -70,6 +70,22 @@ public sealed class SymbolDifferTests
         result.Added.Should().BeEmpty();
         result.Removed.Should().BeEmpty();
         result.Changed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Diff_SameBodyTextButDifferentSignatureText_IsClassifiedAsChanged()
+    {
+        // SymbolDiffer.Diff compares CombinedText(signature, body), not body alone: a signature
+        // change (e.g. a parameter added) is a real change worth re-embedding even if the body
+        // text happens to read identically, and it's also how a bodyless declaration (empty body,
+        // everything in the signature) gets diffed correctly at all.
+        var previous = new[] { MakeSymbol("Foo", "NS.Foo", "return 1;", signatureText: "void Foo()") };
+        var current = new[] { MakeSymbol("Foo", "NS.Foo", "return 1;", signatureText: "void Foo(int x)") };
+
+        var result = SymbolDiffer.Diff(previous, current);
+
+        result.Changed.Should().ContainSingle().Which.QualifiedName.Should().Be("NS.Foo");
+        result.Unchanged.Should().BeEmpty();
     }
 
     [Fact]

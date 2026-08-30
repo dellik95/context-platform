@@ -11,11 +11,25 @@ services:
       - "127.0.0.1:${CONTEXT_PLATFORM_PORT:-47923}:47923"
     environment:
       CONTEXT_PLATFORM_PORT: "47923"
-      # Uncomment to use real providers instead of the offline/no-op defaults:
+      # A local Ollama install on the HOST (not this container) — host.docker.internal is the
+      # Docker Desktop/Rancher Desktop DNS name that reaches it from inside a container; plain
+      # "localhost" here would mean the container itself. Model choice: embeddinggemma is a
+      # purpose-built embedding model (much better fit than repurposing a chat model for this);
+      # qwen2.5-coder:7b is the balance of quality vs. latency for summarization/memory-extraction
+      # background jobs — gemma4:26b (also pulled) is higher quality but meaningfully slower per
+      # call, swap CONTEXT_OLLAMA_CHAT_MODEL to it if that trade-off is worth it for you.
+      CONTEXT_EMBEDDING_PROVIDER: ollama
+      CONTEXT_LLM_PROVIDER: ollama
+      CONTEXT_OLLAMA_BASE_URL: http://host.docker.internal:11434
+      CONTEXT_OLLAMA_EMBEDDING_MODEL: embeddinggemma
+      CONTEXT_OLLAMA_CHAT_MODEL: qwen2.5-coder:7b
+      # Uncomment to use hosted providers instead:
       # CONTEXT_EMBEDDING_PROVIDER: openai
       # CONTEXT_LLM_PROVIDER: anthropic
       # CONTEXT_OPENAI_API_KEY: ${CONTEXT_OPENAI_API_KEY}
       # CONTEXT_ANTHROPIC_API_KEY: ${CONTEXT_ANTHROPIC_API_KEY}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       # Defaults to this repo itself — dogfooding Context Platform on its own codebase. Point
       # HOST_PROJECT_PATH (env var or a .env file) at any other repo to index that one instead.

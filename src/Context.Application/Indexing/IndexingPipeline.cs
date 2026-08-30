@@ -28,12 +28,14 @@ namespace Context.Application.Indexing;
 /// </list>
 /// </summary>
 /// <remarks>
-/// <see cref="Symbol"/> only persists <see cref="Symbol.BodyHash"/>, not the raw body text
-/// <see cref="SymbolDiffer.Diff"/> needs to re-hash for comparison. This pipeline recovers a
-/// usable proxy for a symbol's previous body text from its corresponding <see cref="Chunk.Text"/>
-/// (chunks are created one-per-symbol from exactly the same body text used to compute
-/// <see cref="Symbol.BodyHash"/> — see <see cref="IndexParsedFileAsync"/> — so the two stay in
-/// lockstep by construction). The one edge case this can't recover from is a symbol indexed
+/// <see cref="Symbol"/> only persists <see cref="Symbol.BodyHash"/> (a hash of raw body text
+/// alone — currently write-only, not read back by anything), not text <see cref="SymbolDiffer.Diff"/>
+/// could re-hash for comparison. This pipeline instead recovers a usable proxy for a symbol's
+/// previous diff-text from its corresponding <see cref="Chunk.Text"/> (which is
+/// <see cref="SymbolDiffer.CombinedText"/> of the symbol's signature and body — see
+/// <see cref="IndexParsedFileAsync"/> — so re-diffing on it via an empty reconstructed
+/// SignatureText, per <see cref="SymbolDiffer.CombinedText"/>'s own null/empty handling, reproduces
+/// the same value). The one edge case this can't recover from is a symbol indexed
 /// before this pairing existed (or whose chunk was otherwise lost): its proxy body text is empty,
 /// which <see cref="SymbolDiffer"/> then reports as "Changed" even if the symbol didn't actually
 /// change — a harmless one-time false positive that self-heals on the very next reindex.
@@ -233,15 +235,25 @@ public sealed class IndexingPipeline(
                 DocComment = draft.DocComment
             });
 
-            var bodyText = Cap(draft.BodyText ?? string.Empty, MaxChunkChars);
+            // A parser reports BodyText == "" for a bodyless declaration (an interface member,
+            // an abstract method, a property with no accessors block, ...) — see e.g.
+            // TreeSitterCSharpParser's own documented "headerless" fallback for expression-bodied
+            // members. Chunking on BodyText alone then produces an empty chunk: no lexical/vector
+            // match ever finds meaningful text for it, and the resulting SearchHit falls back to a
+            // bare-GUID label. Always leading with SignatureText fixes that (bodyless members are
+            // then represented by their signature, which for those cases IS the whole declaration)
+            // and is a genuine quality improvement even when a body exists — a chunk that reads
+            // "public int Add(int a, int b) { return a + b; }" embeds/matches better than "return
+            // a + b;" alone.
+            var chunkText = Cap(SymbolDiffer.CombinedText(draft.SignatureText, draft.BodyText), MaxChunkChars);
             newChunkRows.Add(new Chunk
             {
                 Id = Guid.NewGuid(),
                 FileId = fileEntity.Id,
                 SymbolId = symbolId,
-                Text = bodyText,
-                TokenCount = TokenEstimator.Estimate(bodyText),
-                ContentHash = hasher.HashText(bodyText)
+                Text = chunkText,
+                TokenCount = TokenEstimator.Estimate(chunkText),
+                ContentHash = hasher.HashText(chunkText)
             });
         }
 
@@ -294,9 +306,12 @@ public sealed class IndexingPipeline(
                     ? parentQn
                     : null;
 
-            // SignatureText isn't persisted (only SignatureHash) and SymbolDiffer.Diff never
-            // reads it — only QualifiedName (key) and a hash of BodyText drive its decision — so
-            // an empty placeholder here is safe.
+            // SignatureText itself isn't persisted (only SignatureHash) — bodyText here is really
+            // a proxy for the OLD Chunk.Text, which per SymbolDiffer.CombinedText already folds
+            // signature into body wherever the parser needed to (bodyless declarations). Passing
+            // it as BodyText with an empty SignatureText reproduces that same combined value when
+            // SymbolDiffer.Diff recombines them for hashing — an empty SignatureText contributes
+            // nothing to CombinedText, so this stays a faithful placeholder rather than a lossy one.
             drafts.Add(new SymbolDraft(
                 symbol.Name, symbol.QualifiedName, symbol.Kind, symbol.StartLine, symbol.EndLine,
                 SignatureText: string.Empty, BodyText: bodyText, DocComment: symbol.DocComment,

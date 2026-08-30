@@ -20,3 +20,6 @@ apps/host/Context.Host/wwwroot/
 **/context-platform.local.json
 .env
 .env.*
+
+# Context Platform (added by context-platform installer)
+.claude/context-platform.local.json
