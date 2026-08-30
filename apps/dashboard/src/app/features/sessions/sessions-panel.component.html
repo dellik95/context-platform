@@ -35,9 +35,9 @@
                   <span class="claude-id">{{ session.claudeSessionId | slice: 0 : 12 }}…</span>
                 }
               </span>
-              <mat-chip-set matListItemMeta>
-                <mat-chip [class.chip-active]="session.status === 'Active'">{{ session.status }}</mat-chip>
-              </mat-chip-set>
+              <span matListItemMeta class="status-badge" [class.active]="session.status === 'Active'">
+                {{ session.status }}
+              </span>
             </button>
           }
         </mat-list>
@@ -105,6 +105,17 @@
                   <pre class="raw-json">{{ files.raw }}</pre>
                 }
               </section>
+            }
+
+            @if (!hasSummaryContent(d)) {
+              <div class="no-summary">
+                <mat-icon>hourglass_empty</mat-icon>
+                @if (d.session.status === 'Active') {
+                  <p>Session still in progress — a summary appears once it ends.</p>
+                } @else {
+                  <p>No summary was generated for this session.</p>
+                }
+              </div>
             }
           </div>
         }

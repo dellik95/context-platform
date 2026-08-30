@@ -1,7 +1,6 @@
 import { CommonModule } from '@angular/common';
 import { Component, computed, effect, inject, signal } from '@angular/core';
 import { MatCardModule } from '@angular/material/card';
-import { MatChipsModule } from '@angular/material/chips';
 import { MatIconModule } from '@angular/material/icon';
 import { MatListModule } from '@angular/material/list';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
@@ -20,7 +19,6 @@ type ChangedFiles = { kind: 'list'; items: string[] } | { kind: 'raw'; raw: stri
     CommonModule,
     MatCardModule,
     MatListModule,
-    MatChipsModule,
     MatIconModule,
     MatProgressBarModule,
   ],
@@ -77,6 +75,17 @@ export class SessionsPanelComponent {
         this.snackBar.open('Could not load sessions — is Context.Host running?', 'Dismiss');
       },
     });
+  }
+
+  protected hasSummaryContent(detail: SessionDetailDto): boolean {
+    return Boolean(
+      detail.completed ||
+        detail.discovered ||
+        detail.decisions ||
+        detail.openIssues ||
+        detail.nextSteps ||
+        this.changedFiles(),
+    );
   }
 
   protected selectSession(session: SessionDto): void {
