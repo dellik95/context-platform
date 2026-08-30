@@ -24,7 +24,7 @@
         <div class="create-actions">
           <button mat-button type="button" (click)="showCreateForm.set(false)">Cancel</button>
           <button mat-flat-button color="primary" type="submit" [disabled]="createForm.invalid || creating()">
-            Create
+            {{ creating() ? 'Creating…' : 'Create' }}
           </button>
         </div>
       </form>
