@@ -18,12 +18,10 @@ Status legend: ✅ done · 🚧 in progress · 📋 planned (not started)
 - Dashboard (Angular): Projects, Overview, Search, Memories, Sessions, Graph (impact/blast-radius), Settings (provider config, reindex schedule, Claude integration installer, folder-browser project creation), System (live health/job status).
 - Live SignalR updates: reindex progress, project stats, session-summary/memory-created activity — panels refresh without polling or reload.
 - Cross-platform hook installer (fixed a real bug: was double-registering both `.ps1` and `.sh` commands when a repo was set up from more than one OS, causing every hook to fire twice).
-
-## 🚧 In progress
-
-- **Session titles** — `SessionSummary` gets an LLM-generated short descriptive title (like a commit subject line), shown in the Sessions list instead of a bare timestamp.
-- **Structured memory (Facts + Narrative)** — inspired by comparing against `codemem`'s memory model: today a `Memory` is one flat `Body` string. Splitting a short, scannable `Facts` list (atomic bullet points) out from the full prose narrative lets a search result show the cheap/compact form first and the full form on demand — the actual token-saving mechanism.
-- **Per-file semantic summary ("file wiki")** — indexing currently embeds symbol-level code chunks only. A short LLM-generated natural-language description of what each *file* is for, embedded as its own searchable chunk (`Chunk.SymbolId = null`, schema already supports this), should meaningfully improve recall for natural-language queries ("where is auth handled") that don't literally match code tokens well.
+- **Session titles** — `SessionSummary` gets an LLM-generated short descriptive title (git-commit-subject style), shown in the Sessions list/detail instead of a bare timestamp; deterministic non-empty fallback when offline. Live-verified; also fixed a real bug found in verification (`SessionSummaryParser`'s header regex didn't tolerate the markdown headings — `### TITLE:` — this model reliably produces on real-sized sessions, silently discarding the whole parse).
+- **Structured memory (Facts)** — `Memory.FactsJson`: 2-5 short, atomic, standalone bullet facts extracted alongside the existing prose `Body`, for when a search result needs to say something useful in very few tokens. Rendered as a bullet list above the body in the Memories tab. Live-verified against real extracted memories.
+- **Per-file semantic summary ("file wiki")** — indexing now also generates a short natural-language description of each file (`IFileSummarizer`, no-op under the noop LLM provider) and embeds it as its own searchable chunk (`Chunk.SymbolId = null`). Live-verified: a real reindex produced real file-level search hits with natural-language snippets. File-kind hits render distinctly in the Search tab.
+- Fixed `dotnet run`/`dotnet build` never actually serving the Dashboard (`Context.Host.csproj` only copied the built Angular output into `wwwroot/` at publish time, never for a plain run — found live while verifying the three features above).
 
 ## 📋 Planned (not started)
 
