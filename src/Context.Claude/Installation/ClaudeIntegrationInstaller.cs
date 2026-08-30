@@ -116,6 +116,57 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
             "Installed Claude Code integration for project {ProjectId} at {ProjectRoot}", projectId, projectRoot);
     }
 
+    public async Task InstallSkillAsync(Guid projectId, string projectRoot, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
+        projectRoot = Path.GetFullPath(projectRoot);
+        Directory.CreateDirectory(projectRoot);
+
+        var claudeDir = Path.Combine(projectRoot, ".claude");
+        var skillDir = Path.Combine(claudeDir, "skills", "context-memory");
+        Directory.CreateDirectory(skillDir);
+
+        var backupRoot = Path.Combine(
+            claudeDir, ".backup", DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ", CultureInfo.InvariantCulture));
+
+        var skillPath = Path.Combine(skillDir, "SKILL.md");
+        BackupIfExists(skillPath, projectRoot, backupRoot);
+        await WriteTextAsync(skillPath, BuildSkillMarkdown(), ct).ConfigureAwait(false);
+
+        _logger.LogInformation(
+            "Installed context-memory skill for project {ProjectId} at {ProjectRoot}", projectId, projectRoot);
+    }
+
+    private static string BuildSkillMarkdown() =>
+        """
+        ---
+        name: context-memory
+        description: Use this project's Context Platform MCP tools for code lookup and cross-session memory instead of re-deriving context from scratch.
+        ---
+
+        # Context Platform memory & code intelligence
+
+        This project has Context Platform's MCP tools registered:
+
+        - `context_search` - hybrid (lexical + semantic) search over code and docs, merged with ranked project memory into a token-budgeted context pack.
+        - `code_search` - raw ranked code/text search hits, no memory merge or budgeting.
+        - `symbol_search` - finds symbols (classes, functions, methods, ...) by name pattern.
+        - `memory_search` - searches persistent memories (decisions, discoveries, bug fixes, open issues, ...).
+        - `memory_get` - fetches one memory by id.
+        - `graph_neighbors` - lists graph nodes reachable from a node within N hops, optionally filtered by edge kind.
+        - `graph_path` - finds the shortest path between two graph nodes.
+        - `graph_impact` - blast-radius analysis for a symbol: transitive callers, implementers, and covering tests.
+        - `session_search` - lists recent Claude Code sessions for this project.
+        - `session_get` - fetches one session's metadata, event log, and summary.
+        - `project_info` - aggregate stats: files indexed, symbols indexed, memory count, last-indexed time.
+
+        ## When to use them
+
+        - Prefer `context_search` or `code_search` over re-reading files from scratch when looking for how something in the codebase works.
+        - Check `memory_search` for prior decisions, bugfixes, or discoveries before re-investigating a question that may already be answered from an earlier session.
+        - Call `graph_impact` on a symbol before changing it, to see its blast radius (callers, implementers, tests).
+        """;
+
     private JsonObject BuildPluginManifest() => new()
     {
         ["name"] = "context-platform",

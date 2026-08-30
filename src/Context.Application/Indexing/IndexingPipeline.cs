@@ -51,12 +51,14 @@ public sealed class IndexingPipeline(
     IEnumerable<ILanguageParser> parsers,
     IContentHasher hasher,
     IJobQueue jobQueue,
-    ILogger<IndexingPipeline>? logger = null) : IIndexingPipeline
+    ILogger<IndexingPipeline>? logger = null,
+    IIndexingProgressReporter? progressReporter = null) : IIndexingPipeline
 {
     /// <summary>Safety cap on a single chunk's text so one pathological symbol/file can't blow up storage/search.</summary>
     private const int MaxChunkChars = 20_000;
 
     private readonly ILogger<IndexingPipeline> _logger = logger ?? NullLogger<IndexingPipeline>.Instance;
+    private readonly IIndexingProgressReporter _progressReporter = progressReporter ?? NullIndexingProgressReporter.Instance;
 
     public Task IndexFileAsync(Guid projectId, string relativePath, CancellationToken ct) =>
         IndexFileInternalAsync(projectId, relativePath, forceReprocess: false, ct);
@@ -69,10 +71,26 @@ public sealed class IndexingPipeline(
         var ignore = ignoreFactory(project.RootPath);
         var scannedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        // FilesTotal must be known before the first progress report goes out, so the scan is
+        // buffered into a list up front rather than driving IndexFileInternalAsync straight off
+        // the IAsyncEnumerable as it streams in.
+        var scannedFiles = new List<ScannedFile>();
         await foreach (var scanned in scanner.ScanAsync(project.RootPath, ignore, ct).WithCancellation(ct))
+        {
+            scannedFiles.Add(scanned);
+        }
+
+        var filesTotal = scannedFiles.Count;
+        var filesProcessed = 0;
+
+        foreach (var scanned in scannedFiles)
         {
             scannedPaths.Add(NormalizePath(scanned.RelativePath));
             await IndexFileInternalAsync(projectId, scanned.RelativePath, forceReprocess: full, ct).ConfigureAwait(false);
+
+            filesProcessed++;
+            await ReportProgressAsync(new ReindexProgressDto(projectId, filesProcessed, filesTotal, Completed: false), ct)
+                .ConfigureAwait(false);
         }
 
         // Anything still on record for this project but not found by this scan has been deleted
@@ -85,6 +103,29 @@ public sealed class IndexingPipeline(
             {
                 await HandleFileRemovedAsync(projectId, known.RelativePath, ct).ConfigureAwait(false);
             }
+        }
+
+        await ReportProgressAsync(new ReindexProgressDto(projectId, filesTotal, filesTotal, Completed: true), ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Progress reporting is an observability side-channel, not part of the reindex itself — a
+    /// broken/unreachable reporter (e.g. a dropped SignalR connection) must never abort the
+    /// reindex it's reporting on.
+    /// </summary>
+    private async Task ReportProgressAsync(ReindexProgressDto progress, CancellationToken ct)
+    {
+        try
+        {
+            await _progressReporter.ReportAsync(progress, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to report reindex progress for project {ProjectId}.", progress.ProjectId);
         }
     }
 

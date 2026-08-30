@@ -13,4 +13,14 @@ public interface IClaudeIntegrationInstaller
     /// <c>.claude/.backup/&lt;timestamp&gt;/</c>.
     /// </summary>
     Task InstallAsync(Guid projectId, string projectRoot, CancellationToken ct);
+
+    /// <summary>
+    /// Writes <c>.claude/skills/context-memory/SKILL.md</c> (frontmatter: name: context-memory,
+    /// description: one line) — a skill document teaching Claude Code to proactively call this
+    /// project's registered MCP tools (context_search, code_search, symbol_search, memory_search,
+    /// graph_impact, session_search — see §10/ContextMcpTools) for code lookup and persistent
+    /// memory instead of re-deriving context from scratch. Same backup-before-overwrite convention
+    /// as <see cref="InstallAsync"/> (via the same private BackupIfExists helper).
+    /// </summary>
+    Task InstallSkillAsync(Guid projectId, string projectRoot, CancellationToken ct);
 }

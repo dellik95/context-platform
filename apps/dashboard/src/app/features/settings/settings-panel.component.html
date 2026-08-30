@@ -1,0 +1,93 @@
+<div class="page">
+  <header class="page-header">
+    <h1>Settings</h1>
+  </header>
+
+  @if (loading()) {
+    <mat-progress-bar mode="indeterminate" />
+  } @else {
+    <mat-card class="settings-card">
+      <h2 class="section-title">Providers</h2>
+      <p class="provider-note">
+        <mat-icon>info</mat-icon>
+        Provider changes require a Context.Host restart to take effect.
+      </p>
+
+      <form class="settings-form" [formGroup]="form" (ngSubmit)="save()">
+        <div class="field-row">
+          <mat-form-field appearance="outline">
+            <mat-label>Embedding provider</mat-label>
+            <mat-select formControlName="embeddingProvider">
+              <mat-option value="noop">noop</mat-option>
+              <mat-option value="openai">openai</mat-option>
+              <mat-option value="ollama">ollama</mat-option>
+            </mat-select>
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>LLM provider</mat-label>
+            <mat-select formControlName="llmProvider">
+              <mat-option value="noop">noop</mat-option>
+              <mat-option value="anthropic">anthropic</mat-option>
+              <mat-option value="ollama">ollama</mat-option>
+            </mat-select>
+          </mat-form-field>
+        </div>
+
+        @if (showOllamaBaseUrl() || showOllamaEmbeddingModel() || showOllamaChatModel()) {
+          <div class="field-row">
+            @if (showOllamaBaseUrl()) {
+              <mat-form-field appearance="outline">
+                <mat-label>Ollama base URL</mat-label>
+                <input matInput formControlName="ollamaBaseUrl" placeholder="http://localhost:11434" />
+              </mat-form-field>
+            }
+            @if (showOllamaEmbeddingModel()) {
+              <mat-form-field appearance="outline">
+                <mat-label>Ollama embedding model</mat-label>
+                <input matInput formControlName="ollamaEmbeddingModel" placeholder="e.g. nomic-embed-text" />
+              </mat-form-field>
+            }
+            @if (showOllamaChatModel()) {
+              <mat-form-field appearance="outline">
+                <mat-label>Ollama chat model</mat-label>
+                <input matInput formControlName="ollamaChatModel" placeholder="e.g. llama3" />
+              </mat-form-field>
+            }
+          </div>
+        }
+
+        <h2 class="section-title">Reindexing</h2>
+
+        <div class="field-row field-row--align-center">
+          <mat-slide-toggle formControlName="reindexEnabled">Enable scheduled reindexing</mat-slide-toggle>
+
+          <mat-form-field appearance="outline" class="interval-field">
+            <mat-label>Interval (minutes)</mat-label>
+            <input matInput type="number" min="1" formControlName="reindexIntervalMinutes" />
+          </mat-form-field>
+        </div>
+
+        <div class="actions">
+          <button mat-flat-button color="primary" type="submit" [disabled]="saving()">
+            {{ saving() ? 'Saving…' : 'Save' }}
+          </button>
+        </div>
+      </form>
+    </mat-card>
+
+    <mat-card class="settings-card">
+      <h2 class="section-title">Claude Code integration</h2>
+      <p class="integration-description">
+        Writes the hooks, MCP server registration, and skill document that let Claude Code use this project's
+        context automatically.
+      </p>
+      <div class="actions">
+        <button mat-stroked-button [disabled]="installing()" (click)="installClaude()">
+          <mat-icon>extension</mat-icon>
+          {{ installing() ? 'Registering…' : 'Register Claude Code integration (hooks, MCP, skill)' }}
+        </button>
+      </div>
+    </mat-card>
+  }
+</div>

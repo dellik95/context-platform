@@ -3,6 +3,7 @@ import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
+  ClaudeInstallResponse,
   ContextPack,
   CreateProjectRequest,
   HealthResponse,
@@ -10,10 +11,12 @@ import {
   IndexTriggerResponse,
   Memory,
   ProjectDto,
+  ProjectSettingsDto,
   ProjectStatusDto,
   SessionDetailDto,
   SessionDto,
   SymbolSummaryDto,
+  SystemStatusDto,
 } from './models';
 
 /**
@@ -74,5 +77,21 @@ export class ApiService {
 
   getSession(id: string): Observable<SessionDetailDto> {
     return this.http.get<SessionDetailDto>(`${this.base}/api/sessions/${id}`);
+  }
+
+  getSettings(projectId: string): Observable<ProjectSettingsDto> {
+    return this.http.get<ProjectSettingsDto>(`${this.base}/api/projects/${projectId}/settings`);
+  }
+
+  updateSettings(projectId: string, settings: ProjectSettingsDto): Observable<void> {
+    return this.http.put<void>(`${this.base}/api/projects/${projectId}/settings`, settings);
+  }
+
+  installClaude(projectId: string): Observable<ClaudeInstallResponse> {
+    return this.http.post<ClaudeInstallResponse>(`${this.base}/api/projects/${projectId}/claude/install`, {});
+  }
+
+  getSystemStatus(): Observable<SystemStatusDto> {
+    return this.http.get<SystemStatusDto>(`${this.base}/api/system/status`);
   }
 }

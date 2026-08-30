@@ -1,0 +1,65 @@
+<div class="page">
+  @if (showReindexProgress() && reindexProgress(); as progress) {
+    <mat-card class="reindex-card">
+      <div class="reindex-header">
+        <mat-icon>sync</mat-icon>
+        <span>Reindexing… {{ progress.filesProcessed }} / {{ progress.filesTotal }} files</span>
+      </div>
+      <mat-progress-bar mode="determinate" [value]="reindexPercent(progress)" />
+    </mat-card>
+  }
+
+  @if (statusError()) {
+    <mat-card class="empty-state">
+      <mat-icon>cloud_off</mat-icon>
+      <p>Could not load system status — is Context.Host running?</p>
+    </mat-card>
+  } @else if (status(); as status) {
+    <div class="chip-row">
+      <span class="status-chip" [class.healthy]="status.databaseReachable">
+        <mat-icon>{{ status.databaseReachable ? 'check_circle' : 'error' }}</mat-icon>
+        Database
+      </span>
+      <span class="status-chip" [class.healthy]="status.jobDispatcherAlive">
+        <mat-icon>{{ status.jobDispatcherAlive ? 'check_circle' : 'error' }}</mat-icon>
+        Job dispatcher
+      </span>
+      <span class="status-chip" [class.healthy]="status.mcpAlive">
+        <mat-icon>{{ status.mcpAlive ? 'check_circle' : 'error' }}</mat-icon>
+        MCP
+      </span>
+    </div>
+
+    <mat-card class="details-card">
+      <dl>
+        <dt>Embedding provider</dt>
+        <dd>{{ status.embeddingProvider }}</dd>
+        <dt>LLM provider</dt>
+        <dd>{{ status.llmProvider }}</dd>
+        <dt>Uptime</dt>
+        <dd>{{ formatUptime(status.uptimeSeconds) }}</dd>
+      </dl>
+    </mat-card>
+
+    <div class="stat-grid">
+      <mat-card class="stat-card">
+        <span class="stat-value">{{ status.jobsPending }}</span>
+        <span class="stat-label">Pending</span>
+      </mat-card>
+      <mat-card class="stat-card">
+        <span class="stat-value">{{ status.jobsRunning }}</span>
+        <span class="stat-label">Running</span>
+      </mat-card>
+      <mat-card class="stat-card">
+        <span class="stat-value">{{ status.jobsFailed }}</span>
+        <span class="stat-label">Failed</span>
+      </mat-card>
+      <mat-card class="stat-card">
+        <span class="stat-value">{{ status.jobsDone }}</span>
+        <span class="stat-label">Done</span>
+      </mat-card>
+    </div>
+  } @else {
+    <mat-progress-bar mode="indeterminate" />
+  }
+</div>

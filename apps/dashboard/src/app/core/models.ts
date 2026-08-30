@@ -141,3 +141,46 @@ export interface SessionDetailDto {
 
 /** Pushed over the /hubs/indexing SignalR hub's "ProjectStatusChanged" event. */
 export type ProjectStatusChangedEvent = ProjectStatusDto;
+
+// Mirrors apps/host/Context.Host/Api/SystemEndpoints.cs's SystemStatusDto record.
+export interface SystemStatusDto {
+  databaseReachable: boolean;
+  jobDispatcherAlive: boolean;
+  mcpAlive: boolean;
+  embeddingProvider: string;
+  llmProvider: string;
+  jobsPending: number;
+  jobsRunning: number;
+  jobsFailed: number;
+  jobsDone: number;
+  uptimeSeconds: number;
+}
+
+// Mirrors src/Context.Application/Indexing/ReindexProgressDto.cs, pushed over the
+// /hubs/indexing SignalR hub's "ReindexProgress" event.
+export interface ReindexProgressEvent {
+  projectId: string;
+  filesProcessed: number;
+  filesTotal: number;
+  completed: boolean;
+}
+
+// Mirrors Context.Application.Settings.ProjectSettingsDto exactly (see CONTRACTS.md §12 and
+// apps/host/Context.Host/Api/SettingsEndpoints.cs). Provider fields are informational/
+// override-on-next-restart only -- changing them does NOT hot-swap the running provider.
+// ReindexEnabled/ReindexIntervalMinutes DO take effect live.
+export interface ProjectSettingsDto {
+  embeddingProvider: string; // "noop" | "openai" | "ollama"
+  llmProvider: string; // "noop" | "anthropic" | "ollama"
+  ollamaBaseUrl: string | null;
+  ollamaEmbeddingModel: string | null;
+  ollamaChatModel: string | null;
+  reindexEnabled: boolean;
+  reindexIntervalMinutes: number; // ignored (treated as disabled) if <= 0
+  lastReindexScheduledAt: string | null; // ISO-8601
+}
+
+// Response of POST /api/projects/{id}/claude/install.
+export interface ClaudeInstallResponse {
+  installed: boolean;
+}

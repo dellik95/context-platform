@@ -3,6 +3,8 @@ using Context.Application.Adapters;
 using Context.Application.Indexing;
 using Context.Application.Jobs;
 using Context.Application.Jobs.Handlers;
+using Context.Application.Scheduling;
+using Context.Application.Settings;
 using Context.Graph.Abstractions;
 using Context.Infrastructure;
 using Context.Memory.Abstractions;
@@ -54,6 +56,12 @@ public static class ServiceCollectionExtensions
         AddJobDispatcher(services);
         AddIndexingPipeline(services);
         AddContextEngine(services);
+
+        // Default/fallback so Context.Application has zero hard dependency on SignalR;
+        // Context.Host overrides this with a SignalR-backed reporter (registration order —
+        // last AddSingleton for a given interface wins).
+        services.AddSingleton<IIndexingProgressReporter>(NullIndexingProgressReporter.Instance);
+        AddProjectSettings(services);
 
         return services;
     }
@@ -124,6 +132,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<JobDispatcher>();
         services.AddSingleton<IJobQueue>(sp => sp.GetRequiredService<JobDispatcher>());
         services.AddHostedService(sp => sp.GetRequiredService<JobDispatcher>());
+        services.AddHostedService<ReindexSchedulerService>();
     }
 
     private static void AddIndexingPipeline(IServiceCollection services)
@@ -135,5 +144,12 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<SessionDeliveryCache>();
         services.AddScoped<IContextEngine, ContextEngine>();
+    }
+
+    // Scoped like IContextEngine above: talks only to the Scoped IProjectRepository, no state to
+    // share across a request.
+    private static void AddProjectSettings(IServiceCollection services)
+    {
+        services.AddScoped<IProjectSettingsService, ProjectSettingsService>();
     }
 }

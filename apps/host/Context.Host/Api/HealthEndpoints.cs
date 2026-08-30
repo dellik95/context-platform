@@ -23,7 +23,7 @@ public static class HealthEndpoints
         ILlmProvider llmProvider,
         CancellationToken ct)
     {
-        var databaseReachable = await CheckDatabaseAsync(dbFactory, ct).ConfigureAwait(false);
+        var databaseReachable = await HealthChecks.CheckDatabaseAsync(dbFactory, ct).ConfigureAwait(false);
 
         // JobDispatcher is registered as both IJobQueue and the app's own IHostedService (see
         // Context.Application.ServiceCollectionExtensions.AddJobDispatcher) and is started via
@@ -39,19 +39,5 @@ public static class HealthEndpoints
             healthy, databaseReachable, jobDispatcherAlive, embeddingProvider.Name, rerankerProvider.Name, llmProvider.Name);
 
         return healthy ? Results.Ok(response) : Results.Json(response, statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
-
-    private static async Task<bool> CheckDatabaseAsync(IDbContextFactory<ContextDbContext> dbFactory, CancellationToken ct)
-    {
-        try
-        {
-            await using var db = await dbFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
-            await db.Database.ExecuteSqlRawAsync("SELECT 1", ct).ConfigureAwait(false);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
     }
 }

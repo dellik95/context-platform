@@ -35,6 +35,16 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/graph/graph-impact-panel.component').then((m) => m.GraphImpactPanelComponent),
       },
+      {
+        path: 'settings',
+        loadComponent: () =>
+          import('./features/settings/settings-panel.component').then((m) => m.SettingsPanelComponent),
+      },
+      {
+        path: 'system',
+        loadComponent: () =>
+          import('./features/system/system-panel.component').then((m) => m.SystemPanelComponent),
+      },
     ],
   },
   { path: '**', redirectTo: 'projects' },

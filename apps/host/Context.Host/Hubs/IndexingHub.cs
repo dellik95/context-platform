@@ -23,4 +23,7 @@ public sealed class IndexingHubNotifier(IHubContext<IndexingHub> hub)
 {
     public Task ProjectStatusChangedAsync(Guid projectId, object statusDto, CancellationToken ct) =>
         hub.Clients.Group(IndexingHub.GroupName(projectId)).SendAsync("ProjectStatusChanged", statusDto, ct);
+
+    public Task ReindexProgressAsync(Guid projectId, Context.Application.Indexing.ReindexProgressDto progress, CancellationToken ct) =>
+        hub.Clients.Group(IndexingHub.GroupName(projectId)).SendAsync("ReindexProgress", progress, ct);
 }

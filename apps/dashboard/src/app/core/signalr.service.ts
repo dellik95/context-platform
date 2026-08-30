@@ -2,7 +2,7 @@ import { Injectable, OnDestroy } from '@angular/core';
 import * as signalR from '@microsoft/signalr';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
-import { ProjectStatusChangedEvent } from './models';
+import { ProjectStatusChangedEvent, ReindexProgressEvent } from './models';
 
 /**
  * Wraps the /hubs/indexing SignalR hub (apps/host/Context.Host/Hubs/IndexingHub.cs). One
@@ -16,6 +16,7 @@ export class SignalrService implements OnDestroy {
   private readonly joinedProjects = new Set<string>();
 
   readonly projectStatusChanged$ = new Subject<ProjectStatusChangedEvent>();
+  readonly reindexProgress$ = new Subject<ReindexProgressEvent>();
 
   private async ensureStarted(): Promise<void> {
     if (this.connection) {
@@ -29,6 +30,9 @@ export class SignalrService implements OnDestroy {
 
     this.connection.on('ProjectStatusChanged', (dto: ProjectStatusChangedEvent) =>
       this.projectStatusChanged$.next(dto));
+
+    this.connection.on('ReindexProgress', (dto: ReindexProgressEvent) =>
+      this.reindexProgress$.next(dto));
 
     // Automatic reconnect drops group membership server-side; rejoin whatever this client cared
     // about once the connection comes back.

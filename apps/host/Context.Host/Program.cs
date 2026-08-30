@@ -50,6 +50,9 @@ try
         Args = args,
         ContentRootPath = AppContext.BaseDirectory,
     });
+    // AddSingleton<TService>(TService) requires a reference type; HostStartTime is a value type, so
+    // register it through the non-generic Type/instance overload instead.
+    builder.Services.AddSingleton(typeof(HostStartTime), new HostStartTime(DateTimeOffset.UtcNow));
 
     // Single-process, local-only host (spec's "one host process" decision): bind Kestrel per
     // ContextHostOptions.BindHost — loopback-only bare-metal, 0.0.0.0 in a container (see that
@@ -100,6 +103,11 @@ try
         .AddJsonProtocol(o => o.PayloadSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
     builder.Services.AddSingleton<IndexingHubNotifier>();
 
+    // Overrides AddContextApplication's NullIndexingProgressReporter default (last AddSingleton for
+    // a given interface wins) - same override mechanism AddContextProviders already relies on for
+    // its own placeholder-provider registrations.
+    builder.Services.AddSingleton<Context.Application.Indexing.IIndexingProgressReporter, Context.Host.Hubs.SignalRIndexingProgressReporter>();
+
     // The API/hub is loopback-only at the network level (ContextHostOptions.BindHost/Docker port
     // publish) — CORS here only governs which *browser origins* may call it, and a locally-run
     // Angular dev server (ng serve, a different port on the same machine) is exactly that case.
@@ -149,6 +157,9 @@ try
     app.MapGraphEndpoints();
     app.MapSessionEndpoints();
     app.MapHealthEndpoints();
+    app.MapSettingsEndpoints();
+    app.MapClaudeEndpoints();
+    app.MapSystemEndpoints();
     app.MapHub<IndexingHub>("/hubs/indexing");
 
     // ClaudeIntegrationInstaller writes .mcp.json as {"type":"http","url":"http://127.0.0.1:{port}/mcp"},
@@ -307,3 +318,6 @@ static async Task<(Guid? ProjectId, string? BearerToken)> TryReadLocalConfigAsyn
 
 // Exposes the top-level-statement Program to WebApplicationFactory<Program> in Context.IntegrationTests.
 public partial class Program;
+
+// Captured once at startup so /api/system/status can report process uptime (CONTRACTS.md §12).
+public readonly record struct HostStartTime(DateTimeOffset Value);

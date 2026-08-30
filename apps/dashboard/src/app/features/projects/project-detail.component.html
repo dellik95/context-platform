@@ -22,6 +22,12 @@
     <a mat-tab-link routerLink="graph" routerLinkActive #graph="routerLinkActive" [active]="graph.isActive">
       Graph
     </a>
+    <a mat-tab-link routerLink="settings" routerLinkActive #settings="routerLinkActive" [active]="settings.isActive">
+      Settings
+    </a>
+    <a mat-tab-link routerLink="system" routerLinkActive #system="routerLinkActive" [active]="system.isActive">
+      System
+    </a>
   </nav>
   <mat-tab-nav-panel #panel>
     <router-outlet />
