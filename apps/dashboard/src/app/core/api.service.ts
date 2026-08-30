@@ -3,6 +3,7 @@ import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
+  BrowseDirectoryResponse,
   ClaudeInstallResponse,
   ContextPack,
   CreateProjectRequest,
@@ -93,5 +94,10 @@ export class ApiService {
 
   getSystemStatus(): Observable<SystemStatusDto> {
     return this.http.get<SystemStatusDto>(`${this.base}/api/system/status`);
+  }
+
+  browseDirectory(path?: string): Observable<BrowseDirectoryResponse> {
+    const params = path ? `?path=${encodeURIComponent(path)}` : '';
+    return this.http.get<BrowseDirectoryResponse>(`${this.base}/api/fs/browse${params}`);
   }
 }

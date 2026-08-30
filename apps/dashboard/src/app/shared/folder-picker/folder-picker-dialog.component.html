@@ -1,0 +1,34 @@
+<h2 mat-dialog-title>Choose a folder</h2>
+
+<mat-dialog-content>
+  <div class="path-bar">
+    <button mat-icon-button [disabled]="isRoot() || loading()" (click)="navigateUp()" aria-label="Up one level">
+      <mat-icon>arrow_upward</mat-icon>
+    </button>
+    <span class="current-path">{{ currentPath() || 'Drives' }}</span>
+  </div>
+
+  @if (loading()) {
+    <mat-progress-bar mode="indeterminate" />
+  }
+
+  @if (!loading() && directories().length === 0) {
+    <p class="empty-state">No subfolders here.</p>
+  } @else {
+    <mat-nav-list class="folder-list">
+      @for (dir of directories(); track dir.fullPath) {
+        <a mat-list-item (click)="navigateInto(dir)">
+          <mat-icon matListItemIcon>folder</mat-icon>
+          <span matListItemTitle>{{ dir.name }}</span>
+        </a>
+      }
+    </mat-nav-list>
+  }
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  <button mat-button (click)="cancel()">Cancel</button>
+  <button mat-flat-button color="primary" [disabled]="!currentPath()" (click)="selectCurrent()">
+    Select this folder
+  </button>
+</mat-dialog-actions>

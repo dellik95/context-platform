@@ -166,6 +166,7 @@ try
     app.MapSettingsEndpoints();
     app.MapClaudeEndpoints();
     app.MapSystemEndpoints();
+    app.MapFileSystemEndpoints();
     app.MapHub<IndexingHub>("/hubs/indexing");
 
     // ClaudeIntegrationInstaller writes .mcp.json as {"type":"http","url":"http://127.0.0.1:{port}/mcp"},

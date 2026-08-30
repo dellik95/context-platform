@@ -4,6 +4,7 @@ import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
+import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
@@ -12,6 +13,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { ApiService } from '../../core/api.service';
 import { ProjectDto } from '../../core/models';
+import { FolderPickerDialogComponent } from '../../shared/folder-picker/folder-picker-dialog.component';
 
 @Component({
   selector: 'app-projects-list',
@@ -26,6 +28,7 @@ import { ProjectDto } from '../../core/models';
     MatFormFieldModule,
     MatInputModule,
     MatProgressBarModule,
+    MatDialogModule,
   ],
   templateUrl: './projects-list.component.html',
   styleUrl: './projects-list.component.scss',
@@ -35,6 +38,7 @@ export class ProjectsListComponent {
   private readonly router = inject(Router);
   private readonly fb = inject(FormBuilder);
   private readonly snackBar = inject(MatSnackBar);
+  private readonly dialog = inject(MatDialog);
 
   protected readonly projects = signal<ProjectDto[]>([]);
   protected readonly loading = signal(true);
@@ -62,6 +66,17 @@ export class ProjectsListComponent {
         this.snackBar.open('Could not reach Context.Host — is it running?', 'Dismiss');
       },
     });
+  }
+
+  protected browseForRootPath(): void {
+    this.dialog
+      .open(FolderPickerDialogComponent, { width: '520px' })
+      .afterClosed()
+      .subscribe((selectedPath?: string) => {
+        if (selectedPath) {
+          this.createForm.patchValue({ rootPath: selectedPath });
+        }
+      });
   }
 
   protected submitCreate(): void {

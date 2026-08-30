@@ -37,6 +37,17 @@ export interface CreateProjectRequest {
   vcsRemote?: string;
 }
 
+export interface DirectoryEntryDto {
+  name: string;
+  fullPath: string;
+}
+
+export interface BrowseDirectoryResponse {
+  path: string;
+  parentPath: string | null;
+  directories: DirectoryEntryDto[];
+}
+
 export interface IndexTriggerResponse {
   projectId: string;
   full: boolean;
