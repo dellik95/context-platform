@@ -18,10 +18,17 @@ public sealed class OllamaLlmProvider : ILlmProvider
     private readonly HttpClient _http;
     private readonly OllamaChatOptions _options;
 
+    // HttpClient's own 100s default is not generous enough for a local CPU-bound model under any
+    // concurrent load (several session summaries can legitimately queue up behind each other on
+    // one Ollama instance - see SessionSummaryScheduler) - a slow real response should time out
+    // far later than that, not get treated the same as a hung connection.
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromMinutes(5);
+
     public OllamaLlmProvider(HttpClient httpClient, OllamaChatOptions options)
     {
         _http = httpClient;
         _options = options;
+        _http.Timeout = RequestTimeout;
         if (_http.BaseAddress is null && !string.IsNullOrWhiteSpace(_options.BaseUrl))
         {
             _http.BaseAddress = new Uri(_options.BaseUrl.TrimEnd('/') + "/");

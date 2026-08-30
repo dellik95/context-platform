@@ -225,7 +225,7 @@ static ContextProvidersOptions BuildProvidersOptions(IConfiguration configuratio
         OllamaChat = new Context.Providers.Llm.OllamaChatOptions
         {
             BaseUrl = ollamaBaseUrl is { Length: > 0 } ? ollamaBaseUrl : "http://localhost:11434",
-            Model = ollamaChatModel is { Length: > 0 } ? ollamaChatModel : "llama3.1"
+            Model = ollamaChatModel is { Length: > 0 } ? ollamaChatModel : Context.Providers.Llm.OllamaChatOptions.DefaultModel
         }
     };
 }

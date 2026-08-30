@@ -29,6 +29,16 @@ public sealed class SessionSummaryScheduler : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<SessionSummaryScheduler> _logger;
 
+    // SummarizeSession calls a local LLM and can easily take longer than one poll interval,
+    // especially with several sessions' jobs queued up behind each other on one Ollama instance.
+    // GetSummaryAsync's GeneratedAt only updates once a job actually finishes, so without this the
+    // due-check re-fires the SAME session every single poll while its previous job is still
+    // in-flight — confirmed live: a 1-minute interval against 10 never-summarized sessions queued
+    // dozens of duplicate jobs within a few minutes. This in-memory, per-instance guard (reset on
+    // restart; that's fine, worst case is one extra summary) tracks "already asked for" separately
+    // from "confirmed generated" so a slow job blocks its own re-enqueue instead of stacking more.
+    private readonly Dictionary<Guid, DateTimeOffset> _lastEnqueuedAt = new();
+
     public SessionSummaryScheduler(IServiceScopeFactory scopeFactory, ILogger<SessionSummaryScheduler>? logger = null)
     {
         _scopeFactory = scopeFactory;
@@ -107,6 +117,13 @@ public sealed class SessionSummaryScheduler : BackgroundService
                     continue;
                 }
 
+                if (_lastEnqueuedAt.TryGetValue(session.Id, out var lastEnqueued)
+                    && DateTimeOffset.UtcNow - lastEnqueued < interval)
+                {
+                    continue;
+                }
+
+                _lastEnqueuedAt[session.Id] = DateTimeOffset.UtcNow;
                 await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(session.Id), ct: ct)
                     .ConfigureAwait(false);
             }
