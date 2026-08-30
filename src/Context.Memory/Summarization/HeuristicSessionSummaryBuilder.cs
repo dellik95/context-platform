@@ -43,10 +43,12 @@ internal static class HeuristicSessionSummaryBuilder
             : $"- {errors.Count} error event(s) occurred during the session (see session events for detail)";
 
         var changedFilesJson = JsonSerializer.Serialize(editedFiles);
+        var title = DeriveTitle(editedFiles, prompts, toolCalls, commands, events.Count);
 
         return new SessionSummary
         {
             SessionId = sessionId,
+            Title = title,
             Completed = completed,
             Discovered = discovered,
             Decisions = null, // no LLM available to infer rationale from raw events
@@ -57,6 +59,23 @@ internal static class HeuristicSessionSummaryBuilder
                 : "Review changed files and continue outstanding work; configure an LLM provider for richer summaries.",
             GeneratedAt = now
         };
+    }
+
+    private static string DeriveTitle(List<string> editedFiles, int prompts, int toolCalls, int commands, int eventCount)
+    {
+        if (editedFiles.Count > 0)
+        {
+            return editedFiles.Count == 1
+                ? $"Edited {editedFiles[0]}"
+                : $"Edited {editedFiles[0]} and {editedFiles.Count - 1} other file(s)";
+        }
+
+        if (eventCount == 0)
+        {
+            return "No activity recorded";
+        }
+
+        return $"{prompts} prompt(s), {toolCalls} tool call(s), {commands} command(s)";
     }
 
     private static List<string> ExtractDistinctPaths(IReadOnlyList<SessionEvent> events, SessionEventType type)

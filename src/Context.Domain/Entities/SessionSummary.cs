@@ -3,6 +3,7 @@ namespace Context.Domain.Entities;
 public class SessionSummary
 {
     public Guid SessionId { get; set; }                 // PK
+    public string? Title { get; set; }
     public string? Completed { get; set; }
     public string? Discovered { get; set; }
     public string? Decisions { get; set; }

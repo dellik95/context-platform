@@ -52,13 +52,15 @@ public sealed class IndexingPipeline(
     IContentHasher hasher,
     IJobQueue jobQueue,
     ILogger<IndexingPipeline>? logger = null,
-    IIndexingProgressReporter? progressReporter = null) : IIndexingPipeline
+    IIndexingProgressReporter? progressReporter = null,
+    IFileSummarizer? fileSummarizer = null) : IIndexingPipeline
 {
     /// <summary>Safety cap on a single chunk's text so one pathological symbol/file can't blow up storage/search.</summary>
     private const int MaxChunkChars = 20_000;
 
     private readonly ILogger<IndexingPipeline> _logger = logger ?? NullLogger<IndexingPipeline>.Instance;
     private readonly IIndexingProgressReporter _progressReporter = progressReporter ?? NullIndexingProgressReporter.Instance;
+    private readonly IFileSummarizer _fileSummarizer = fileSummarizer ?? NullFileSummarizer.Instance;
 
     public Task IndexFileAsync(Guid projectId, string relativePath, CancellationToken ct) =>
         IndexFileInternalAsync(projectId, relativePath, forceReprocess: false, ct);
@@ -298,6 +300,33 @@ public sealed class IndexingPipeline(
             });
         }
 
+        // A whole-file summary is regenerated whenever content actually changed (this method only
+        // runs on a changed/forced file to begin with) and is chunked/embedded the exact same way
+        // as every symbol chunk above, just keyed by FileId instead of SymbolId (see
+        // IndexUnparsedFileAsync's whole-file chunk for the same SymbolId == null precedent).
+        var summary = await _fileSummarizer
+            .SummarizeAsync(fileEntity.RelativePath, [.. currentDrafts.Select(d => d.Name)], ct)
+            .ConfigureAwait(false);
+
+        Chunk? summaryChunk = null;
+        if (!string.IsNullOrWhiteSpace(summary))
+        {
+            fileEntity.Summary = summary;
+            fileEntity = await files.UpsertAsync(fileEntity, ct).ConfigureAwait(false);
+
+            var summaryText = Cap(summary, MaxChunkChars);
+            summaryChunk = new Chunk
+            {
+                Id = Guid.NewGuid(),
+                FileId = fileEntity.Id,
+                SymbolId = null,
+                Text = summaryText,
+                TokenCount = TokenEstimator.Estimate(summaryText),
+                ContentHash = hasher.HashText(summaryText)
+            };
+            newChunkRows.Add(summaryChunk);
+        }
+
         // FK ordering: Chunk.SymbolId and Chunk.FileId are both restrict-on-delete against
         // Symbol/File. Old chunks (pointing at old symbol rows) must be cleared before the old
         // symbols can be deleted; new chunks (pointing at new symbol rows) can only be inserted
@@ -310,7 +339,7 @@ public sealed class IndexingPipeline(
             .Select(d => idByQualifiedName[d.QualifiedName])
             .ToHashSet();
         var chunksNeedingEmbedCheck = newChunkRows
-            .Where(c => c.SymbolId.HasValue && changedOrAddedSymbolIds.Contains(c.SymbolId.Value))
+            .Where(c => (c.SymbolId.HasValue && changedOrAddedSymbolIds.Contains(c.SymbolId.Value)) || c == summaryChunk)
             .ToList();
         await EnqueueEmbedIfMissingAsync(chunksNeedingEmbedCheck, ct).ConfigureAwait(false);
 

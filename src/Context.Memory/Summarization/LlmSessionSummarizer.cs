@@ -54,6 +54,7 @@ public sealed class LlmSessionSummarizer(
         return new SessionSummary
         {
             SessionId = sessionId,
+            Title = DetermineTitle(parsed, sessionId),
             Completed = parsed.Completed,
             Discovered = parsed.Discovered,
             Decisions = parsed.Decisions,
@@ -66,4 +67,38 @@ public sealed class LlmSessionSummarizer(
 
     private static bool IsOffline(ILlmProvider provider) =>
         string.Equals(provider.Name, "noop", StringComparison.OrdinalIgnoreCase);
+
+    // The LLM is asked for a TITLE section, but a response that skips it should still
+    // never leave the summary with a null/empty title — fall back to something derived
+    // from whatever sections did come back.
+    private static string DetermineTitle(SessionSummaryParser.ParsedSections parsed, Guid sessionId)
+    {
+        if (!string.IsNullOrWhiteSpace(parsed.Title))
+        {
+            return parsed.Title.Trim();
+        }
+
+        if (parsed.ChangedFiles.Count > 0)
+        {
+            var first = parsed.ChangedFiles[0];
+            return parsed.ChangedFiles.Count == 1
+                ? $"Changes to {first}"
+                : $"Changes to {first} and {parsed.ChangedFiles.Count - 1} other file(s)";
+        }
+
+        if (!string.IsNullOrWhiteSpace(parsed.Completed))
+        {
+            return FirstLine(parsed.Completed);
+        }
+
+        return $"Session {sessionId}";
+    }
+
+    private static string FirstLine(string text)
+    {
+        var line = text
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault() ?? text;
+        return line.TrimStart('-', '*', ' ');
+    }
 }

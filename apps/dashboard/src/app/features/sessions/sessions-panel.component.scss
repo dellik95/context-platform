@@ -85,6 +85,10 @@ mat-list .session-item:last-of-type {
   color: var(--mat-sys-on-surface-variant);
 }
 
+.session-line--time {
+  font-size: 0.78rem;
+}
+
 .claude-id {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 0.78rem;
@@ -108,7 +112,7 @@ mat-list .session-item:last-of-type {
 
 .detail-header {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 12px;
@@ -118,6 +122,18 @@ mat-list .session-item:last-of-type {
     font-size: 1.15rem;
     font-weight: 600;
   }
+}
+
+.detail-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.detail-subtitle {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--mat-sys-on-surface-variant);
 }
 
 .event-count {

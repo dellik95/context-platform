@@ -14,5 +14,5 @@ public interface ISessionRepository
     Task UpsertSummaryAsync(SessionSummary summary, CancellationToken ct);
     Task<SessionSummary?> GetSummaryAsync(Guid sessionId, CancellationToken ct);
 
-    Task<IReadOnlyList<Session>> ListByProjectAsync(Guid projectId, int limit, CancellationToken ct);
+    Task<IReadOnlyList<SessionListItem>> ListByProjectAsync(Guid projectId, int limit, CancellationToken ct);
 }

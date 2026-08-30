@@ -21,11 +21,18 @@ internal static class MemoryExtractionPromptBuilder
         TYPE: <one of Decision, Discovery, BugFix, Feature, Refactor, Change, Exploration, Architecture, Issue>
         TITLE: <short one-line title, under 100 characters>
         BODY: <1-3 sentence explanation, self-contained without needing the session for context>
+        FACTS:
+        - <fact 1>
+        - <fact 2>
         CONFIDENCE: <a number between 0.0 and 1.0>
         END_MEMORY
         MEMORY 2
         ...
         END_MEMORY
+
+        FACTS is 2-5 short, atomic, standalone facts pulled out of this memory — each one must
+        make sense read on its own, with no surrounding narrative, since it is shown when a
+        search result needs to say something useful in very few tokens.
 
         If n is 0, respond with only "MEMORY_COUNT: 0" and nothing else.
         """;

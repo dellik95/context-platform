@@ -101,8 +101,9 @@ public sealed class SessionSummaryScheduler : BackgroundService
         var interval = TimeSpan.FromMinutes(settings.SessionSummaryIntervalMinutes);
         var sessions = await sessionRepository.ListByProjectAsync(projectId, MaxSessionsPerProjectPerPoll, ct).ConfigureAwait(false);
 
-        foreach (var session in sessions)
+        foreach (var item in sessions)
         {
+            var session = item.Session;
             if (session.Status != SessionStatus.Active)
             {
                 continue;

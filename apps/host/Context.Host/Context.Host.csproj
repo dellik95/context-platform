@@ -66,6 +66,24 @@
           SkipUnchangedFiles="true" />
   </Target>
 
+  <!--
+    Plain `dotnet build`/`dotnet run` never runs ComputeFilesToPublish (that's a publish-only
+    target), so without this, wwwroot/ only ever gets populated in the SOURCE tree
+    (CopyDashboardToWwwroot's target) - never in the bin output directory, which is what actually
+    gets served: Program.cs pins ContentRootPath to AppContext.BaseDirectory (the bin dir), not the
+    source tree. Confirmed live: a fresh `dotnet run` 404'd on "/" until this copy existed. Runs
+    after the main Build target so $(OutDir) already has everything else in it.
+  -->
+  <Target Name="CopyDashboardToOutputForRun" AfterTargets="Build"
+          Condition="'$(SkipDashboardBuild)' != 'true' AND Exists('$(MSBuildProjectDirectory)\wwwroot')">
+    <ItemGroup>
+      <DashboardOutputFiles Include="$(MSBuildProjectDirectory)\wwwroot\**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(DashboardOutputFiles)"
+          DestinationFolder="$(OutDir)wwwroot\%(RecursiveDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
   <Target Name="AddDashboardFilesToPublish" AfterTargets="ComputeFilesToPublish"
           DependsOnTargets="CopyDashboardToWwwroot"
           Condition="'$(SkipDashboardBuild)' != 'true' AND Exists('$(MSBuildProjectDirectory)\wwwroot')">

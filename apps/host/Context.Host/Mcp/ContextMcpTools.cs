@@ -170,7 +170,9 @@ public sealed class ContextMcpTools(
         return await sessions
             .OrderByDescending(s => s.StartedAt)
             .Take(Math.Max(1, limit))
-            .Select(s => new SessionSummaryDto(s.Id, s.ClaudeSessionId, s.StartedAt, s.EndedAt, s.Status))
+            .Select(s => new SessionSummaryDto(
+                s.Id, s.ClaudeSessionId, s.StartedAt, s.EndedAt, s.Status,
+                db.SessionSummaries.Where(sm => sm.SessionId == s.Id).Select(sm => sm.Title).FirstOrDefault()))
             .ToListAsync(ct)
             .ConfigureAwait(false);
     }
@@ -254,7 +256,7 @@ public sealed class ContextMcpTools(
 
 /// <summary>Compact per-session row returned by <see cref="ContextMcpTools.SessionSearchAsync"/>.</summary>
 public sealed record SessionSummaryDto(
-    Guid Id, string? ClaudeSessionId, DateTimeOffset StartedAt, DateTimeOffset? EndedAt, SessionStatus Status);
+    Guid Id, string? ClaudeSessionId, DateTimeOffset StartedAt, DateTimeOffset? EndedAt, SessionStatus Status, string? Title);
 
 /// <summary>Full session detail returned by <see cref="ContextMcpTools.SessionGetAsync"/>.</summary>
 public sealed record SessionDetailDto(

@@ -35,7 +35,16 @@
             }
           </div>
 
-          <p class="memory-body">{{ memory.body }}</p>
+          @if (facts(memory); as memoryFacts) {
+            <ul class="memory-facts">
+              @for (fact of memoryFacts; track fact) {
+                <li>{{ fact }}</li>
+              }
+            </ul>
+            <p class="memory-body memory-body--secondary">{{ memory.body }}</p>
+          } @else {
+            <p class="memory-body">{{ memory.body }}</p>
+          }
 
           <div class="memory-meta">
             <span class="tier" [class.tier--working]="memory.tier === 'Working'">{{ memory.tier }}</span>

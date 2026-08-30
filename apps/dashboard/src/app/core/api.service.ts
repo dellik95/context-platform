@@ -15,7 +15,7 @@ import {
   ProjectSettingsDto,
   ProjectStatusDto,
   SessionDetailDto,
-  SessionDto,
+  SessionListItemDto,
   SymbolSummaryDto,
   SystemStatusDto,
 } from './models';
@@ -71,9 +71,9 @@ export class ApiService {
     return this.http.get<SymbolSummaryDto[]>(`${this.base}/api/symbols?${params.toString()}`);
   }
 
-  listSessions(projectId: string, limit = 50): Observable<SessionDto[]> {
+  listSessions(projectId: string, limit = 50): Observable<SessionListItemDto[]> {
     const params = new URLSearchParams({ projectId, limit: String(limit) });
-    return this.http.get<SessionDto[]>(`${this.base}/api/sessions?${params.toString()}`);
+    return this.http.get<SessionListItemDto[]>(`${this.base}/api/sessions?${params.toString()}`);
   }
 
   getSession(id: string): Observable<SessionDetailDto> {

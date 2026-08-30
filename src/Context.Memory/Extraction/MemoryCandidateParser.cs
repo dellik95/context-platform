@@ -22,20 +22,24 @@ internal static partial class MemoryCandidateParser
         string? title = null;
         var confidence = DefaultConfidence;
         var body = new StringBuilder();
+        var facts = new List<string>();
         var inBody = false;
+        var inFacts = false;
 
         void Flush()
         {
             if (type is not null && !string.IsNullOrWhiteSpace(title))
             {
-                results.Add(new MemoryCandidate(type.Value, title.Trim(), body.ToString().Trim(), confidence));
+                results.Add(new MemoryCandidate(type.Value, title.Trim(), body.ToString().Trim(), confidence, facts.ToList()));
             }
 
             type = null;
             title = null;
             confidence = DefaultConfidence;
             body.Clear();
+            facts.Clear();
             inBody = false;
+            inFacts = false;
         }
 
         foreach (var rawLine in llmResponse.Replace("\r\n", "\n").Split('\n'))
@@ -69,6 +73,7 @@ internal static partial class MemoryCandidateParser
             if (confidenceMatch.Success)
             {
                 inBody = false;
+                inFacts = false;
                 if (double.TryParse(confidenceMatch.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedConfidence))
                 {
                     confidence = Math.Clamp(parsedConfidence, 0.0, 1.0);
@@ -83,6 +88,32 @@ internal static partial class MemoryCandidateParser
                 body.Clear();
                 body.AppendLine(bodyMatch.Groups[1].Value.Trim());
                 inBody = true;
+                inFacts = false;
+                continue;
+            }
+
+            if (FactsHeaderRegex().IsMatch(trimmed))
+            {
+                facts.Clear();
+                inBody = false;
+                inFacts = true;
+                continue;
+            }
+
+            if (inFacts)
+            {
+                // Malformed/missing bullets for this one field shouldn't fail the whole
+                // candidate — just skip lines that aren't recognizable fact bullets.
+                var factMatch = FactBulletRegex().Match(trimmed);
+                if (factMatch.Success)
+                {
+                    var fact = factMatch.Groups[1].Value.Trim();
+                    if (fact.Length > 0)
+                    {
+                        facts.Add(fact);
+                    }
+                }
+
                 continue;
             }
 
@@ -113,4 +144,10 @@ internal static partial class MemoryCandidateParser
 
     [GeneratedRegex(@"^CONFIDENCE:\s*([0-9.]+)", RegexOptions.IgnoreCase)]
     private static partial Regex ConfidenceRegex();
+
+    [GeneratedRegex(@"^FACTS:\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex FactsHeaderRegex();
+
+    [GeneratedRegex(@"^[-*]\s*(.+)$")]
+    private static partial Regex FactBulletRegex();
 }

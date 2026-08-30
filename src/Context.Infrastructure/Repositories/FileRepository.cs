@@ -46,6 +46,17 @@ public class FileRepository(ContextDbContext db) : IFileRepository
             existing.SizeBytes = file.SizeBytes;
             existing.IsDeleted = file.IsDeleted;
             existing.UpdatedAt = file.UpdatedAt;
+
+            // Summary is populated by a separate, later UpsertAsync call once IndexingPipeline has
+            // run the file summarizer (it isn't known at the initial per-file upsert). A null here
+            // means "not computed/updated this call", not "clear it" -- otherwise the initial
+            // upsert of every reindex would wipe out a previously computed summary before the
+            // pipeline gets a chance to recompute (or skip recomputing, e.g. offline LLM) it.
+            if (file.Summary is not null)
+            {
+                existing.Summary = file.Summary;
+            }
+
             file = existing;
         }
 

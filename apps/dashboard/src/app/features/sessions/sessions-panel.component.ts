@@ -7,7 +7,7 @@ import { MatListModule } from '@angular/material/list';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { ApiService } from '../../core/api.service';
-import { SessionDetailDto, SessionDto } from '../../core/models';
+import { SessionDetailDto, SessionListItemDto } from '../../core/models';
 import { SignalrService } from '../../core/signalr.service';
 import { ProjectContextService } from '../projects/project-context.service';
 
@@ -17,20 +17,20 @@ type ChangedFiles = { kind: 'list'; items: string[] } | { kind: 'raw'; raw: stri
 
 interface SessionGroup {
   label: string;
-  sessions: SessionDto[];
+  sessions: SessionListItemDto[];
 }
 
 /** Buckets sessions by calendar day (in the viewer's local time zone), newest group first —
  *  a flat list gets unreadable fast once a project has more than a handful of sessions. */
-function groupSessionsByDay(sessions: SessionDto[]): SessionGroup[] {
+function groupSessionsByDay(sessions: SessionListItemDto[]): SessionGroup[] {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
 
   const groups = new Map<string, SessionGroup>();
-  for (const session of sessions) {
-    const started = new Date(session.startedAt);
+  for (const entry of sessions) {
+    const started = new Date(entry.session.startedAt);
     const dayStart = new Date(started.getFullYear(), started.getMonth(), started.getDate());
     const key = dayStart.toISOString();
 
@@ -48,7 +48,7 @@ function groupSessionsByDay(sessions: SessionDto[]): SessionGroup[] {
       group = { label, sessions: [] };
       groups.set(key, group);
     }
-    group.sessions.push(session);
+    group.sessions.push(entry);
   }
 
   // Map preserves insertion order; sessions() is already newest-first, so the first session of
@@ -75,7 +75,7 @@ export class SessionsPanelComponent {
   private readonly destroyRef = inject(DestroyRef);
   protected readonly ctx = inject(ProjectContextService);
 
-  protected readonly sessions = signal<SessionDto[]>([]);
+  protected readonly sessions = signal<SessionListItemDto[]>([]);
   protected readonly loading = signal(true);
   protected readonly selectedId = signal<string | null>(null);
   protected readonly detail = signal<SessionDetailDto | null>(null);
@@ -170,14 +170,15 @@ export class SessionsPanelComponent {
     );
   }
 
-  protected selectSession(session: SessionDto): void {
-    if (this.selectedId() === session.id) {
+  protected selectSession(entry: SessionListItemDto): void {
+    const sessionId = entry.session.id;
+    if (this.selectedId() === sessionId) {
       return;
     }
-    this.selectedId.set(session.id);
+    this.selectedId.set(sessionId);
     this.detail.set(null);
     this.detailLoading.set(true);
-    this.api.getSession(session.id).subscribe({
+    this.api.getSession(sessionId).subscribe({
       next: (detail) => {
         this.detail.set(detail);
         this.detailLoading.set(false);

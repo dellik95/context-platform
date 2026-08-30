@@ -73,6 +73,7 @@ public class SessionRepository(ContextDbContext db) : ISessionRepository
         }
         else
         {
+            existing.Title = summary.Title;
             existing.Completed = summary.Completed;
             existing.Discovered = summary.Discovered;
             existing.Decisions = summary.Decisions;
@@ -88,7 +89,7 @@ public class SessionRepository(ContextDbContext db) : ISessionRepository
     public Task<SessionSummary?> GetSummaryAsync(Guid sessionId, CancellationToken ct) =>
         db.SessionSummaries.AsNoTracking().FirstOrDefaultAsync(s => s.SessionId == sessionId, ct);
 
-    public async Task<IReadOnlyList<Session>> ListByProjectAsync(Guid projectId, int limit, CancellationToken ct)
+    public async Task<IReadOnlyList<SessionListItem>> ListByProjectAsync(Guid projectId, int limit, CancellationToken ct)
     {
         // Same SQLite/DateTimeOffset ORDER BY limitation as GetEventsAsync above: filter
         // server-side, sort the (bounded, per-project) result client-side.
@@ -96,6 +97,15 @@ public class SessionRepository(ContextDbContext db) : ISessionRepository
             .Where(s => s.ProjectId == projectId)
             .ToListAsync(ct);
 
-        return [.. sessions.OrderByDescending(s => s.StartedAt).Take(limit)];
+        var page = sessions.OrderByDescending(s => s.StartedAt).Take(limit).ToList();
+
+        // SessionSummaries is one row per session (upserted in place), so a single extra
+        // round-trip keyed on this page's session ids gets every title without an N+1 query.
+        var pageIds = page.Select(s => s.Id).ToList();
+        var titles = await db.SessionSummaries.AsNoTracking()
+            .Where(sm => pageIds.Contains(sm.SessionId))
+            .ToDictionaryAsync(sm => sm.SessionId, sm => sm.Title, ct);
+
+        return [.. page.Select(s => new SessionListItem(s, titles.GetValueOrDefault(s.Id)))];
     }
 }

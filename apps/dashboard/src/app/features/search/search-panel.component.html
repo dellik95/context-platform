@@ -58,14 +58,21 @@
     } @else {
       <div class="hits">
         @for (hit of pack.primaryHits; track hit.nodeId) {
-          <mat-card class="hit-card">
+          <mat-card class="hit-card" [class.hit-card--file-summary]="hit.kind === 'File'">
             <div class="hit-header">
+              @if (hit.kind === 'File') {
+                <mat-icon class="hit-file-icon" inline>description</mat-icon>
+              }
               <span class="hit-kind">{{ hit.kind }}</span>
               <span class="hit-label">{{ hit.label }}</span>
               <span class="hit-score">{{ hit.score | number: '1.3-3' }}</span>
             </div>
             @if (hit.snippet) {
-              <pre class="hit-snippet">{{ hit.snippet }}</pre>
+              @if (hit.kind === 'File') {
+                <p class="hit-summary">{{ hit.snippet }}</p>
+              } @else {
+                <pre class="hit-snippet">{{ hit.snippet }}</pre>
+              }
             }
           </mat-card>
         }

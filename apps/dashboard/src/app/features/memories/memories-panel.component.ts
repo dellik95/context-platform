@@ -92,6 +92,20 @@ export class MemoriesPanelComponent {
     });
   }
 
+  /** Parses Memory.factsJson (a JSON array of short bullet-point facts) — an LLM-produced field,
+   *  so a parse failure is expected (not exceptional) and just hides the facts list. */
+  protected facts(memory: Memory): string[] | null {
+    if (!memory.factsJson) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(memory.factsJson);
+      return Array.isArray(parsed) && parsed.length > 0 ? (parsed as string[]) : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Small distinct chip styling for the handful of most common memory types; the rest fall back to a neutral chip. */
   protected chipClass(type: Memory['type']): string {
     switch (type) {

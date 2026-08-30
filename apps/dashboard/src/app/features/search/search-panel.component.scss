@@ -100,6 +100,25 @@
   white-space: pre;
 }
 
+.hit-file-icon {
+  color: var(--mat-sys-on-surface-variant);
+  font-size: 18px;
+  height: 18px;
+  width: 18px;
+}
+
+// File-level summary hits carry a natural-language snippet rather than code, so give them a
+// quieter, prose-styled card instead of the monospace code treatment.
+.hit-card--file-summary {
+  border-left: 3px solid var(--mat-sys-secondary);
+
+  .hit-summary {
+    margin: 0;
+    color: var(--mat-sys-on-surface-variant);
+    font-style: italic;
+  }
+}
+
 .notes-card {
   padding: 16px 20px;
 

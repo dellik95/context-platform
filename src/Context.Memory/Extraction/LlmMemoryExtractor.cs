@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
 using Context.Memory.Abstractions;
@@ -159,6 +160,7 @@ public sealed class LlmMemoryExtractor(
         Type = candidate.Type,
         Title = candidate.Title,
         Body = candidate.Body,
+        FactsJson = JsonSerializer.Serialize(candidate.Facts),
         Confidence = candidate.Confidence,
         Tier = MemoryTier.Working,
         Pinned = false,

@@ -12,6 +12,7 @@ namespace Context.Memory.Extraction;
 internal static class MemoryCandidateHeuristics
 {
     private const int MaxTitleLength = 100;
+    private const int MaxFacts = 3;
 
     public static IReadOnlyList<MemoryCandidate> FromSummary(SessionSummary summary)
     {
@@ -43,7 +44,7 @@ internal static class MemoryCandidateHeuristics
         }
 
         var title = Truncate(firstLine, MaxTitleLength);
-        candidates.Add(new MemoryCandidate(type, title, section.Trim(), confidence));
+        candidates.Add(new MemoryCandidate(type, title, section.Trim(), confidence, ExtractFacts(section)));
     }
 
     private static void TryAddChangedFiles(List<MemoryCandidate> candidates, string? changedFilesJson)
@@ -70,8 +71,20 @@ internal static class MemoryCandidateHeuristics
 
         var title = Truncate($"Changed {files.Count} file(s): {string.Join(", ", files.Take(3))}", MaxTitleLength);
         var body = "Files touched this session:\n" + string.Join('\n', files.Select(f => $"- {f}"));
-        candidates.Add(new MemoryCandidate(MemoryType.Change, title, body, 0.5));
+        var facts = files.Take(MaxFacts).Select(f => $"Changed {f}").ToList();
+        candidates.Add(new MemoryCandidate(MemoryType.Change, title, body, 0.5, facts));
     }
+
+    /// <summary>Turns a section's first few non-empty lines into standalone facts — a cheap
+    /// stand-in for the LLM-authored facts, since there is no model judgment available offline.</summary>
+    private static IReadOnlyList<string> ExtractFacts(string section) =>
+        section
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(StripBullet)
+            .Where(l => l.Length > 0)
+            .Take(MaxFacts)
+            .Select(l => Truncate(l, MaxTitleLength))
+            .ToList();
 
     private static string StripBullet(string line) => line.TrimStart('-', '*', ' ');
 

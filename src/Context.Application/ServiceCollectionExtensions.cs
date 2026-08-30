@@ -57,6 +57,11 @@ public static class ServiceCollectionExtensions
         AddIndexingPipeline(services);
         AddContextEngine(services);
 
+        // Real default: LlmFileSummarizer already degrades to a no-op internally when the
+        // configured ILlmProvider is "noop", so (unlike IIndexingProgressReporter above) there's
+        // no separate Null-then-override registration needed here.
+        services.AddSingleton<IFileSummarizer, LlmFileSummarizer>();
+
         // Default/fallback so Context.Application has zero hard dependency on SignalR;
         // Context.Host overrides this with a SignalR-backed reporter (registration order —
         // last AddSingleton for a given interface wins).

@@ -8,8 +8,15 @@ public sealed record SessionDto(Guid Id, string? ClaudeSessionId, DateTimeOffset
         new(session.Id, session.ClaudeSessionId, session.StartedAt, session.EndedAt, session.Status.ToString());
 }
 
+public sealed record SessionListItemDto(SessionDto Session, string? Title)
+{
+    public static SessionListItemDto FromEntity(Context.Domain.Entities.Session session, string? title) =>
+        new(SessionDto.FromEntity(session), title);
+}
+
 public sealed record SessionDetailDto(
     SessionDto Session,
+    string? Title,
     string? Completed,
     string? Discovered,
     string? Decisions,
@@ -34,7 +41,7 @@ public static class SessionEndpoints
     private static async Task<IResult> ListAsync(Guid projectId, int? limit, ISessionRepository sessions, CancellationToken ct)
     {
         var results = await sessions.ListByProjectAsync(projectId, limit ?? DefaultListLimit, ct).ConfigureAwait(false);
-        return Results.Ok(results.Select(SessionDto.FromEntity));
+        return Results.Ok(results.Select(r => SessionListItemDto.FromEntity(r.Session, r.Title)));
     }
 
     private static async Task<IResult> GetAsync(Guid id, ISessionRepository sessions, CancellationToken ct)
@@ -50,6 +57,7 @@ public static class SessionEndpoints
 
         return Results.Ok(new SessionDetailDto(
             SessionDto.FromEntity(session),
+            summary?.Title,
             summary?.Completed, summary?.Discovered, summary?.Decisions,
             summary?.ChangedFilesJson, summary?.OpenIssues, summary?.NextSteps,
             events.Count));

@@ -138,6 +138,9 @@ namespace Context.Infrastructure.Migrations
                     b.Property<long>("SizeBytes")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("Summary")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("TEXT");
 
@@ -320,6 +323,9 @@ namespace Context.Infrastructure.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<Guid?>("CreatedFromSessionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FactsJson")
                         .HasColumnType("TEXT");
 
                     b.Property<DateTimeOffset>("LastReinforcedAt")
@@ -602,6 +608,9 @@ namespace Context.Infrastructure.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("OpenIssues")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
                         .HasColumnType("TEXT");
 
                     b.HasKey("SessionId");

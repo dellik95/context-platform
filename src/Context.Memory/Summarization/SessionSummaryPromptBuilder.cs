@@ -17,6 +17,11 @@ internal static class SessionSummaryPromptBuilder
         EXACTLY the following sections, using this exact format (a section may be empty but
         must still be present with its header):
 
+        TITLE:
+        <a single short, specific, information-dense line naming what this session did, written
+        like a git commit subject line — concrete, not generic filler such as "Session Summary"
+        or "Development Session">
+
         COMPLETED:
         <bullet list of what was accomplished, or "(none)">
 

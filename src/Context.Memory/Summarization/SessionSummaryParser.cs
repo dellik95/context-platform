@@ -11,10 +11,11 @@ internal static partial class SessionSummaryParser
 {
     private static readonly string[] SectionKeys =
     [
-        "COMPLETED", "DISCOVERED", "DECISIONS", "CHANGED_FILES", "OPEN_ISSUES", "NEXT_STEPS"
+        "TITLE", "COMPLETED", "DISCOVERED", "DECISIONS", "CHANGED_FILES", "OPEN_ISSUES", "NEXT_STEPS"
     ];
 
     public sealed record ParsedSections(
+        string? Title,
         string? Completed,
         string? Discovered,
         string? Decisions,
@@ -69,7 +70,13 @@ internal static partial class SessionSummaryParser
             .Distinct()
             .ToList();
 
+        var title = buckets["TITLE"].ToString()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(StripBullet)
+            .FirstOrDefault(line => line.Length > 0 && !IsNonePlaceholder(line));
+
         return new ParsedSections(
+            title,
             Clean(buckets["COMPLETED"]),
             Clean(buckets["DISCOVERED"]),
             Clean(buckets["DECISIONS"]),
@@ -93,7 +100,11 @@ internal static partial class SessionSummaryParser
     private static bool IsNonePlaceholder(string text) =>
         text.Trim('(', ')', ' ', '.', '-').Equals("none", StringComparison.OrdinalIgnoreCase);
 
-    [GeneratedRegex(@"^\s*(?:[-*]\s*)?([A-Za-z_]+)\s*:\s*(.*)$")]
+    // A larger/real session (more prompt tokens) reliably nudges this model into markdown headings
+    // ("### TITLE:") even though the prompt asks for a plain "TITLE:" line — confirmed live: a
+    // 3-event test session parsed fine, a 40-event real one didn't, because this pattern only
+    // tolerated a bullet prefix (-/*), not a heading prefix (#/##/###). Both are now accepted.
+    [GeneratedRegex(@"^\s*(?:[-*#]+\s*)?([A-Za-z_]+)\s*:\s*(.*)$")]
     private static partial Regex HeaderRegex();
 
     [GeneratedRegex(@"^[-*]\s+")]

@@ -89,6 +89,7 @@ export interface Memory {
   type: MemoryType;
   title: string;
   body: string;
+  factsJson: string | null;
   confidence: number;
   tier: MemoryTier;
   pinned: boolean;
@@ -139,8 +140,16 @@ export interface SessionDto {
   status: string; // "Active" | "Ended"
 }
 
+// GET /api/sessions list rows -- title is the session summary's title, null until a summary
+// exists (e.g. an Active session that hasn't been summarized yet).
+export interface SessionListItemDto {
+  session: SessionDto;
+  title: string | null;
+}
+
 export interface SessionDetailDto {
   session: SessionDto;
+  title: string | null;
   completed: string | null;
   discovered: string | null;
   decisions: string | null;
