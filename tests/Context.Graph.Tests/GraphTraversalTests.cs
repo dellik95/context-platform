@@ -170,6 +170,49 @@ public class GraphTraversalTests
         neighborhood.Edges.Should().BeEmpty();
     }
 
+    // ---- FullGraphAsync --------------------------------------------------
+
+    [Fact]
+    public async Task FullGraphAsync_ReturnsEveryNodeIncludingIsolatedOnes()
+    {
+        var (fixture, traversal) = await BuildAsync();
+
+        var fullGraph = await traversal.FullGraphAsync(fixture.ProjectId, kinds: null, CancellationToken.None);
+
+        // Unlike NeighborhoodAsync (which starts from one origin), the isolated node with no
+        // edges at all must still appear -- a whole-project view has no origin to walk from.
+        fullGraph.Nodes.Select(n => n.Id).Should().BeEquivalentTo(fixture.AllNodes.Select(n => n.Id));
+        fullGraph.Edges.Should().HaveCount(fixture.AllEdges.Count);
+    }
+
+    [Fact]
+    public async Task FullGraphAsync_KindFilter_ExcludesNonMatchingEdgesButKeepsAllNodes()
+    {
+        var (fixture, traversal) = await BuildAsync();
+
+        var fullGraph = await traversal.FullGraphAsync(
+            fixture.ProjectId, kinds: new[] { GraphEdgeKind.Calls }, CancellationToken.None);
+
+        // Node set is unaffected by the edge-kind filter -- it's every node in the project.
+        fullGraph.Nodes.Select(n => n.Id).Should().BeEquivalentTo(fixture.AllNodes.Select(n => n.Id));
+        fullGraph.Edges.Should().BeEquivalentTo(new[]
+        {
+            new GraphEdgeDto(fixture.Caller1.Id, fixture.Impl.Id, GraphEdgeKind.Calls),
+            new GraphEdgeDto(fixture.Caller2.Id, fixture.Caller1.Id, GraphEdgeKind.Calls),
+        });
+    }
+
+    [Fact]
+    public async Task FullGraphAsync_UnknownProject_ReturnsEmpty()
+    {
+        var (_, traversal) = await BuildAsync();
+
+        var fullGraph = await traversal.FullGraphAsync(Guid.NewGuid(), kinds: null, CancellationToken.None);
+
+        fullGraph.Nodes.Should().BeEmpty();
+        fullGraph.Edges.Should().BeEmpty();
+    }
+
     // ---- ShortestPathAsync ----------------------------------------------
 
     [Fact]

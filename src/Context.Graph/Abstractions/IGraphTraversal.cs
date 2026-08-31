@@ -19,6 +19,15 @@ public interface IGraphTraversal
     Task<GraphNeighborhood> NeighborhoodAsync(
         Guid nodeId, GraphEdgeKind[]? kinds, int hops, CancellationToken ct);
 
+    /// <summary>
+    /// Every node and edge in a project's graph -- an Obsidian-style "whole vault" view, as
+    /// opposed to <see cref="NeighborhoodAsync"/>'s hop-bounded walk from one origin node. Unlike
+    /// the node-keyed methods above, this one carries its own ProjectId, so it warms that
+    /// project's cache itself instead of relying on a caller to resolve and warm it first.
+    /// </summary>
+    Task<GraphNeighborhood> FullGraphAsync(
+        Guid projectId, GraphEdgeKind[]? kinds, CancellationToken ct);
+
     Task<IReadOnlyList<GraphNode>?> ShortestPathAsync(
         Guid fromId, Guid toId, CancellationToken ct);
 

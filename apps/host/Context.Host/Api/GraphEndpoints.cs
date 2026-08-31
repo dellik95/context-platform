@@ -28,6 +28,7 @@ public static class GraphEndpoints
     {
         app.MapGet("/api/graph/impact", ImpactAsync);
         app.MapGet("/api/graph/neighborhood", NeighborhoodAsync);
+        app.MapGet("/api/graph/full", FullGraphAsync);
         app.MapGet("/api/symbols", SearchSymbolsAsync);
     }
 
@@ -55,6 +56,13 @@ public static class GraphEndpoints
         var neighborhood = await graphTraversal.NeighborhoodAsync(
             nodeId, ParseEdgeKinds(kinds), hops ?? DefaultNeighborhoodHops, ct).ConfigureAwait(false);
         return Results.Ok(neighborhood);
+    }
+
+    private static async Task<IResult> FullGraphAsync(
+        Guid projectId, string[]? kinds, IGraphTraversal graphTraversal, CancellationToken ct)
+    {
+        var fullGraph = await graphTraversal.FullGraphAsync(projectId, ParseEdgeKinds(kinds), ct).ConfigureAwait(false);
+        return Results.Ok(fullGraph);
     }
 
     private static async Task<Guid?> ResolveProjectIdForNodeAsync(

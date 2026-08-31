@@ -80,6 +80,13 @@ export class ApiService {
     return this.http.get<GraphNeighborhoodDto>(`${this.base}/api/graph/neighborhood?${params.toString()}`);
   }
 
+  /** Every node/edge in the project's graph — the Obsidian-style "whole graph" view. */
+  getFullGraph(projectId: string, kinds?: string[]): Observable<GraphNeighborhoodDto> {
+    const params = new URLSearchParams({ projectId });
+    for (const kind of kinds ?? []) params.append('kinds', kind);
+    return this.http.get<GraphNeighborhoodDto>(`${this.base}/api/graph/full?${params.toString()}`);
+  }
+
   searchSymbols(projectId: string, query: string, limit = 20): Observable<SymbolSummaryDto[]> {
     const params = new URLSearchParams({ projectId, q: query, limit: String(limit) });
     return this.http.get<SymbolSummaryDto[]>(`${this.base}/api/symbols?${params.toString()}`);

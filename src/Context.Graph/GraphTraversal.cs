@@ -57,6 +57,18 @@ public sealed class GraphTraversal : IGraphTraversal
         return Task.FromResult(new GraphNeighborhood(nodes, edges));
     }
 
+    public async Task<GraphNeighborhood> FullGraphAsync(Guid projectId, GraphEdgeKind[]? kinds, CancellationToken ct)
+    {
+        var cache = await _cacheProvider.GetOrCreateAsync(projectId, ct).ConfigureAwait(false);
+        var nodes = cache.AllNodes();
+        var nodeIds = new HashSet<Guid>(nodes.Select(n => n.Id));
+
+        var kindFilter = kinds is { Length: > 0 } ? new HashSet<GraphEdgeKind>(kinds) : null;
+        var edges = CollectEdgesWithinSet(cache, nodeIds, kindFilter);
+
+        return new GraphNeighborhood(nodes, edges);
+    }
+
     public Task<IReadOnlyList<GraphNode>?> ShortestPathAsync(Guid fromId, Guid toId, CancellationToken ct)
     {
         var cache = _cacheProvider.FindCacheContaining(fromId);
