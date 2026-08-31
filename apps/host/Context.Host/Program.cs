@@ -167,6 +167,7 @@ try
     app.MapSettingsEndpoints();
     app.MapClaudeEndpoints();
     app.MapSystemEndpoints();
+    app.MapJobsEndpoints();
     app.MapFileSystemEndpoints();
     app.MapHub<IndexingHub>("/hubs/indexing");
 

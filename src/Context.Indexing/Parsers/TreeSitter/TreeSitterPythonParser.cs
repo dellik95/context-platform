@@ -85,13 +85,31 @@ public sealed class TreeSitterPythonParser : ILanguageParser, IDisposable
 
     private const string FunctionNamesQuery = "(function_definition name: (identifier) @name)";
 
-    // Only a plain-identifier callee, exactly like TreeSitterCSharpParser.InvocationsQuery — a
-    // member-access call (`self.foo()`, `obj.foo()`) has a `function: (attribute)` node instead and
-    // is deliberately excluded here too: same best-effort-name-match spirit as the other languages.
-    // This also means a class instantiation (`Animal(name)`) is naturally excluded downstream
-    // (never added to knownFunctionNames, since that set is built only from function_definition
-    // names, not class names) without any extra filtering being needed.
-    private const string CallsQuery = "(call function: (identifier) @call.callee) @call.expr";
+    // Two shapes for a real invocation, mirroring TreeSitterCSharpParser.InvocationsQuery: a plain
+    // `foo()` call, and a member-access call (`self.foo()`/`obj.foo()`) — verified against a real
+    // parse tree: `self.foo()` is a `call` node whose function is an `attribute` node with
+    // object:"self" attribute:"foo" (the callee name lives on the attribute field). A class
+    // instantiation (`Animal(name)`) is still naturally excluded downstream either way (never added
+    // to knownFunctionNames, since that set is built only from function_definition names, not class
+    // names) without any extra filtering being needed.
+    private const string CallsQuery = """
+        (call function: (identifier) @call.callee) @call.expr
+        (call function: (attribute attribute: (identifier) @call.callee)) @call.expr
+        """;
+
+    // A function/method named but never actually invoked — passed as a bare-name call argument
+    // (`map(some_func, items)`, `items.select(some_func)`). Verified against a real parse tree:
+    // Python's `argument_list` wraps each positional argument directly with no per-argument wrapper
+    // node (same shape as JS/TS's `arguments`, unlike C#'s `argument`-wrapped one). Anchored to a
+    // `call`'s own `arguments` field — not a bare `(argument_list (identifier))` — because
+    // `argument_list` is also the node type used for a class's base-class list
+    // (`BaseClassesQuery`'s `superclasses` field); anchoring keeps this pass from ever matching a
+    // base-class name. Deliberately NOT covered: an event/callback-style attribute assignment
+    // (`widget.on_click = handler`) — a plain `=` here is indistinguishable from an ordinary data
+    // assignment without symbol resolution, unlike C#'s dedicated `+=`/`-=` event-subscription
+    // operator.
+    private const string MethodGroupReferencesQuery =
+        "(call arguments: (argument_list (identifier) @ref.name))";
 
     private readonly TS.Language _language = new("python");
     private bool _disposed;
@@ -307,36 +325,66 @@ public sealed class TreeSitterPythonParser : ILanguageParser, IDisposable
         }
 
         var seen = new HashSet<(string Source, string Callee)>();
-        using var callsQuery = new TS.Query(_language, CallsQuery);
-        foreach (var match in callsQuery.Execute(root).Matches)
+
+        using (var callsQuery = new TS.Query(_language, CallsQuery))
         {
-            var callee = match.Captures.FirstOrDefault(c => c.Name == "call.callee")?.Node?.Text;
-            var callNode = match.Captures.FirstOrDefault(c => c.Name == "call.expr")?.Node;
-            if (callee is null || callNode is null || !knownFunctionNames.Contains(callee))
+            foreach (var match in callsQuery.Execute(root).Matches)
             {
-                continue;
+                var calleeNode = match.Captures.FirstOrDefault(c => c.Name == "call.callee")?.Node;
+                if (calleeNode is not null)
+                {
+                    TryRecordCall(calleeNode, knownFunctionNames, seen, relations);
+                }
             }
-
-            var enclosingFunction = FindEnclosingFunction(callNode);
-            if (enclosingFunction is null)
-            {
-                continue; // a call outside any function/method body (e.g. a decorator argument or module-level statement) — out of scope, matching the other parsers' "inside a body" wording
-            }
-
-            var functionName = TreeSitterQueryHelpers.TryGetField(enclosingFunction, "name")?.Text;
-            if (functionName is null)
-            {
-                continue;
-            }
-
-            var (sourceQualifiedName, _) = ComputeQualifiedName(enclosingFunction, functionName);
-            if (!seen.Add((sourceQualifiedName, callee)))
-            {
-                continue;
-            }
-
-            relations.Add(new RelationDraft(sourceQualifiedName, callee, RelationKind.Calls));
         }
+
+        // Method-group/delegate references (see MethodGroupReferencesQuery's remarks): recorded as
+        // Calls too, through the same seen-dedup, rather than as a new RelationKind — a reference
+        // that hands a function to something else conceptually IS a call site.
+        using (var referencesQuery = new TS.Query(_language, MethodGroupReferencesQuery))
+        {
+            foreach (var match in referencesQuery.Execute(root).Matches)
+            {
+                var refNode = match.Captures.FirstOrDefault(c => c.Name == "ref.name")?.Node;
+                if (refNode is not null)
+                {
+                    TryRecordCall(refNode, knownFunctionNames, seen, relations);
+                }
+            }
+        }
+    }
+
+    private static void TryRecordCall(
+        TS.Node calleeNode,
+        HashSet<string> knownFunctionNames,
+        HashSet<(string Source, string Callee)> seen,
+        List<RelationDraft> relations)
+    {
+        var callee = calleeNode.Text;
+        if (!knownFunctionNames.Contains(callee))
+        {
+            return;
+        }
+
+        var enclosingFunction = FindEnclosingFunction(calleeNode);
+        if (enclosingFunction is null)
+        {
+            return; // a call outside any function/method body (e.g. a decorator argument or module-level statement) — out of scope, matching the other parsers' "inside a body" wording
+        }
+
+        var functionName = TreeSitterQueryHelpers.TryGetField(enclosingFunction, "name")?.Text;
+        if (functionName is null)
+        {
+            return;
+        }
+
+        var (sourceQualifiedName, _) = ComputeQualifiedName(enclosingFunction, functionName);
+        if (!seen.Add((sourceQualifiedName, callee)))
+        {
+            return;
+        }
+
+        relations.Add(new RelationDraft(sourceQualifiedName, callee, RelationKind.Calls));
     }
 
     private static TS.Node? FindEnclosingFunction(TS.Node node)

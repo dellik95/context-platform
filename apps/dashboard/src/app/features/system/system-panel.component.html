@@ -62,4 +62,112 @@
   } @else {
     <mat-progress-bar mode="indeterminate" />
   }
+
+  <mat-expansion-panel class="failed-jobs-panel" [expanded]="true">
+    <mat-expansion-panel-header>
+      <mat-panel-title>
+        <mat-icon>error_outline</mat-icon>
+        Failed jobs
+        @if (failedJobs().length > 0) {
+          <span class="panel-count">{{ failedJobs().length }}</span>
+        }
+      </mat-panel-title>
+    </mat-expansion-panel-header>
+
+    <div class="panel-toolbar">
+      <button mat-stroked-button type="button" (click)="loadFailedJobs()" [disabled]="jobsLoading()">
+        <mat-icon>refresh</mat-icon>
+        Refresh
+      </button>
+    </div>
+
+    @if (jobsLoading()) {
+      <mat-progress-bar mode="indeterminate" />
+    } @else if (jobsError()) {
+      <div class="empty-state">
+        <mat-icon>cloud_off</mat-icon>
+        <p>Could not load failed jobs — is Context.Host running?</p>
+      </div>
+    } @else if (failedJobs().length === 0) {
+      <div class="empty-state">
+        <mat-icon>check_circle</mat-icon>
+        <p>No failed jobs.</p>
+      </div>
+    } @else {
+      <div class="jobs-table-wrap">
+        <table class="jobs-table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Attempts</th>
+              <th>Last error</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (job of failedJobs(); track job.id) {
+              <tr>
+                <td>{{ job.type }}</td>
+                <td>{{ job.attempts }}</td>
+                <td class="error-cell" [matTooltip]="job.lastError ?? ''" matTooltipClass="error-tooltip">
+                  {{ truncateError(job.lastError) || '—' }}
+                </td>
+                <td>{{ job.createdAt | date: 'short' }}</td>
+                <td class="retry-cell">
+                  <button
+                    mat-button
+                    type="button"
+                    color="primary"
+                    (click)="retryJob(job)"
+                    [disabled]="retryingJobId() === job.id"
+                  >
+                    Retry
+                  </button>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </mat-expansion-panel>
+
+  <mat-expansion-panel class="logs-panel">
+    <mat-expansion-panel-header>
+      <mat-panel-title>
+        <mat-icon>description</mat-icon>
+        Recent logs
+      </mat-panel-title>
+    </mat-expansion-panel-header>
+
+    <div class="panel-toolbar">
+      @if (logLines() === null) {
+        <button mat-stroked-button type="button" (click)="loadLogTail()" [disabled]="logsLoading()">
+          <mat-icon>visibility</mat-icon>
+          Show recent logs
+        </button>
+      } @else {
+        <button mat-stroked-button type="button" (click)="loadLogTail()" [disabled]="logsLoading()">
+          <mat-icon>refresh</mat-icon>
+          Refresh
+        </button>
+        @if (logFilePath()) {
+          <span class="log-path">{{ logFilePath() }}</span>
+        }
+      }
+    </div>
+
+    @if (logsLoading()) {
+      <mat-progress-bar mode="indeterminate" />
+    } @else if (logLines(); as lines) {
+      @if (lines.length === 0) {
+        <div class="empty-state">
+          <p>No log lines available.</p>
+        </div>
+      } @else {
+        <pre class="raw-json log-tail">{{ lines.join('\n') }}</pre>
+      }
+    }
+  </mat-expansion-panel>
 </div>

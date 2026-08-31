@@ -2,6 +2,8 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Context.Providers.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Context.Providers.Llm;
 
@@ -10,6 +12,8 @@ namespace Context.Providers.Llm;
 /// http://localhost:11434), used non-streaming. Lets session summarization and memory extraction
 /// (Context.Memory) run on a real local model instead of falling back to
 /// <see cref="NoOpLlmProvider"/>'s templated output — no API key, no data leaving the machine.
+/// Host resolution (including the container fallback-host retry) is delegated to
+/// <see cref="OllamaHostResolver"/>, shared with <see cref="Embeddings.OllamaEmbeddingProvider"/>.
 /// </summary>
 public sealed class OllamaLlmProvider : ILlmProvider
 {
@@ -17,6 +21,7 @@ public sealed class OllamaLlmProvider : ILlmProvider
 
     private readonly HttpClient _http;
     private readonly OllamaChatOptions _options;
+    private readonly OllamaHostResolver _hostResolver;
 
     // HttpClient's own 100s default is not generous enough for a local CPU-bound model under any
     // concurrent load (several session summaries can legitimately queue up behind each other on
@@ -24,30 +29,31 @@ public sealed class OllamaLlmProvider : ILlmProvider
     // far later than that, not get treated the same as a hung connection.
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromMinutes(5);
 
-    public OllamaLlmProvider(HttpClient httpClient, OllamaChatOptions options)
+    public OllamaLlmProvider(HttpClient httpClient, OllamaChatOptions options, ILogger<OllamaLlmProvider>? logger = null)
     {
         _http = httpClient;
         _options = options;
         _http.Timeout = RequestTimeout;
-        if (_http.BaseAddress is null && !string.IsNullOrWhiteSpace(_options.BaseUrl))
-        {
-            _http.BaseAddress = new Uri(_options.BaseUrl.TrimEnd('/') + "/");
-        }
+        // No fixed BaseAddress: OllamaHostResolver builds the full URI per request so it can
+        // retry against fallback hosts when running in a container (see its own remarks).
+        _hostResolver = new OllamaHostResolver(_http, _options.BaseUrl, "Ollama chat", logger ?? NullLogger<OllamaLlmProvider>.Instance);
     }
 
     public string Name => "ollama";
 
     public async Task<string> CompleteAsync(string systemPrompt, string userPrompt, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, "api/chat");
-        request.Content = JsonContent.Create(
-            new OllamaChatRequest(
-                _options.Model,
-                [new OllamaChatMessage("system", systemPrompt), new OllamaChatMessage("user", userPrompt)],
-                Stream: false),
-            options: JsonOptions);
+        using var response = await _hostResolver.SendAsync(
+            HttpMethod.Post,
+            "api/chat",
+            () => JsonContent.Create(
+                new OllamaChatRequest(
+                    _options.Model,
+                    [new OllamaChatMessage("system", systemPrompt), new OllamaChatMessage("user", userPrompt)],
+                    Stream: false),
+                options: JsonOptions),
+            ct).ConfigureAwait(false);
 
-        using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
         var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {

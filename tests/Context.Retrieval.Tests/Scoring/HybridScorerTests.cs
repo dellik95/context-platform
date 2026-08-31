@@ -1,3 +1,4 @@
+using Context.Domain.Enums;
 using Context.Retrieval.Scoring;
 using FluentAssertions;
 
@@ -168,5 +169,82 @@ public class HybridScorerTests
         result[1].Should().Be(0.0); // min
         result[0].Should().Be(result[3]); // equal raw inputs normalize equally
         result[1].Should().BeLessThan(result[0]);
+    }
+
+    // ---- ApplyMemoryTypeBonus (codemem-inspired kind-based re-rank bonus) ------------------
+
+    [Fact]
+    public void ApplyMemoryTypeBonus_DecisionRanksAboveOtherwiseIdenticalChange()
+    {
+        const double baseScore = 0.5;
+
+        var decisionScore = HybridScorer.ApplyMemoryTypeBonus(baseScore, MemoryType.Decision);
+        var changeScore = HybridScorer.ApplyMemoryTypeBonus(baseScore, MemoryType.Change);
+
+        decisionScore.Should().BeGreaterThan(changeScore);
+        changeScore.Should().Be(baseScore); // Change carries no bonus.
+    }
+
+    [Theory]
+    [InlineData(MemoryType.Decision, 0.15)]
+    [InlineData(MemoryType.Architecture, 0.15)]
+    [InlineData(MemoryType.BugFix, 0.10)]
+    [InlineData(MemoryType.Issue, 0.10)]
+    [InlineData(MemoryType.Feature, 0.05)]
+    [InlineData(MemoryType.Refactor, 0.05)]
+    [InlineData(MemoryType.Discovery, 0.05)]
+    [InlineData(MemoryType.Change, 0.0)]
+    [InlineData(MemoryType.Exploration, 0.0)]
+    public void ApplyMemoryTypeBonus_MatchesDocumentedConstantPerMemoryType(MemoryType type, double expectedBonus)
+    {
+        const double baseScore = 0.4;
+
+        var result = HybridScorer.ApplyMemoryTypeBonus(baseScore, type);
+
+        result.Should().BeApproximately(baseScore + expectedBonus, 1e-9);
+    }
+
+    [Fact]
+    public void ApplyMemoryTypeBonus_NullMemoryType_AddsNoBonus()
+    {
+        const double baseScore = 0.42;
+
+        var result = HybridScorer.ApplyMemoryTypeBonus(baseScore, null);
+
+        result.Should().Be(baseScore);
+    }
+
+    [Fact]
+    public void ApplyMemoryTypeBonus_ResultIsClampedTo01_EvenWhenBaseScoreIsAlreadyNearOne()
+    {
+        var result = HybridScorer.ApplyMemoryTypeBonus(0.95, MemoryType.Decision);
+
+        result.Should().Be(1.0);
+    }
+
+    [Fact]
+    public void ApplyMemoryTypeBonus_DecisionAndArchitecture_ShareTheHighestBonus()
+    {
+        const double baseScore = 0.3;
+
+        var decision = HybridScorer.ApplyMemoryTypeBonus(baseScore, MemoryType.Decision);
+        var architecture = HybridScorer.ApplyMemoryTypeBonus(baseScore, MemoryType.Architecture);
+
+        decision.Should().Be(architecture);
+    }
+
+    [Fact]
+    public void ApplyMemoryTypeBonus_BonusOrdering_DecisionAboveBugFixAboveFeatureAboveChange()
+    {
+        const double baseScore = 0.2;
+
+        var decision = HybridScorer.ApplyMemoryTypeBonus(baseScore, MemoryType.Decision);
+        var bugFix = HybridScorer.ApplyMemoryTypeBonus(baseScore, MemoryType.BugFix);
+        var feature = HybridScorer.ApplyMemoryTypeBonus(baseScore, MemoryType.Feature);
+        var change = HybridScorer.ApplyMemoryTypeBonus(baseScore, MemoryType.Change);
+
+        decision.Should().BeGreaterThan(bugFix);
+        bugFix.Should().BeGreaterThan(feature);
+        feature.Should().BeGreaterThan(change);
     }
 }

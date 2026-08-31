@@ -11,6 +11,9 @@ public class ContextPackBuilderTests
     private static SearchQuery Query(int tokenBudget) =>
         new(ProjectId: Guid.NewGuid(), Text: "does not matter", Scope: null, TokenBudget: tokenBudget);
 
+    private static SearchQuery Query(int tokenBudget, string text) =>
+        new(ProjectId: Guid.NewGuid(), Text: text, Scope: null, TokenBudget: tokenBudget);
+
     /// <summary>Builds a snippet whose <see cref="TokenEstimator.Estimate"/> is exactly <paramref name="tokens"/>.</summary>
     private static string SnippetOfTokens(int tokens) => new('a', Math.Max(1, tokens) * 4);
 
@@ -282,5 +285,66 @@ public class ContextPackBuilderTests
 
         pack.PrimaryHits.Should().BeEmpty();
         pack.Signature.Should().NotBeNullOrEmpty();
+    }
+
+    // ---- Query-intent detection: "pending work" queries re-prioritize flavored notes/issues ----
+
+    [Fact]
+    public async Task BuildAsync_PendingWorkQuery_ChangesOpenIssuesInclusion_VersusNeutralQuery_ForTheSameInput()
+    {
+        // Both entries cost exactly the same (length 40 -> 10 tokens), so a budget of exactly 10
+        // tokens can fit only one of the two -- whichever one the query-intent ordering puts
+        // first. The plain-text order below deliberately puts the *neutral* entry first, so any
+        // difference in what gets selected is attributable to intent detection, not input order.
+        var neutralIssue = new string('a', 40);
+        var pendingFlavoredIssue = "pending" + new string('x', 33); // contains a PendingWorkContentKeyword, same length
+        var openIssues = new List<string> { neutralIssue, pendingFlavoredIssue };
+
+        var options = new ContextPackOptions
+        {
+            ArchitectureReserveRatio = 0,
+            PrimaryReserveRatio = 0,
+            HistoricalReserveRatio = 0,
+            OpenIssuesReserveRatio = 1.0,
+            SafetyReserveRatio = 0,
+        };
+        var builder = new ContextPackBuilder(new FakeSearchEngine([]), options);
+
+        var neutralPack = await builder.BuildAsync(
+            Query(10, "tell me about the auth module"), historicalNotes: null, openIssues, CancellationToken.None);
+        var pendingWorkPack = await builder.BuildAsync(
+            Query(10, "what's still pending on this project?"), historicalNotes: null, openIssues, CancellationToken.None);
+
+        neutralPack.OpenIssues.Should().Equal(neutralIssue);
+        pendingWorkPack.OpenIssues.Should().Equal(pendingFlavoredIssue);
+    }
+
+    [Fact]
+    public async Task BuildAsync_PendingWorkQuery_StablyReordersOpenIssues_WhenEverythingStillFits()
+    {
+        var flavoredA = "todo: finish the migration";
+        var neutralB = "decided to use SQLite";
+        var flavoredC = "blocked on the review";
+        var openIssues = new List<string> { neutralB, flavoredA, flavoredC };
+
+        var builder = new ContextPackBuilder(new FakeSearchEngine([]));
+
+        var pack = await builder.BuildAsync(
+            Query(10_000, "what's left todo?"), historicalNotes: null, openIssues, CancellationToken.None);
+
+        // Pending-flavored entries move ahead of the neutral one; relative order within the
+        // flavored group (flavoredA before flavoredC) is preserved (stable sort).
+        pack.OpenIssues.Should().Equal(flavoredA, flavoredC, neutralB);
+    }
+
+    [Fact]
+    public async Task BuildAsync_NeutralQuery_LeavesOpenIssuesOrderUntouched()
+    {
+        var openIssues = new List<string> { "todo: finish the migration", "decided to use SQLite", "blocked on the review" };
+        var builder = new ContextPackBuilder(new FakeSearchEngine([]));
+
+        var pack = await builder.BuildAsync(Query(10_000), historicalNotes: null, openIssues, CancellationToken.None);
+
+        pack.OpenIssues.Should().Equal(openIssues);
     }
 }

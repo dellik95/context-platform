@@ -32,40 +32,29 @@ public sealed class GraphTraversal : IGraphTraversal
         if (cache is null || hops <= 0)
             return Task.FromResult<IReadOnlyList<GraphNode>>(Array.Empty<GraphNode>());
 
+        var (neighbors, _) = ExpandNeighborhood(cache, nodeId, kinds, hops, ct);
+        return Task.FromResult<IReadOnlyList<GraphNode>>(neighbors);
+    }
+
+    public Task<GraphNeighborhood> NeighborhoodAsync(
+        Guid nodeId, GraphEdgeKind[]? kinds, int hops, CancellationToken ct)
+    {
+        var cache = _cacheProvider.FindCacheContaining(nodeId);
+        var originNode = cache?.GetNode(nodeId);
+        if (cache is null || originNode is null || hops <= 0)
+            return Task.FromResult(new GraphNeighborhood(Array.Empty<GraphNode>(), Array.Empty<GraphEdgeDto>()));
+
+        var (neighbors, visitedIds) = ExpandNeighborhood(cache, nodeId, kinds, hops, ct);
+
+        // The origin node itself has to be in Nodes too, or its edges to hop-1 neighbors would
+        // fail the "both endpoints in the set" test below and the graph would render disconnected.
+        var nodes = new List<GraphNode>(neighbors.Count + 1) { originNode };
+        nodes.AddRange(neighbors);
+
         var kindFilter = kinds is { Length: > 0 } ? new HashSet<GraphEdgeKind>(kinds) : null;
-        var visited = new HashSet<Guid> { nodeId };
-        var frontier = new List<Guid> { nodeId };
-        var result = new List<GraphNode>();
+        var edges = CollectEdgesWithinSet(cache, visitedIds, kindFilter);
 
-        for (var hop = 0; hop < hops && frontier.Count > 0; hop++)
-        {
-            ct.ThrowIfCancellationRequested();
-            var next = new List<Guid>();
-
-            foreach (var currentId in frontier)
-            {
-                foreach (var edge in EnumerateBothDirections(cache, currentId))
-                {
-                    if (kindFilter is not null && !kindFilter.Contains(edge.Kind))
-                        continue;
-
-                    var neighborId = edge.SourceNodeId == currentId ? edge.TargetNodeId : edge.SourceNodeId;
-                    if (!visited.Add(neighborId))
-                        continue;
-
-                    var neighborNode = cache.GetNode(neighborId);
-                    if (neighborNode is null)
-                        continue;
-
-                    result.Add(neighborNode);
-                    next.Add(neighborId);
-                }
-            }
-
-            frontier = next;
-        }
-
-        return Task.FromResult<IReadOnlyList<GraphNode>>(result);
+        return Task.FromResult(new GraphNeighborhood(nodes, edges));
     }
 
     public Task<IReadOnlyList<GraphNode>?> ShortestPathAsync(Guid fromId, Guid toId, CancellationToken ct)
@@ -215,4 +204,77 @@ public sealed class GraphTraversal : IGraphTraversal
 
     private static IEnumerable<GraphEdge> EnumerateBothDirections(InMemoryGraphCache cache, Guid nodeId) =>
         cache.GetOutgoing(nodeId).Concat(cache.GetIncoming(nodeId));
+
+    /// <summary>
+    /// Shared BFS hop-expansion behind both <see cref="NeighborsAsync"/> and
+    /// <see cref="NeighborhoodAsync"/>: walks both edge directions from <paramref name="nodeId"/>
+    /// up to <paramref name="hops"/> hops, honoring an optional edge-kind filter. Returns the
+    /// discovered neighbor nodes (excluding the origin) plus the full visited-id set (including
+    /// the origin) that <see cref="NeighborhoodAsync"/> needs to collect edges within.
+    /// </summary>
+    private static (List<GraphNode> Neighbors, HashSet<Guid> VisitedIds) ExpandNeighborhood(
+        InMemoryGraphCache cache, Guid nodeId, GraphEdgeKind[]? kinds, int hops, CancellationToken ct)
+    {
+        var kindFilter = kinds is { Length: > 0 } ? new HashSet<GraphEdgeKind>(kinds) : null;
+        var visited = new HashSet<Guid> { nodeId };
+        var frontier = new List<Guid> { nodeId };
+        var result = new List<GraphNode>();
+
+        for (var hop = 0; hop < hops && frontier.Count > 0; hop++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var next = new List<Guid>();
+
+            foreach (var currentId in frontier)
+            {
+                foreach (var edge in EnumerateBothDirections(cache, currentId))
+                {
+                    if (kindFilter is not null && !kindFilter.Contains(edge.Kind))
+                        continue;
+
+                    var neighborId = edge.SourceNodeId == currentId ? edge.TargetNodeId : edge.SourceNodeId;
+                    if (!visited.Add(neighborId))
+                        continue;
+
+                    var neighborNode = cache.GetNode(neighborId);
+                    if (neighborNode is null)
+                        continue;
+
+                    result.Add(neighborNode);
+                    next.Add(neighborId);
+                }
+            }
+
+            frontier = next;
+        }
+
+        return (result, visited);
+    }
+
+    /// <summary>
+    /// Every edge (as a <see cref="GraphEdgeDto"/> projection) whose source AND target are both in
+    /// <paramref name="nodeIds"/>. Enumerating only outgoing edges per node visits each edge
+    /// exactly once (an edge's source owns it in <see cref="InMemoryGraphCache"/>'s adjacency).
+    /// </summary>
+    private static List<GraphEdgeDto> CollectEdgesWithinSet(
+        InMemoryGraphCache cache, HashSet<Guid> nodeIds, HashSet<GraphEdgeKind>? kindFilter)
+    {
+        var edges = new List<GraphEdgeDto>();
+
+        foreach (var nodeId in nodeIds)
+        {
+            foreach (var edge in cache.GetOutgoing(nodeId))
+            {
+                if (kindFilter is not null && !kindFilter.Contains(edge.Kind))
+                    continue;
+
+                if (!nodeIds.Contains(edge.TargetNodeId))
+                    continue;
+
+                edges.Add(new GraphEdgeDto(edge.SourceNodeId, edge.TargetNodeId, edge.Kind));
+            }
+        }
+
+        return edges;
+    }
 }

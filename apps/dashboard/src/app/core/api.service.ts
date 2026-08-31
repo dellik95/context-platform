@@ -10,6 +10,9 @@ import {
   HealthResponse,
   ImpactSet,
   IndexTriggerResponse,
+  JobDto,
+  JobStatus,
+  LogTailDto,
   Memory,
   ProjectDto,
   ProjectSettingsDto,
@@ -99,5 +102,22 @@ export class ApiService {
   browseDirectory(path?: string): Observable<BrowseDirectoryResponse> {
     const params = path ? `?path=${encodeURIComponent(path)}` : '';
     return this.http.get<BrowseDirectoryResponse>(`${this.base}/api/fs/browse${params}`);
+  }
+
+  listJobs(status?: JobStatus, limit?: number): Observable<JobDto[]> {
+    const params = new URLSearchParams();
+    if (status) params.set('status', status);
+    if (limit) params.set('limit', String(limit));
+    const query = params.toString();
+    return this.http.get<JobDto[]>(`${this.base}/api/jobs${query ? `?${query}` : ''}`);
+  }
+
+  retryJob(id: string): Observable<void> {
+    return this.http.post<void>(`${this.base}/api/jobs/${id}/retry`, {});
+  }
+
+  getLogTail(lines?: number): Observable<LogTailDto> {
+    const params = lines ? `?lines=${lines}` : '';
+    return this.http.get<LogTailDto>(`${this.base}/api/logs/tail${params}`);
   }
 }

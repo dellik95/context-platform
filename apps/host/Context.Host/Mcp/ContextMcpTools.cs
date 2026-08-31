@@ -14,11 +14,12 @@ namespace Context.Host.Mcp;
 /// <summary>
 /// The MCP tools named in the Context.Host task brief: <c>context_search</c>, <c>context_expand</c>,
 /// <c>context_get</c>, <c>code_search</c>, <c>symbol_search</c>, <c>memory_search</c>,
-/// <c>memory_get</c>, <c>graph_neighbors</c>, <c>graph_path</c>, <c>graph_impact</c>,
-/// <c>session_search</c>, <c>session_get</c>, <c>project_info</c>. Every tool that has a direct
-/// <see cref="IContextEngine"/> method (CONTRACTS.md §10) is a thin wrapper over it; the others
-/// (<c>code_search</c>, <c>symbol_search</c>, <c>memory_get</c>, <c>graph_neighbors</c>,
-/// <c>graph_path</c>, <c>session_search</c>, <c>session_get</c>) call directly into an
+/// <c>memory_get</c>, <c>graph_neighbors</c>, <c>graph_neighborhood</c>, <c>graph_path</c>,
+/// <c>graph_impact</c>, <c>session_search</c>, <c>session_get</c>, <c>project_info</c>. Every tool
+/// that has a direct <see cref="IContextEngine"/> method (CONTRACTS.md §10) is a thin wrapper over
+/// it; the others (<c>code_search</c>, <c>symbol_search</c>, <c>memory_get</c>,
+/// <c>graph_neighbors</c>, <c>graph_neighborhood</c>, <c>graph_path</c>, <c>session_search</c>,
+/// <c>session_get</c>) call directly into an
 /// already-registered repository/service, per the task brief's explicit allowance for tools with no
 /// 1:1 engine method.
 /// </summary>
@@ -123,6 +124,18 @@ public sealed class ContextMcpTools(
     {
         await WarmGraphCacheForNodeAsync(nodeId, ct).ConfigureAwait(false);
         return await graphTraversal.NeighborsAsync(nodeId, ParseEdgeKinds(kinds), hops, ct).ConfigureAwait(false);
+    }
+
+    [McpServerTool(Name = "graph_neighborhood")]
+    [Description("Like graph_neighbors, but also returns the edges connecting the neighborhood - the node+edge shape a graph visualization needs.")]
+    public async Task<GraphNeighborhood> GraphNeighborhoodAsync(
+        [Description("Id of the graph node (symbol/file/etc.) to start from.")] Guid nodeId,
+        [Description("Edge kinds to follow, e.g. [\"Calls\",\"References\"]; omit for all kinds.")] string[]? kinds = null,
+        [Description("Number of hops to traverse.")] int hops = 1,
+        CancellationToken ct = default)
+    {
+        await WarmGraphCacheForNodeAsync(nodeId, ct).ConfigureAwait(false);
+        return await graphTraversal.NeighborhoodAsync(nodeId, ParseEdgeKinds(kinds), hops, ct).ConfigureAwait(false);
     }
 
     [McpServerTool(Name = "graph_path")]

@@ -63,11 +63,19 @@ public sealed class ContextPackBuilder : IContextPackBuilder
         var (primaryHits, primaryTokens, primaryTruncated, primaryMore) =
             GreedyKnapsack(hits, h => h.Score, h => TokenEstimator.Estimate(h.Snippet ?? h.Label), primaryBudget);
 
+        // Query-intent detection (ROADMAP.md's hybrid pack re-ranking refinements): a "what's
+        // still pending?" style query re-prioritizes pending-work/next-steps flavored notes ahead
+        // of the caller's relevance order within each section, before the budget knapsack decides
+        // what actually fits -- see QueryIntent's remarks for why "recall" intent is handled by
+        // the caller (Context.Application.ContextEngine) instead, which has the memory timestamps
+        // this layer does not.
+        var pendingWorkIntent = QueryIntent.IsPendingWork(query.Text);
+
         var (historicalSelected, historicalTokens, historicalTruncated, historicalMore) =
-            GreedyKnapsackOrdered(historicalNotes ?? [], TokenEstimator.Estimate, historicalBudget);
+            GreedyKnapsackOrdered(PrioritizeIfPendingWork(historicalNotes ?? [], pendingWorkIntent), TokenEstimator.Estimate, historicalBudget);
 
         var (openIssuesSelected, openIssuesTokens, openIssuesTruncated, openIssuesMore) =
-            GreedyKnapsackOrdered(openIssues ?? [], TokenEstimator.Estimate, openIssuesBudget);
+            GreedyKnapsackOrdered(PrioritizeIfPendingWork(openIssues ?? [], pendingWorkIntent), TokenEstimator.Estimate, openIssuesBudget);
 
         var estimatedTokens =
             TokenEstimator.Estimate(architectureSummary) + primaryTokens + historicalTokens + openIssuesTokens;
@@ -87,6 +95,16 @@ public sealed class ContextPackBuilder : IContextPackBuilder
             moreAvailable,
             signature);
     }
+
+    /// <summary>
+    /// Stable-partitions a pre-ordered notes/issues section so pending-work-flavored items (per
+    /// <see cref="QueryIntent.IsPendingWorkFlavored"/>) come first, preserving the caller's
+    /// relative order within each partition -- a no-op unless <paramref name="pendingWorkIntent"/>
+    /// is set. Runs before <see cref="GreedyKnapsackOrdered"/> so a token-constrained budget is
+    /// more likely to include the pending-flavored items first.
+    /// </summary>
+    private static IReadOnlyList<string> PrioritizeIfPendingWork(IReadOnlyList<string> items, bool pendingWorkIntent) =>
+        pendingWorkIntent ? [.. items.OrderByDescending(QueryIntent.IsPendingWorkFlavored)] : items;
 
     private static string BuildArchitectureSummary(IReadOnlyList<SearchHit> hits, int budgetTokens)
     {

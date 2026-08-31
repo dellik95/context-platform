@@ -1,3 +1,5 @@
+using Context.Domain.Enums;
+
 namespace Context.Retrieval.Scoring;
 
 /// <summary>
@@ -12,6 +14,27 @@ public sealed class HybridScorer : IHybridScorer
     public const double DefaultGraphWeight = 0.20;
     public const double DefaultRecencyWeight = 0.10;
     public const double DefaultMemoryWeight = 0.10;
+
+    /// <summary>
+    /// Codemem-inspired kind-based re-rank bonus (ROADMAP.md's "hybrid pack re-ranking
+    /// refinements"): a small additive nudge favoring memory kinds worth surfacing over generic
+    /// ones. Decision/Architecture (locked-in project knowledge) rank highest, BugFix/Issue
+    /// (concrete, actionable) next, Feature/Refactor/Discovery a little, and anything else
+    /// (Change/Exploration/...) gets none. Deliberately NOT folded into <see cref="Combine"/>'s
+    /// base 5-signal formula -- see <see cref="ApplyMemoryTypeBonus"/>, which layers it on top of
+    /// an already-normalized [0, 1] score instead.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<MemoryType, double> MemoryTypeBonus = new Dictionary<MemoryType, double>
+    {
+        [MemoryType.Decision] = 0.15,
+        [MemoryType.Architecture] = 0.15,
+        [MemoryType.BugFix] = 0.10,
+        [MemoryType.Issue] = 0.10,
+        [MemoryType.Feature] = 0.05,
+        [MemoryType.Refactor] = 0.05,
+        [MemoryType.Discovery] = 0.05,
+        // MemoryType.Change and MemoryType.Exploration are intentionally absent -> 0.0 bonus.
+    };
 
     private readonly HybridScoringOptions _options;
 
@@ -30,6 +53,19 @@ public sealed class HybridScorer : IHybridScorer
             _options.MemoryWeight * Clamp01(signals.Memory01);
 
         return Clamp01(score);
+    }
+
+    /// <summary>
+    /// Applies <see cref="MemoryTypeBonus"/> on top of an already-normalized [0, 1] relevance
+    /// score (e.g. <see cref="Combine"/>'s output, or <c>DecayCalculator.ComputeRelevanceMultiplier</c>
+    /// for a memory-derived score), then re-clamps to [0, 1] -- same pattern as <see cref="Clamp01"/>
+    /// guards every signal going into <see cref="Combine"/>. This is an additive refinement layered
+    /// on top of the base formula, not a change to it.
+    /// </summary>
+    public static double ApplyMemoryTypeBonus(double normalizedScore, MemoryType? memoryType)
+    {
+        var bonus = memoryType is { } type && MemoryTypeBonus.TryGetValue(type, out var b) ? b : 0.0;
+        return Clamp01(normalizedScore + bonus);
     }
 
     /// <summary>

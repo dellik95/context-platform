@@ -68,7 +68,31 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
         (using_directive (qualified_name) @import.name)
         """;
 
-    private const string InvocationsQuery = "(invocation_expression function: (identifier) @call.callee) @call.expr";
+    // Two shapes for a real invocation: a bare call ("Foo()", same class or static-import-like
+    // context) and a member-access call ("this.Foo()"/"x.Foo()"/"Type.Foo()"/every LINQ call like
+    // ".Select(...)") -- the latter is the overwhelming majority of real-world C# calls, and its
+    // callee sits at the member_access_expression's "name" field (verified against a real parse
+    // tree: "x.Foo()" is an invocation_expression whose function is a member_access_expression with
+    // expression:"x" name:"Foo"; "this.Bar()" is the same shape minus the expression field).
+    private const string InvocationsQuery = """
+        (invocation_expression function: (identifier) @call.callee) @call.expr
+        (invocation_expression function: (member_access_expression name: (identifier) @call.callee)) @call.expr
+        """;
+
+    // A method named but never actually invoked -- no invocation_expression wraps it at all, so no
+    // query targeting invocations (above) can ever catch it; it needs this separate query. Two
+    // shapes covered, both verified against a real parse tree: a method-group passed as a bare
+    // argument (".Select(SomeMethod)" -- the "argument" node's direct child is just the identifier,
+    // not an invocation_expression, which is what makes this distinguishable from ".Select(Foo())")
+    // and an event subscription/unsubscription ("obj.Event += Handler;"/"-="). Deliberately NOT
+    // covered: a qualified reference used the same way (".Select(obj.Method)") -- its callee sits
+    // behind a member_access_expression, not a bare identifier, and there's no symbol-resolution
+    // pass here to know which "obj" it is.
+    private const string MethodGroupReferencesQuery = """
+        (argument (identifier) @ref.name)
+        (assignment_expression left: (_) "+=" right: (identifier) @ref.name)
+        (assignment_expression left: (_) "-=" right: (identifier) @ref.name)
+        """;
 
     private const string MethodNamesQuery = """
         (method_declaration name: (identifier) @name)
@@ -305,36 +329,66 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
         }
 
         var seen = new HashSet<(string Source, string Callee)>();
-        using var invocationsQuery = new TS.Query(_language, InvocationsQuery);
-        foreach (var match in invocationsQuery.Execute(root).Matches)
+
+        using (var invocationsQuery = new TS.Query(_language, InvocationsQuery))
         {
-            var callee = match.Captures.FirstOrDefault(c => c.Name == "call.callee")?.Node?.Text;
-            var callNode = match.Captures.FirstOrDefault(c => c.Name == "call.expr")?.Node;
-            if (callee is null || callNode is null || !knownMethodNames.Contains(callee))
+            foreach (var match in invocationsQuery.Execute(root).Matches)
             {
-                continue;
+                var calleeNode = match.Captures.FirstOrDefault(c => c.Name == "call.callee")?.Node;
+                if (calleeNode is not null)
+                {
+                    TryRecordCall(calleeNode, knownMethodNames, seen, relations);
+                }
             }
-
-            var enclosingMethod = FindEnclosingMethodOrConstructor(callNode);
-            if (enclosingMethod is null)
-            {
-                continue; // a call outside any method/constructor body (e.g. a field initializer) — out of scope, matching the task's "a method body containing an invocation" wording
-            }
-
-            var methodName = TreeSitterQueryHelpers.TryGetField(enclosingMethod, "name")?.Text;
-            if (methodName is null)
-            {
-                continue;
-            }
-
-            var (sourceQualifiedName, _) = ComputeQualifiedName(enclosingMethod, methodName);
-            if (!seen.Add((sourceQualifiedName, callee)))
-            {
-                continue;
-            }
-
-            relations.Add(new RelationDraft(sourceQualifiedName, callee, RelationKind.Calls));
         }
+
+        // Method-group/delegate references (see MethodGroupReferencesQuery's remarks): recorded as
+        // Calls too, through the same seen-dedup, rather than as a new RelationKind — a reference
+        // that hands a method to a delegate/event conceptually IS a call site.
+        using (var referencesQuery = new TS.Query(_language, MethodGroupReferencesQuery))
+        {
+            foreach (var match in referencesQuery.Execute(root).Matches)
+            {
+                var refNode = match.Captures.FirstOrDefault(c => c.Name == "ref.name")?.Node;
+                if (refNode is not null)
+                {
+                    TryRecordCall(refNode, knownMethodNames, seen, relations);
+                }
+            }
+        }
+    }
+
+    private static void TryRecordCall(
+        TS.Node calleeNode,
+        HashSet<string> knownMethodNames,
+        HashSet<(string Source, string Callee)> seen,
+        List<RelationDraft> relations)
+    {
+        var callee = calleeNode.Text;
+        if (!knownMethodNames.Contains(callee))
+        {
+            return;
+        }
+
+        var enclosingMethod = FindEnclosingMethodOrConstructor(calleeNode);
+        if (enclosingMethod is null)
+        {
+            return; // a call outside any method/constructor body (e.g. a field initializer) — out of scope, matching the task's "a method body containing an invocation" wording
+        }
+
+        var methodName = TreeSitterQueryHelpers.TryGetField(enclosingMethod, "name")?.Text;
+        if (methodName is null)
+        {
+            return;
+        }
+
+        var (sourceQualifiedName, _) = ComputeQualifiedName(enclosingMethod, methodName);
+        if (!seen.Add((sourceQualifiedName, callee)))
+        {
+            return;
+        }
+
+        relations.Add(new RelationDraft(sourceQualifiedName, callee, RelationKind.Calls));
     }
 
     private static TS.Node? FindEnclosingMethodOrConstructor(TS.Node node)

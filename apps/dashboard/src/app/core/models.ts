@@ -15,6 +15,12 @@ export type GraphNodeKind =
   | 'Project' | 'Directory' | 'File' | 'Module' | 'Class' | 'Interface'
   | 'Function' | 'Method' | 'Type' | 'Variable' | 'Package' | 'Test' | 'UnresolvedExternal';
 
+export type JobType =
+  | 'IndexFile' | 'DeleteFile' | 'ParseFile' | 'ResolveRelations' | 'UpdateGraph'
+  | 'EmbedChunk' | 'SummarizeSession' | 'ExtractMemory' | 'DecayMemory' | 'BackupDb';
+
+export type JobStatus = 'Pending' | 'Running' | 'Done' | 'Failed';
+
 export interface ProjectDto {
   id: string;
   name: string;
@@ -174,6 +180,26 @@ export interface SystemStatusDto {
   jobsFailed: number;
   jobsDone: number;
   uptimeSeconds: number;
+}
+
+// Mirrors apps/host/Context.Host/Api/JobsEndpoints.cs's JobDto record. Deliberately omits
+// PayloadJson (can be arbitrarily large, not needed to see "what failed and why").
+export interface JobDto {
+  id: string;
+  type: JobType;
+  status: JobStatus;
+  attempts: number;
+  lastError: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  nextRetryAt: string | null;
+}
+
+// Mirrors apps/host/Context.Host/Api/JobsEndpoints.cs's LogTailDto record.
+export interface LogTailDto {
+  lines: string[];
+  filePath: string | null;
 }
 
 // Mirrors src/Context.Application/Indexing/ReindexProgressDto.cs, pushed over the

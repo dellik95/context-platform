@@ -11,8 +11,8 @@ public sealed class TreeSitterJavaScriptParserTests
     // genuinely different grammar shape than TS's "public_field_definition"/"name"), a constructor,
     // a derived class extending the base directly (no extends_clause wrapper in plain JS), an
     // arrow-function-as-const ("makeDog" — the required tricky case), a bare-identifier call
-    // between two module-level functions, a member-expression call ("a.speak()") deliberately
-    // excluded from Calls, and a named export clause with an alias ("createAnimal as create").
+    // between two module-level functions, a member-expression call ("a.speak()" — now captured,
+    // see CallsQuery's remarks), and a named export clause with an alias ("createAnimal as create").
     private const string Source = """
         import { helper } from "./helper.js";
 
@@ -140,7 +140,7 @@ public sealed class TreeSitterJavaScriptParserTests
     }
 
     [Fact]
-    public void ExtractRelations_OnlyBareIdentifierCallCounted_MemberExpressionCallExcluded()
+    public void ExtractRelations_BareIdentifierAndMemberExpressionCalls_BothProduceCallsRelations()
     {
         using var parser = new TreeSitterJavaScriptParser();
 
@@ -148,10 +148,37 @@ public sealed class TreeSitterJavaScriptParserTests
 
         var calls = relations.Where(r => r.Kind == RelationKind.Calls).ToList();
 
-        // "a.speak()" is a member-expression call, deliberately excluded; only the bare
-        // "createAnimal(...)" call is reported.
-        calls.Should().ContainSingle();
-        calls[0].SourceQualifiedName.Should().Be("useAnimal");
-        calls[0].TargetName.Should().Be("createAnimal");
+        // A member-expression call ("a.speak()") is captured alongside a bare-identifier one
+        // ("createAnimal(...)") — CallsQuery matches both shapes now (was bare-identifier-only,
+        // which silently missed the overwhelming majority of real-world JS/TS calls).
+        calls.Should().HaveCount(2);
+        calls.Should().ContainSingle(r =>
+            r.SourceQualifiedName == "useAnimal" && r.TargetName == "createAnimal");
+        calls.Should().ContainSingle(r =>
+            r.SourceQualifiedName == "useAnimal" && r.TargetName == "speak");
+    }
+
+    [Fact]
+    public void ExtractRelations_MethodGroupReferenceAsCallArgument_ProducesCallsRelation()
+    {
+        const string source = """
+            function handleClick() {
+            }
+
+            function wireUp() {
+              [1, 2, 3].forEach(handleClick);
+            }
+            """;
+        using var parser = new TreeSitterJavaScriptParser();
+
+        var relations = parser.ExtractRelations(parser.Parse(source));
+
+        // "handleClick" is never invoked here at all, just named as a bare-identifier call
+        // argument — no call_expression wraps it, so MethodGroupReferencesQuery (not CallsQuery)
+        // is what has to catch it.
+        relations.Should().ContainSingle(r =>
+            r.Kind == RelationKind.Calls
+            && r.SourceQualifiedName == "wireUp"
+            && r.TargetName == "handleClick");
     }
 }

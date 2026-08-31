@@ -7,6 +7,7 @@ using Context.Infrastructure.Abstractions;
 using Context.Memory.Decay;
 using Context.Retrieval;
 using Context.Retrieval.Abstractions;
+using Context.Retrieval.Scoring;
 using Context.Shared;
 using DomainFile = Context.Domain.Entities.File;
 
@@ -50,7 +51,7 @@ public sealed class ContextEngine(
 
     public async Task<ContextPack> SearchContextAsync(SearchQuery query, CancellationToken ct)
     {
-        var (historicalNotes, openIssues) = await BuildMemorySectionsAsync(query.ProjectId, ct).ConfigureAwait(false);
+        var (historicalNotes, openIssues) = await BuildMemorySectionsAsync(query.ProjectId, query.Text, ct).ConfigureAwait(false);
 
         var pack = await contextPackBuilder.BuildAsync(query, historicalNotes, openIssues, ct).ConfigureAwait(false);
 
@@ -178,15 +179,24 @@ public sealed class ContextEngine(
     }
 
     /// <summary>
-    /// Ranks the project's active memories by <see cref="DecayCalculator"/> relevance and splits
-    /// them into the two sections <see cref="ContextPackBuilder"/>'s richer overload accepts:
-    /// <see cref="MemoryType.Issue"/> memories become open issues, everything else becomes a
-    /// historical note. Both lists are pre-sorted most-relevant-first, matching what
-    /// <see cref="ContextPackBuilder"/> expects from a caller-supplied, already-ordered section
-    /// (see its own remarks on <c>GreedyKnapsackOrdered</c>).
+    /// Ranks the project's active memories and splits them into the two sections
+    /// <see cref="ContextPackBuilder"/>'s richer overload accepts: <see cref="MemoryType.Issue"/>
+    /// memories become open issues, everything else becomes a historical note. Both lists are
+    /// pre-sorted, matching what <see cref="ContextPackBuilder"/> expects from a caller-supplied,
+    /// already-ordered section (see its own remarks on <c>GreedyKnapsackOrdered</c>).
     /// </summary>
+    /// <remarks>
+    /// Ranking is normally <see cref="RelevanceOf"/> (decay + <see cref="HybridScorer.MemoryTypeBonus"/>,
+    /// most-relevant-first). A <see cref="QueryIntent.IsRecall"/> query ("what did we do last
+    /// time?") ranks the historical-notes section by <see cref="Context.Domain.Entities.Memory.CreatedAt"/>
+    /// instead (most-recent-first) -- <see cref="ContextPackBuilder"/> has no memory timestamps to
+    /// do this itself, so it's done here where the real <see cref="Context.Domain.Entities.Memory"/>
+    /// records are still in hand. Open issues stay relevance-ranked either way; a "what's still
+    /// pending?" query is instead handled downstream by <see cref="ContextPackBuilder"/> reordering
+    /// this same relevance-ranked text by content (see <see cref="QueryIntent.IsPendingWorkFlavored"/>).
+    /// </remarks>
     private async Task<(IReadOnlyList<string> HistoricalNotes, IReadOnlyList<string> OpenIssues)> BuildMemorySectionsAsync(
-        Guid projectId, CancellationToken ct)
+        Guid projectId, string queryText, CancellationToken ct)
     {
         var memories = await memoryRepository.ListByProjectAsync(projectId, includeSuperseded: false, ct).ConfigureAwait(false);
         if (memories.Count == 0)
@@ -195,15 +205,19 @@ public sealed class ContextEngine(
         }
 
         var now = DateTimeOffset.UtcNow;
-        var ranked = memories.OrderByDescending(m => RelevanceOf(m, now)).ToList();
+        var relevanceRanked = memories.OrderByDescending(m => RelevanceOf(m, now)).ToList();
 
-        var historicalNotes = ranked
+        var notesSource = QueryIntent.IsRecall(queryText)
+            ? memories.OrderByDescending(m => m.CreatedAt).ToList()
+            : relevanceRanked;
+
+        var historicalNotes = notesSource
             .Where(m => m.Type != MemoryType.Issue)
             .Take(MaxMemoryNotesPerSection)
             .Select(FormatMemoryNote)
             .ToList();
 
-        var openIssues = ranked
+        var openIssues = relevanceRanked
             .Where(m => m.Type == MemoryType.Issue)
             .Take(MaxMemoryNotesPerSection)
             .Select(FormatMemoryNote)
@@ -212,8 +226,15 @@ public sealed class ContextEngine(
         return (historicalNotes, openIssues);
     }
 
+    /// <summary>
+    /// Base decay-based relevance (<see cref="DecayCalculator"/>, already normalized to [0, 1])
+    /// plus the codemem-inspired kind bonus (<see cref="HybridScorer.MemoryTypeBonus"/>) for the
+    /// memory's <see cref="MemoryType"/>, re-clamped to [0, 1] via <see cref="HybridScorer.ApplyMemoryTypeBonus"/>.
+    /// </summary>
     private static double RelevanceOf(Context.Domain.Entities.Memory memory, DateTimeOffset now) =>
-        DecayCalculator.ComputeRelevanceMultiplier(memory.Confidence, memory.LastReinforcedAt, memory.Pinned, now);
+        HybridScorer.ApplyMemoryTypeBonus(
+            DecayCalculator.ComputeRelevanceMultiplier(memory.Confidence, memory.LastReinforcedAt, memory.Pinned, now),
+            memory.Type);
 
     private static string FormatMemoryNote(Context.Domain.Entities.Memory memory) => $"[{memory.Type}] {memory.Title}: {memory.Body}";
 

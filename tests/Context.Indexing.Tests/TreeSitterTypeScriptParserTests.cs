@@ -10,10 +10,10 @@ public sealed class TreeSitterTypeScriptParserTests
     // Covers: a named import, two interfaces (one extending the other — TS-specific
     // extends_type_clause), a class implementing an interface and a derived class extending it
     // (bare identifier extends target), a private field, a constructor with a TS parameter
-    // property, JSDoc block-comment doc-comments, member-expression calls ("this.foo()") being
-    // deliberately excluded from Calls, a bare-identifier call between two module-level functions,
-    // an arrow-function-as-const ("varfn"), and a mix of exported/non-exported top-level symbols
-    // (only the exported ones should produce Exports relations).
+    // property, JSDoc block-comment doc-comments, member-expression calls ("this.foo()" — now
+    // captured, see CallsQuery's remarks), a bare-identifier call between two module-level
+    // functions, an arrow-function-as-const ("varfn"), and a mix of exported/non-exported
+    // top-level symbols (only the exported ones should produce Exports relations).
     private const string Source = """
         import { helper } from "./helper";
 
@@ -173,7 +173,7 @@ public sealed class TreeSitterTypeScriptParserTests
     }
 
     [Fact]
-    public void ExtractRelations_MemberExpressionCallsAreExcluded_OnlyBareIdentifierCallCounted()
+    public void ExtractRelations_MemberExpressionCalls_AreCapturedAlongsideBareIdentifierCalls()
     {
         using var parser = new TreeSitterTypeScriptParser();
 
@@ -181,9 +181,21 @@ public sealed class TreeSitterTypeScriptParserTests
 
         var calls = relations.Where(r => r.Kind == RelationKind.Calls).ToList();
 
-        // "this.increment()" and "this.log()" are member-expression calls, deliberately excluded.
-        calls.Should().ContainSingle();
-        calls[0].SourceQualifiedName.Should().Be("caller");
-        calls[0].TargetName.Should().Be("helperFn");
+        // "this.increment()" and "this.log()" are member-expression calls — CallsQuery matches both
+        // that shape and a bare identifier now (was bare-identifier-only, which silently missed the
+        // overwhelming majority of real-world TS calls, including every "this.foo()").
+        calls.Should().HaveCount(4);
+        calls.Should().ContainSingle(r =>
+            r.SourceQualifiedName == "Widget.increment" && r.TargetName == "log");
+        calls.Should().ContainSingle(r =>
+            r.SourceQualifiedName == "Button.onClick" && r.TargetName == "increment");
+        calls.Should().ContainSingle(r =>
+            r.SourceQualifiedName == "caller" && r.TargetName == "helperFn");
+        // A known false-positive inherent to this unresolved-by-name heuristic: "console.log(...)"
+        // inside Widget.log's own body has a property name ("log") that happens to collide with
+        // Widget's own private method of the same name, so it's indistinguishable from a real
+        // self-call without actual symbol resolution (which this best-effort pass doesn't do).
+        calls.Should().ContainSingle(r =>
+            r.SourceQualifiedName == "Widget.log" && r.TargetName == "log");
     }
 }

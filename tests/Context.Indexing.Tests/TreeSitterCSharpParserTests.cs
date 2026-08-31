@@ -226,4 +226,89 @@ public sealed class TreeSitterCSharpParserTests
         calls.Should().ContainSingle(r =>
             r.SourceQualifiedName == "Acme.Shapes.Circle.Initialize" && r.TargetName == "ComputeArea");
     }
+
+    // Regression coverage for the real bug this fix addresses: FormatMemoryNote-style
+    // (Application.ContextEngine) and this.Foo()/x.Foo() style calls were invisible to the graph
+    // because InvocationsQuery only ever matched a bare-identifier function, never a
+    // member_access_expression one (which is what every "this.Foo()"/"x.Foo()"/LINQ call actually
+    // is grammar-wise).
+    private const string MemberAccessSource = """
+        namespace Acme.Widgets;
+
+        public class Formatter
+        {
+            public string[] FormatAll(string[] items)
+            {
+                this.Prepare();
+                return items.Select(FormatOne).ToArray();
+            }
+
+            private void Prepare()
+            {
+            }
+
+            private static string FormatOne(string item) => item;
+        }
+        """;
+
+    [Fact]
+    public void ExtractRelations_MemberAccessCall_ProducesCallsRelation()
+    {
+        using var parser = new TreeSitterCSharpParser();
+
+        var relations = parser.ExtractRelations(parser.Parse(MemberAccessSource));
+
+        // "this.Prepare()" — the invocation's function is a member_access_expression, not a bare
+        // identifier; this is the "this.Foo()"/"x.Foo()" half of the fix.
+        relations.Should().ContainSingle(r =>
+            r.Kind == RelationKind.Calls
+            && r.SourceQualifiedName == "Acme.Widgets.Formatter.FormatAll"
+            && r.TargetName == "Prepare");
+    }
+
+    [Fact]
+    public void ExtractRelations_MethodGroupReferenceAsArgument_ProducesCallsRelation()
+    {
+        using var parser = new TreeSitterCSharpParser();
+
+        var relations = parser.ExtractRelations(parser.Parse(MemberAccessSource));
+
+        // ".Select(FormatOne)" — FormatOne is never invoked at all, just named as a bare identifier
+        // argument; no invocation_expression wraps it, so this needs the separate
+        // MethodGroupReferencesQuery pass, not just a wider InvocationsQuery.
+        relations.Should().ContainSingle(r =>
+            r.Kind == RelationKind.Calls
+            && r.SourceQualifiedName == "Acme.Widgets.Formatter.FormatAll"
+            && r.TargetName == "FormatOne");
+    }
+
+    [Fact]
+    public void ExtractRelations_EventSubscription_ProducesCallsRelation()
+    {
+        const string source = """
+            namespace Acme.Widgets;
+
+            public class Button
+            {
+                public event System.Action Clicked;
+
+                public void Wire()
+                {
+                    Clicked += OnClicked;
+                }
+
+                private void OnClicked()
+                {
+                }
+            }
+            """;
+        using var parser = new TreeSitterCSharpParser();
+
+        var relations = parser.ExtractRelations(parser.Parse(source));
+
+        relations.Should().ContainSingle(r =>
+            r.Kind == RelationKind.Calls
+            && r.SourceQualifiedName == "Acme.Widgets.Button.Wire"
+            && r.TargetName == "OnClicked");
+    }
 }

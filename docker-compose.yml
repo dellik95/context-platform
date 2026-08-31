@@ -19,7 +19,20 @@ services:
       # the container's virtual network, which is host/VM-backend-specific (e.g. an explicit
       # Windows Firewall block rule on ollama.exe was the blocker here) — if health still reports
       # embeddingProvider/llmProvider "ollama" but every search/session-end request 500s with
-      # "Connection refused", that firewall path is the first thing to check, not this config.
+      # "Connection refused", that firewall path is still the first thing to check, not this config.
+      # OllamaHostResolver (src/Context.Providers/OllamaHostResolver.cs) now softens the rest of
+      # this: when running in a container it detects that (via /.dockerenv) and, if the FIRST
+      # connection attempt to CONTEXT_OLLAMA_BASE_URL fails at the connection level (refused/
+      # unreachable/timeout — not a real HTTP error response from Ollama), automatically retries a
+      # couple of well-known fallback hosts (host.docker.internal, then 172.17.0.1, the default
+      # Docker bridge gateway on plain Linux Docker Engine) before giving up, and logs (Warning
+      # level) which candidate ultimately worked or that all of them failed. That's a genuine
+      # improvement for hosts/backends where one of those alternates happens to be reachable, but
+      # it is NOT a fix for a host-side firewall actively blocking the connection — on THIS
+      # machine's Rancher-Desktop-on-Windows setup, disabling the Windows Firewall block rule on
+      # ollama.exe was still not enough to make the container path work end-to-end, so bare-metal
+      # (dotnet run, no container) remains the only verified-working path for local Ollama here.
+      # See ROADMAP.md's "Docker container → host Ollama networking" entry for the full status.
       # Model choice: embeddinggemma is a purpose-built embedding model (much better fit than
       # repurposing a chat model for this); qwen2.5-coder:7b is the balance of quality vs. latency
       # for summarization/memory-extraction background jobs — gemma4:26b (if pulled) is higher

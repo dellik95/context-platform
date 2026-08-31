@@ -20,7 +20,7 @@ public sealed class EmbedChunkJobHandler(IEmbeddingRepository embeddings, IEmbed
         // Re-check under the job's own execution: another EmbedChunk job for an identical chunk
         // (same content hash, different chunk id - e.g. two symbols with byte-identical bodies)
         // may have already embedded this content since this job was enqueued.
-        var existing = await embeddings.GetByContentHashAsync(payload.ContentHash, ct).ConfigureAwait(false);
+        var existing = await embeddings.GetByContentHashAsync(payload.ContentHash, embeddingProvider.Name, ct).ConfigureAwait(false);
         if (existing is not null)
         {
             return;

@@ -12,10 +12,10 @@ public sealed class TreeSitterPythonParserTests
     // docstring, a base class list with a "metaclass=" keyword argument that must be skipped
     // (not treated as a base class), a decorated method (the required tricky case —
     // "@staticmethod" — whose line range/signature must include the decorator line while its
-    // qualified name still resolves to a normal nested method), and both an excluded
-    // attribute-call ("self.foo()"/"a.speak()") and an excluded class-instantiation call
-    // ("Animal(name)" — a class name is never in the known-function-names set) alongside one
-    // legitimate bare-identifier function call.
+    // qualified name still resolves to a normal nested method), attribute calls ("self.foo()"/
+    // "a.speak()" — now captured, see CallsQuery's remarks) alongside an excluded
+    // class-instantiation call ("Animal(name)" — a class name is never in the known-function-names
+    // set) and a legitimate bare-identifier function call.
     private const string Source = """"
         import os
         from typing import List
@@ -145,7 +145,7 @@ public sealed class TreeSitterPythonParserTests
     }
 
     [Fact]
-    public void ExtractRelations_AttributeCallsAndClassInstantiationAreExcluded_OnlyBareCallCounted()
+    public void ExtractRelations_AttributeCallsAndBareIdentifierCalls_BothProduceCallsRelations()
     {
         using var parser = new TreeSitterPythonParser();
 
@@ -153,11 +153,41 @@ public sealed class TreeSitterPythonParserTests
 
         var calls = relations.Where(r => r.Kind == RelationKind.Calls).ToList();
 
-        // "self.make_sound()" and "a.speak()" are attribute calls (excluded); "Animal(name)" is a
-        // class instantiation (never in the known-function-names set, so excluded automatically).
-        // Only "create_animal(...)" is a bare-identifier call to a known module-level function.
-        calls.Should().ContainSingle();
-        calls[0].SourceQualifiedName.Should().Be("use_animal");
-        calls[0].TargetName.Should().Be("create_animal");
+        // "self.make_sound()" and "a.speak()" are attribute calls — CallsQuery matches both that
+        // shape and a bare identifier now (was bare-identifier-only, which silently missed every
+        // "self.foo()"/"obj.foo()" call). "Animal(name)" is still excluded: it's a class
+        // instantiation, never in the known-function-names set (built only from function_definition
+        // names), so no change there.
+        calls.Should().HaveCount(3);
+        calls.Should().ContainSingle(r =>
+            r.SourceQualifiedName == "Animal.speak" && r.TargetName == "make_sound");
+        calls.Should().ContainSingle(r =>
+            r.SourceQualifiedName == "use_animal" && r.TargetName == "create_animal");
+        calls.Should().ContainSingle(r =>
+            r.SourceQualifiedName == "use_animal" && r.TargetName == "speak");
+    }
+
+    [Fact]
+    public void ExtractRelations_MethodGroupReferenceAsCallArgument_ProducesCallsRelation()
+    {
+        const string source = """
+            def handle_item(x):
+                return x
+
+
+            def wire_up(items):
+                return list(map(handle_item, items))
+            """;
+        using var parser = new TreeSitterPythonParser();
+
+        var relations = parser.ExtractRelations(parser.Parse(source));
+
+        // "handle_item" is never invoked here at all, just named as a bare-identifier call
+        // argument — no `call` node wraps it, so MethodGroupReferencesQuery (not CallsQuery) is
+        // what has to catch it.
+        relations.Should().ContainSingle(r =>
+            r.Kind == RelationKind.Calls
+            && r.SourceQualifiedName == "wire_up"
+            && r.TargetName == "handle_item");
     }
 }

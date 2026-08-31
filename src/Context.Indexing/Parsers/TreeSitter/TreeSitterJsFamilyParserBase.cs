@@ -56,10 +56,28 @@ public abstract class TreeSitterJsFamilyParserBase : ILanguageParser, IDisposabl
     // surrounding quotes already stripped by the grammar itself - no manual trimming needed.
     private const string ImportsQuery = "(import_statement source: (string (string_fragment) @import.name))";
 
-    // Only a bare `foo(...)` call is matched (function field is a plain identifier), mirroring
-    // TreeSitterCSharpParser's InvocationsQuery: a `this.foo()`/`obj.foo()` member-expression
-    // callee is deliberately out of scope for this best-effort, unresolved relation.
-    private const string CallsQuery = "(call_expression function: (identifier) @call.callee) @call.expr";
+    // Two shapes for a real invocation, mirroring TreeSitterCSharpParser's InvocationsQuery: a bare
+    // `foo()` call, and a member-expression call (`this.foo()`/`obj.foo()`/every chained call like
+    // `items.map(...)`) — verified against a real parse tree: `x.foo()` is a call_expression whose
+    // function is a member_expression with object:"x" property:"foo" (a property_identifier, not a
+    // plain identifier — that's the field this pattern targets).
+    private const string CallsQuery = """
+        (call_expression function: (identifier) @call.callee) @call.expr
+        (call_expression function: (member_expression property: (property_identifier) @call.callee)) @call.expr
+        """;
+
+    // A function/method named but never actually invoked — passed as a bare-identifier call
+    // argument (`items.map(someFunc)`). Verified against a real parse tree: unlike C#'s grammar,
+    // JS/TS's `arguments` node wraps each argument expression directly with no per-argument
+    // wrapper node, so the pattern targets the identifier itself. Anchored to `call_expression`'s
+    // own `arguments` field (not a bare `(arguments (identifier))`) so this can't stray into some
+    // other node type that happens to also be named "arguments" in a future grammar revision.
+    // Deliberately NOT covered: a plain assignment (`obj.onclick = handler`) — unlike C#'s `+=`/`-=`
+    // event-subscription shape, JS/TS has no distinct operator marking "this is a handler wire-up"
+    // vs. an ordinary data assignment, so trying to catch it here would risk misreading unrelated
+    // assignments as calls; left out rather than guessed at.
+    private const string MethodGroupReferencesQuery =
+        "(call_expression arguments: (arguments (identifier) @ref.name))";
 
     private static readonly HashSet<string> TypeContainerTypes =
         new(StringComparer.Ordinal) { "class_declaration", "interface_declaration" };
@@ -562,30 +580,60 @@ public abstract class TreeSitterJsFamilyParserBase : ILanguageParser, IDisposabl
         }
 
         var seen = new HashSet<(string Source, string Callee)>();
-        using var query = new TS.Query(_language, CallsQuery);
-        foreach (var match in query.Execute(root).Matches)
+
+        using (var query = new TS.Query(_language, CallsQuery))
         {
-            var callee = match.Captures.FirstOrDefault(c => c.Name == "call.callee")?.Node?.Text;
-            var callNode = match.Captures.FirstOrDefault(c => c.Name == "call.expr")?.Node;
-            if (callee is null || callNode is null || !knownNames.Contains(callee))
+            foreach (var match in query.Execute(root).Matches)
             {
-                continue;
+                var calleeNode = match.Captures.FirstOrDefault(c => c.Name == "call.callee")?.Node;
+                if (calleeNode is not null)
+                {
+                    TryRecordCall(calleeNode, knownNames, seen, relations);
+                }
             }
-
-            var enclosing = FindEnclosingCallable(callNode);
-            if (enclosing is null)
-            {
-                continue; // a call outside any function/method body (e.g. a top-level statement) - out of scope
-            }
-
-            var (sourceQualifiedName, sourceName) = QualifiedNameOfCallable(enclosing);
-            if (sourceName is null || !seen.Add((sourceQualifiedName, callee)))
-            {
-                continue;
-            }
-
-            relations.Add(new RelationDraft(sourceQualifiedName, callee, RelationKind.Calls));
         }
+
+        // Method-group/delegate references (see MethodGroupReferencesQuery's remarks): recorded as
+        // Calls too, through the same seen-dedup, rather than as a new RelationKind — a reference
+        // that hands a function to something else conceptually IS a call site.
+        using (var referencesQuery = new TS.Query(_language, MethodGroupReferencesQuery))
+        {
+            foreach (var match in referencesQuery.Execute(root).Matches)
+            {
+                var refNode = match.Captures.FirstOrDefault(c => c.Name == "ref.name")?.Node;
+                if (refNode is not null)
+                {
+                    TryRecordCall(refNode, knownNames, seen, relations);
+                }
+            }
+        }
+    }
+
+    private static void TryRecordCall(
+        TS.Node calleeNode,
+        HashSet<string> knownNames,
+        HashSet<(string Source, string Callee)> seen,
+        List<RelationDraft> relations)
+    {
+        var callee = calleeNode.Text;
+        if (!knownNames.Contains(callee))
+        {
+            return;
+        }
+
+        var enclosing = FindEnclosingCallable(calleeNode);
+        if (enclosing is null)
+        {
+            return; // a call outside any function/method body (e.g. a top-level statement) - out of scope
+        }
+
+        var (sourceQualifiedName, sourceName) = QualifiedNameOfCallable(enclosing);
+        if (sourceName is null || !seen.Add((sourceQualifiedName, callee)))
+        {
+            return;
+        }
+
+        relations.Add(new RelationDraft(sourceQualifiedName, callee, RelationKind.Calls));
     }
 
     private static TS.Node? FindEnclosingCallable(TS.Node node)

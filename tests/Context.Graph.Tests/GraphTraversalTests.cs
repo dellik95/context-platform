@@ -1,4 +1,5 @@
 using Context.Domain.Enums;
+using Context.Graph.Abstractions;
 using Context.Graph.Tests.Fixtures;
 using FluentAssertions;
 
@@ -81,6 +82,92 @@ public class GraphTraversalTests
         var neighbors = await traversal.NeighborsAsync(Guid.NewGuid(), kinds: null, hops: 3, CancellationToken.None);
 
         neighbors.Should().BeEmpty();
+    }
+
+    // ---- NeighborhoodAsync ------------------------------------------------
+
+    [Fact]
+    public async Task NeighborhoodAsync_OneHop_IncludesOriginAndOnlyEdgesWithinTheSet()
+    {
+        var (fixture, traversal) = await BuildAsync();
+
+        var neighborhood = await traversal.NeighborhoodAsync(fixture.Caller1.Id, kinds: null, hops: 1, CancellationToken.None);
+
+        // Nodes: origin (Caller1) plus the same three hop-1 neighbors NeighborsAsync finds.
+        neighborhood.Nodes.Select(n => n.Id).Should().BeEquivalentTo(new[]
+        {
+            fixture.Caller1.Id, fixture.Impl.Id, fixture.Caller2.Id, fixture.Test1.Id,
+        });
+
+        // Edges: the three touching Caller1 - NOT Impl -Implements-> Interface, since Interface
+        // isn't in the node set at hops:1.
+        neighborhood.Edges.Should().BeEquivalentTo(new[]
+        {
+            new GraphEdgeDto(fixture.Caller1.Id, fixture.Impl.Id, GraphEdgeKind.Calls),
+            new GraphEdgeDto(fixture.Caller2.Id, fixture.Caller1.Id, GraphEdgeKind.Calls),
+            new GraphEdgeDto(fixture.Test1.Id, fixture.Caller1.Id, GraphEdgeKind.Tests),
+        });
+    }
+
+    [Fact]
+    public async Task NeighborhoodAsync_TwoHops_IncludesTransitiveEdgeOnceBothEndpointsAreInRange()
+    {
+        var (fixture, traversal) = await BuildAsync();
+
+        var neighborhood = await traversal.NeighborhoodAsync(fixture.Caller1.Id, kinds: null, hops: 2, CancellationToken.None);
+
+        neighborhood.Nodes.Select(n => n.Id).Should().BeEquivalentTo(new[]
+        {
+            fixture.Caller1.Id, fixture.Impl.Id, fixture.Caller2.Id, fixture.Test1.Id, fixture.Interface.Id,
+        });
+
+        // Now Interface is in range too, so Impl -Implements-> Interface joins the edge set -
+        // every edge in the fixture is within two hops of Caller1.
+        neighborhood.Edges.Should().HaveCount(4);
+        neighborhood.Edges.Should().ContainEquivalentOf(
+            new GraphEdgeDto(fixture.Impl.Id, fixture.Interface.Id, GraphEdgeKind.Implements));
+    }
+
+    [Fact]
+    public async Task NeighborhoodAsync_KindFilter_AppliesToBothTraversalAndEdgeCollection()
+    {
+        var (fixture, traversal) = await BuildAsync();
+
+        var neighborhood = await traversal.NeighborhoodAsync(
+            fixture.Caller1.Id, kinds: new[] { GraphEdgeKind.Calls }, hops: 2, CancellationToken.None);
+
+        // Tests edge is excluded by the filter, so Test1 never enters the node set at all.
+        neighborhood.Nodes.Select(n => n.Id).Should().BeEquivalentTo(new[]
+        {
+            fixture.Caller1.Id, fixture.Impl.Id, fixture.Caller2.Id,
+        });
+        neighborhood.Edges.Should().BeEquivalentTo(new[]
+        {
+            new GraphEdgeDto(fixture.Caller1.Id, fixture.Impl.Id, GraphEdgeKind.Calls),
+            new GraphEdgeDto(fixture.Caller2.Id, fixture.Caller1.Id, GraphEdgeKind.Calls),
+        });
+    }
+
+    [Fact]
+    public async Task NeighborhoodAsync_ZeroHops_ReturnsEmpty()
+    {
+        var (fixture, traversal) = await BuildAsync();
+
+        var neighborhood = await traversal.NeighborhoodAsync(fixture.Caller1.Id, kinds: null, hops: 0, CancellationToken.None);
+
+        neighborhood.Nodes.Should().BeEmpty();
+        neighborhood.Edges.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task NeighborhoodAsync_UnknownNode_ReturnsEmpty()
+    {
+        var (_, traversal) = await BuildAsync();
+
+        var neighborhood = await traversal.NeighborhoodAsync(Guid.NewGuid(), kinds: null, hops: 3, CancellationToken.None);
+
+        neighborhood.Nodes.Should().BeEmpty();
+        neighborhood.Edges.Should().BeEmpty();
     }
 
     // ---- ShortestPathAsync ----------------------------------------------

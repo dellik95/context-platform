@@ -96,6 +96,42 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     }
 
     /// <summary>
+    /// Manual re-trigger for a permanently <see cref="JobStatus.Failed"/> job (System tab "retry"
+    /// button) — see <see cref="IJobQueue.RequeueAsync"/>. Resets the durable row to a fresh
+    /// attempt and then reuses <see cref="ScheduleOrEnqueueAsync"/> (the same helper
+    /// <see cref="HydrateOnStartupAsync"/> and <see cref="ScheduleRetry"/> feed into) to hand it
+    /// back to the live channel immediately, instead of leaving it Pending in the DB until the next
+    /// process restart's hydration pass would pick it up.
+    /// </summary>
+    public async Task RequeueAsync(Guid jobId, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
+
+        var job = await jobRepository.GetByIdAsync(jobId, ct).ConfigureAwait(false);
+        if (job is null)
+        {
+            throw new JobNotFoundException(jobId);
+        }
+
+        if (job.Status != JobStatus.Failed)
+        {
+            throw new JobNotRetryableException(jobId, job.Status);
+        }
+
+        job.Status = JobStatus.Pending;
+        job.Attempts = 0;
+        job.NextRetryAt = null;
+        job.StartedAt = null;
+        job.FinishedAt = null;
+        await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
+
+        _logger.LogInformation("Job {JobId} ({JobType}) manually requeued after permanent failure.", job.Id, job.Type);
+
+        await ScheduleOrEnqueueAsync(job.Id, job.NextRetryAt, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Loads every currently <see cref="JobStatus.Pending"/> job, plus every
     /// <see cref="JobStatus.Running"/> job (which — this being a single in-process dispatcher with
     /// no other writer of that status — can only mean the previous process crashed mid-job, so it

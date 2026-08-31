@@ -1,4 +1,6 @@
 using Context.Application;
+using Context.Domain.Enums;
+using Context.Graph.Abstractions;
 using Context.Infrastructure.Abstractions;
 
 namespace Context.Host.Api;
@@ -19,11 +21,13 @@ public sealed record SymbolSummaryDto(Guid Id, string Name, string QualifiedName
 public static class GraphEndpoints
 {
     private const int DefaultMaxHops = 3;
+    private const int DefaultNeighborhoodHops = 1;
     private const int DefaultSymbolSearchLimit = 20;
 
     public static void MapGraphEndpoints(this WebApplication app)
     {
         app.MapGet("/api/graph/impact", ImpactAsync);
+        app.MapGet("/api/graph/neighborhood", NeighborhoodAsync);
         app.MapGet("/api/symbols", SearchSymbolsAsync);
     }
 
@@ -31,6 +35,59 @@ public static class GraphEndpoints
     {
         var impact = await engine.GraphImpactAsync(symbolId, maxHops ?? DefaultMaxHops, ct).ConfigureAwait(false);
         return Results.Ok(impact);
+    }
+
+    private static async Task<IResult> NeighborhoodAsync(
+        Guid nodeId, int? hops, string[]? kinds,
+        IGraphTraversal graphTraversal, IGraphCacheProvider graphCacheProvider,
+        ISymbolRepository symbols, IFileRepository files, CancellationToken ct)
+    {
+        // IGraphTraversal is keyed purely by node id with no ProjectId of its own, and only warms a
+        // project's InMemoryGraphCache on the first access that project ever gets (see Context.
+        // Graph.GraphCacheProvider) - mirrors ContextEngine.GraphImpactAsync's/ContextMcpTools'
+        // WarmGraphCacheForNodeAsync dance so a cold, never-touched project's graph is found too.
+        var projectId = await ResolveProjectIdForNodeAsync(nodeId, symbols, files, ct).ConfigureAwait(false);
+        if (projectId is { } id)
+        {
+            await graphCacheProvider.GetOrCreateAsync(id, ct).ConfigureAwait(false);
+        }
+
+        var neighborhood = await graphTraversal.NeighborhoodAsync(
+            nodeId, ParseEdgeKinds(kinds), hops ?? DefaultNeighborhoodHops, ct).ConfigureAwait(false);
+        return Results.Ok(neighborhood);
+    }
+
+    private static async Task<Guid?> ResolveProjectIdForNodeAsync(
+        Guid nodeId, ISymbolRepository symbols, IFileRepository files, CancellationToken ct)
+    {
+        var symbol = await symbols.GetByIdAsync(nodeId, ct).ConfigureAwait(false);
+        if (symbol is not null)
+        {
+            var owningFile = await files.GetByIdAsync(symbol.FileId, ct).ConfigureAwait(false);
+            if (owningFile is not null)
+            {
+                return owningFile.ProjectId;
+            }
+        }
+
+        var file = await files.GetByIdAsync(nodeId, ct).ConfigureAwait(false);
+        return file?.ProjectId;
+    }
+
+    private static GraphEdgeKind[]? ParseEdgeKinds(string[]? kinds)
+    {
+        if (kinds is null || kinds.Length == 0)
+        {
+            return null;
+        }
+
+        var parsed = kinds
+            .Select(k => Enum.TryParse<GraphEdgeKind>(k, ignoreCase: true, out var kind) ? (GraphEdgeKind?)kind : null)
+            .Where(k => k.HasValue)
+            .Select(k => k!.Value)
+            .ToArray();
+
+        return parsed.Length == 0 ? null : parsed;
     }
 
     private static async Task<IResult> SearchSymbolsAsync(

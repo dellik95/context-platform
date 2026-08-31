@@ -84,6 +84,10 @@ namespace Context.Infrastructure.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Provider")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("TEXT");
 
@@ -95,16 +99,11 @@ namespace Context.Infrastructure.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("Provider")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("TEXT");
-
                     b.Property<byte[]>("Vector")
                         .IsRequired()
                         .HasColumnType("BLOB");
 
-                    b.HasKey("ContentHash");
+                    b.HasKey("ContentHash", "Provider");
 
                     b.ToTable("Embeddings", (string)null);
                 });

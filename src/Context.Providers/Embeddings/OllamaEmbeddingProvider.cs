@@ -2,6 +2,8 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Context.Providers.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Context.Providers.Embeddings;
 
@@ -9,6 +11,8 @@ namespace Context.Providers.Embeddings;
 /// HTTP-based embedding provider for a local Ollama server
 /// (POST {BaseUrl}/api/embeddings, default http://localhost:11434). Ollama's legacy
 /// embeddings endpoint accepts a single prompt per call, so batches are issued sequentially.
+/// Host resolution (including the container fallback-host retry) is delegated to
+/// <see cref="OllamaHostResolver"/>, shared with <see cref="Llm.OllamaLlmProvider"/>.
 /// </summary>
 public sealed class OllamaEmbeddingProvider : IEmbeddingProvider
 {
@@ -16,16 +20,16 @@ public sealed class OllamaEmbeddingProvider : IEmbeddingProvider
 
     private readonly HttpClient _http;
     private readonly OllamaOptions _options;
+    private readonly OllamaHostResolver _hostResolver;
     private int _dimensions;
 
-    public OllamaEmbeddingProvider(HttpClient httpClient, OllamaOptions options)
+    public OllamaEmbeddingProvider(HttpClient httpClient, OllamaOptions options, ILogger<OllamaEmbeddingProvider>? logger = null)
     {
         _http = httpClient;
         _options = options;
-        if (_http.BaseAddress is null && !string.IsNullOrWhiteSpace(_options.BaseUrl))
-        {
-            _http.BaseAddress = new Uri(_options.BaseUrl.TrimEnd('/') + "/");
-        }
+        // No fixed BaseAddress: OllamaHostResolver builds the full URI per request so it can
+        // retry against fallback hosts when running in a container (see its own remarks).
+        _hostResolver = new OllamaHostResolver(_http, _options.BaseUrl, "Ollama embeddings", logger ?? NullLogger<OllamaEmbeddingProvider>.Instance);
 
         _dimensions = options.Dimensions ?? 768;
     }
@@ -36,10 +40,12 @@ public sealed class OllamaEmbeddingProvider : IEmbeddingProvider
 
     public async Task<float[]> EmbedAsync(string text, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, "api/embeddings");
-        request.Content = JsonContent.Create(new OllamaEmbedRequest(_options.Model, text), options: JsonOptions);
+        using var response = await _hostResolver.SendAsync(
+            HttpMethod.Post,
+            "api/embeddings",
+            () => JsonContent.Create(new OllamaEmbedRequest(_options.Model, text), options: JsonOptions),
+            ct).ConfigureAwait(false);
 
-        using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
         var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
