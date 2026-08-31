@@ -14,6 +14,22 @@ internal static class MemoryExtractionPromptBuilder
         decision, a non-obvious discovery about the codebase, a completed feature/bugfix/refactor
         worth recording, or an open issue). Do not restate trivia.
 
+        Zero memories is a normal, often CORRECT answer — a session can do real work and still
+        contain nothing worth remembering. Do not manufacture a memory just to have something to
+        report. Skip entirely (do not propose a memory for):
+        - routine status/process narration with no durable outcome ("ran the tests", "reviewed the
+          file", "checked the logs") unless it led to a concrete fix or finding
+        - "tests passed" / "build succeeded" / "CI green" on their own, with no described change
+        - session bookkeeping (session started, workspace loaded, context files read)
+        - a task still in progress with no decision or conclusion yet
+
+        Titles must be outcome-focused (what changed or was learned), never process-focused (what
+        you did to find out). For example:
+        GOOD: "OAuth2 PKCE flow added to authentication"
+        GOOD: "Discovered flush strategy fails under concurrent sessions"
+        BAD:  "Analyzed authentication implementation" (describes the analysis, not what was found)
+        BAD:  "Reviewed session handling code" (process narration, no outcome)
+
         Respond in EXACTLY this format:
 
         MEMORY_COUNT: <n>
