@@ -40,6 +40,12 @@ internal static class MemoryExtractionPromptBuilder
         FACTS:
         - <fact 1>
         - <fact 2>
+        CONCEPTS:
+        - <concept 1>
+        FILES_READ:
+        - <path 1>
+        FILES_MODIFIED:
+        - <path 1>
         CONFIDENCE: <a number between 0.0 and 1.0>
         END_MEMORY
         MEMORY 2
@@ -49,6 +55,18 @@ internal static class MemoryExtractionPromptBuilder
         FACTS is 2-5 short, atomic, standalone facts pulled out of this memory — each one must
         make sense read on its own, with no surrounding narrative, since it is shown when a
         search result needs to say something useful in very few tokens.
+
+        CONCEPTS is 1-3 tags naming what KIND of knowledge this memory is, chosen ONLY from this
+        fixed list (do not invent new ones): how-it-works, why-it-exists, what-changed,
+        problem-solution, gotcha, pattern, trade-off. This lets a future search filter by kind of
+        insight instead of only matching text. Omit the CONCEPTS block entirely if none clearly apply.
+
+        FILES_READ / FILES_MODIFIED are the specific files THIS memory is about — not every file
+        touched in the whole session, only the ones this particular decision/fix/discovery
+        concerns. Use exact relative paths that literally appear in the session context below; never
+        invent a path. FILES_READ is for files that were examined/relevant but not changed;
+        FILES_MODIFIED is for files that were actually edited because of this memory's content. Omit
+        either block entirely if it doesn't apply (most memories only need FILES_MODIFIED, or neither).
 
         If n is 0, respond with only "MEMORY_COUNT: 0" and nothing else.
         """;

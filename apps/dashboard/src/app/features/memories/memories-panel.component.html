@@ -33,18 +33,66 @@
             @if (memory.supersededById) {
               <span class="superseded-label">superseded</span>
             }
+            <button
+              mat-icon-button
+              matTooltip="Delete this memory"
+              [disabled]="deletingId() === memory.id"
+              (click)="deleteMemory(memory)"
+            >
+              <mat-icon>delete_outline</mat-icon>
+            </button>
           </div>
 
-          @if (facts(memory); as memoryFacts) {
-            <ul class="memory-facts">
-              @for (fact of memoryFacts; track fact) {
-                <li>{{ fact }}</li>
-              }
-            </ul>
-            <p class="memory-body memory-body--secondary">{{ memory.body }}</p>
-          } @else {
-            <p class="memory-body">{{ memory.body }}</p>
-          }
+          <mat-tab-group class="memory-tabs" animationDuration="0ms">
+            @if (facts(memory); as memoryFacts) {
+              <mat-tab label="Facts">
+                <ul class="memory-facts">
+                  @for (fact of memoryFacts; track fact) {
+                    <li>{{ fact }}</li>
+                  }
+                </ul>
+              </mat-tab>
+            }
+            <mat-tab label="Narrative">
+              <p class="memory-body">{{ memory.body }}</p>
+            </mat-tab>
+            @if (hasDetails(memory)) {
+              <mat-tab label="Details">
+                <div class="memory-details">
+                  @if (concepts(memory); as memoryConcepts) {
+                    <div class="detail-group">
+                      <span class="detail-label">Concepts</span>
+                      <div class="chip-row">
+                        @for (concept of memoryConcepts; track concept) {
+                          <span class="concept-chip">{{ concept }}</span>
+                        }
+                      </div>
+                    </div>
+                  }
+                  @if (filesModified(memory); as modified) {
+                    <div class="detail-group">
+                      <span class="detail-label">Files modified</span>
+                      <ul class="file-list">
+                        @for (file of modified; track file) {
+                          <li>{{ file }}</li>
+                        }
+                      </ul>
+                    </div>
+                  }
+                  @if (filesRead(memory); as read) {
+                    <div class="detail-group">
+                      <span class="detail-label">Files read</span>
+                      <ul class="file-list">
+                        @for (file of read; track file) {
+                          <li>{{ file }}</li>
+                        }
+                      </ul>
+                    </div>
+                  }
+                </div>
+              </mat-tab>
+            }
+          </mat-tab-group>
 
           <div class="memory-meta">
             <span class="tier" [class.tier--working]="memory.tier === 'Working'">{{ memory.tier }}</span>

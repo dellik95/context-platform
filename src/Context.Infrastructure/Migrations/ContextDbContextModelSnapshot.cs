@@ -313,6 +313,9 @@ namespace Context.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ConceptsJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<double>("Confidence")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("REAL")
@@ -325,6 +328,12 @@ namespace Context.Infrastructure.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("FactsJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FilesModifiedJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FilesReadJson")
                         .HasColumnType("TEXT");
 
                     b.Property<DateTimeOffset>("LastReinforcedAt")

@@ -10,6 +10,9 @@ internal static partial class MemoryCandidateParser
 {
     private const double DefaultConfidence = 0.7;
 
+    /// <summary>Which bulleted-list section (if any) subsequent bullet lines belong to.</summary>
+    private enum ListSection { None, Facts, Concepts, FilesRead, FilesModified }
+
     public static IReadOnlyList<MemoryCandidate> Parse(string llmResponse)
     {
         var results = new List<MemoryCandidate>();
@@ -23,14 +26,25 @@ internal static partial class MemoryCandidateParser
         var confidence = DefaultConfidence;
         var body = new StringBuilder();
         var facts = new List<string>();
+        var concepts = new List<string>();
+        var filesRead = new List<string>();
+        var filesModified = new List<string>();
         var inBody = false;
-        var inFacts = false;
+        var currentList = ListSection.None;
 
         void Flush()
         {
             if (type is not null && !string.IsNullOrWhiteSpace(title))
             {
-                results.Add(new MemoryCandidate(type.Value, title.Trim(), body.ToString().Trim(), confidence, facts.ToList()));
+                results.Add(new MemoryCandidate(
+                    type.Value,
+                    title.Trim(),
+                    body.ToString().Trim(),
+                    confidence,
+                    facts.ToList(),
+                    concepts.ToList(),
+                    filesRead.ToList(),
+                    filesModified.ToList()));
             }
 
             type = null;
@@ -38,8 +52,11 @@ internal static partial class MemoryCandidateParser
             confidence = DefaultConfidence;
             body.Clear();
             facts.Clear();
+            concepts.Clear();
+            filesRead.Clear();
+            filesModified.Clear();
             inBody = false;
-            inFacts = false;
+            currentList = ListSection.None;
         }
 
         foreach (var rawLine in llmResponse.Replace("\r\n", "\n").Split('\n'))
@@ -66,6 +83,7 @@ internal static partial class MemoryCandidateParser
             {
                 title = titleMatch.Groups[1].Value.Trim();
                 inBody = false;
+                currentList = ListSection.None;
                 continue;
             }
 
@@ -73,7 +91,7 @@ internal static partial class MemoryCandidateParser
             if (confidenceMatch.Success)
             {
                 inBody = false;
-                inFacts = false;
+                currentList = ListSection.None;
                 if (double.TryParse(confidenceMatch.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedConfidence))
                 {
                     confidence = Math.Clamp(parsedConfidence, 0.0, 1.0);
@@ -88,7 +106,7 @@ internal static partial class MemoryCandidateParser
                 body.Clear();
                 body.AppendLine(bodyMatch.Groups[1].Value.Trim());
                 inBody = true;
-                inFacts = false;
+                currentList = ListSection.None;
                 continue;
             }
 
@@ -96,21 +114,53 @@ internal static partial class MemoryCandidateParser
             {
                 facts.Clear();
                 inBody = false;
-                inFacts = true;
+                currentList = ListSection.Facts;
                 continue;
             }
 
-            if (inFacts)
+            if (ConceptsHeaderRegex().IsMatch(trimmed))
+            {
+                concepts.Clear();
+                inBody = false;
+                currentList = ListSection.Concepts;
+                continue;
+            }
+
+            if (FilesReadHeaderRegex().IsMatch(trimmed))
+            {
+                filesRead.Clear();
+                inBody = false;
+                currentList = ListSection.FilesRead;
+                continue;
+            }
+
+            if (FilesModifiedHeaderRegex().IsMatch(trimmed))
+            {
+                filesModified.Clear();
+                inBody = false;
+                currentList = ListSection.FilesModified;
+                continue;
+            }
+
+            if (currentList != ListSection.None)
             {
                 // Malformed/missing bullets for this one field shouldn't fail the whole
-                // candidate — just skip lines that aren't recognizable fact bullets.
-                var factMatch = FactBulletRegex().Match(trimmed);
-                if (factMatch.Success)
+                // candidate — just skip lines that aren't recognizable bullets.
+                var bulletMatch = FactBulletRegex().Match(trimmed);
+                if (bulletMatch.Success)
                 {
-                    var fact = factMatch.Groups[1].Value.Trim();
-                    if (fact.Length > 0)
+                    var value = bulletMatch.Groups[1].Value.Trim();
+                    if (value.Length > 0)
                     {
-                        facts.Add(fact);
+                        var target = currentList switch
+                        {
+                            ListSection.Facts => facts,
+                            ListSection.Concepts => concepts,
+                            ListSection.FilesRead => filesRead,
+                            ListSection.FilesModified => filesModified,
+                            _ => null,
+                        };
+                        target?.Add(value);
                     }
                 }
 
@@ -147,6 +197,15 @@ internal static partial class MemoryCandidateParser
 
     [GeneratedRegex(@"^FACTS:\s*$", RegexOptions.IgnoreCase)]
     private static partial Regex FactsHeaderRegex();
+
+    [GeneratedRegex(@"^CONCEPTS:\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex ConceptsHeaderRegex();
+
+    [GeneratedRegex(@"^FILES_READ:\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex FilesReadHeaderRegex();
+
+    [GeneratedRegex(@"^FILES_MODIFIED:\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex FilesModifiedHeaderRegex();
 
     [GeneratedRegex(@"^[-*]\s*(.+)$")]
     private static partial Regex FactBulletRegex();

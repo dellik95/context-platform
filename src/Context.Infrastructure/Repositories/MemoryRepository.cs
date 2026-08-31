@@ -27,6 +27,18 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task DeleteAsync(Guid id, CancellationToken ct)
+    {
+        // MemoryConfiguration wires SupersededById as DeleteBehavior.Restrict, so a memory that
+        // superseded this one (its SupersededById points AT this row) would block the delete with
+        // an FK violation unless that pointer is cleared FIRST, not after.
+        await db.Memories.Where(m => m.SupersededById == id).ExecuteUpdateAsync(
+            setters => setters.SetProperty(m => m.SupersededById, (Guid?)null), ct);
+
+        await db.Memories.Where(m => m.Id == id).ExecuteDeleteAsync(ct);
+        // affected == 0 (id didn't exist) is a no-op, not an error — delete is idempotent here.
+    }
+
     public async Task<IReadOnlyList<Memory>> SearchAsync(Guid projectId, string query, bool includeSuperseded, CancellationToken ct)
     {
         var pattern = $"%{query}%";

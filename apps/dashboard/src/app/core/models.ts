@@ -15,6 +15,10 @@ export type GraphNodeKind =
   | 'Project' | 'Directory' | 'File' | 'Module' | 'Class' | 'Interface'
   | 'Function' | 'Method' | 'Type' | 'Variable' | 'Package' | 'Test' | 'UnresolvedExternal';
 
+export type GraphEdgeKind =
+  | 'Contains' | 'Imports' | 'Exports' | 'Calls' | 'References'
+  | 'Extends' | 'Implements' | 'Uses' | 'Tests' | 'DependsOn';
+
 export type JobType =
   | 'IndexFile' | 'DeleteFile' | 'ParseFile' | 'ResolveRelations' | 'UpdateGraph'
   | 'EmbedChunk' | 'SummarizeSession' | 'ExtractMemory' | 'DecayMemory' | 'BackupDb';
@@ -96,6 +100,12 @@ export interface Memory {
   title: string;
   body: string;
   factsJson: string | null;
+  // conceptsJson: fixed taxonomy tags (how-it-works, why-it-exists, what-changed,
+  // problem-solution, gotcha, pattern, trade-off). filesReadJson/filesModifiedJson: the specific
+  // files THIS memory is about (not every file touched in its session).
+  conceptsJson: string | null;
+  filesReadJson: string | null;
+  filesModifiedJson: string | null;
   confidence: number;
   tier: MemoryTier;
   pinned: boolean;
@@ -126,6 +136,21 @@ export interface ImpactSet {
   callers: ImpactNode[];
   implementers: ImpactNode[];
   coveringTests: ImpactNode[];
+}
+
+// Raw Context.Graph.Abstractions.GraphEdgeDto, part of GraphNeighborhoodDto below.
+export interface GraphEdgeDto {
+  sourceId: string;
+  targetId: string;
+  kind: GraphEdgeKind;
+}
+
+// Raw Context.Graph.Abstractions.GraphNeighborhood, returned as-is by GET /api/graph/neighborhood
+// -- the origin node plus every node/edge within `hops` hops of it, for the Graph tab's node/edge
+// visualization (ImpactSet above is flat caller/implementer/test lists with no edges to draw).
+export interface GraphNeighborhoodDto {
+  nodes: GraphNode[];
+  edges: GraphEdgeDto[];
 }
 
 export interface SymbolSummaryDto {

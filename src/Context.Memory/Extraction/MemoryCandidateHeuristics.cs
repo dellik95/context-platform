@@ -17,11 +17,15 @@ internal static class MemoryCandidateHeuristics
     public static IReadOnlyList<MemoryCandidate> FromSummary(SessionSummary summary)
     {
         var candidates = new List<MemoryCandidate>();
+        var changedFiles = ParseChangedFiles(summary.ChangedFilesJson);
 
+        // No LLM judgment is available offline to say WHICH files a Decision/Discovery/Issue
+        // candidate is specifically about, so those three don't get FilesModified populated here
+        // (an empty list is honest; guessing "all session files" for each would be misleading).
         TryAdd(candidates, MemoryType.Decision, summary.Decisions, 0.6);
         TryAdd(candidates, MemoryType.Discovery, summary.Discovered, 0.55);
         TryAdd(candidates, MemoryType.Issue, summary.OpenIssues, 0.5);
-        TryAddChangedFiles(candidates, summary.ChangedFilesJson);
+        TryAddChangedFiles(candidates, changedFiles);
 
         return candidates;
     }
@@ -44,27 +48,12 @@ internal static class MemoryCandidateHeuristics
         }
 
         var title = Truncate(firstLine, MaxTitleLength);
-        candidates.Add(new MemoryCandidate(type, title, section.Trim(), confidence, ExtractFacts(section)));
+        candidates.Add(new MemoryCandidate(type, title, section.Trim(), confidence, ExtractFacts(section), [], [], []));
     }
 
-    private static void TryAddChangedFiles(List<MemoryCandidate> candidates, string? changedFilesJson)
+    private static void TryAddChangedFiles(List<MemoryCandidate> candidates, IReadOnlyList<string> files)
     {
-        if (string.IsNullOrWhiteSpace(changedFilesJson))
-        {
-            return;
-        }
-
-        List<string>? files;
-        try
-        {
-            files = JsonSerializer.Deserialize<List<string>>(changedFilesJson);
-        }
-        catch (JsonException)
-        {
-            return;
-        }
-
-        if (files is null || files.Count == 0)
+        if (files.Count == 0)
         {
             return;
         }
@@ -72,7 +61,26 @@ internal static class MemoryCandidateHeuristics
         var title = Truncate($"Changed {files.Count} file(s): {string.Join(", ", files.Take(3))}", MaxTitleLength);
         var body = "Files touched this session:\n" + string.Join('\n', files.Select(f => $"- {f}"));
         var facts = files.Take(MaxFacts).Select(f => $"Changed {f}").ToList();
-        candidates.Add(new MemoryCandidate(MemoryType.Change, title, body, 0.5, facts));
+        // This candidate IS specifically about these files (that's its whole content), unlike the
+        // Decision/Discovery/Issue candidates above — FilesModified is accurate here, not a guess.
+        candidates.Add(new MemoryCandidate(MemoryType.Change, title, body, 0.5, facts, [], [], files));
+    }
+
+    private static IReadOnlyList<string> ParseChangedFiles(string? changedFilesJson)
+    {
+        if (string.IsNullOrWhiteSpace(changedFilesJson))
+        {
+            return [];
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(changedFilesJson) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
     }
 
     /// <summary>Turns a section's first few non-empty lines into standalone facts — a cheap

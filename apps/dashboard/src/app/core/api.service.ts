@@ -7,6 +7,7 @@ import {
   ClaudeInstallResponse,
   ContextPack,
   CreateProjectRequest,
+  GraphNeighborhoodDto,
   HealthResponse,
   ImpactSet,
   IndexTriggerResponse,
@@ -64,9 +65,19 @@ export class ApiService {
     return this.http.get<Memory[]>(`${this.base}/api/memories?${params.toString()}`);
   }
 
+  deleteMemory(id: string): Observable<void> {
+    return this.http.delete<void>(`${this.base}/api/memories/${id}`);
+  }
+
   graphImpact(symbolId: string, maxHops = 3): Observable<ImpactSet> {
     const params = new URLSearchParams({ symbolId, maxHops: String(maxHops) });
     return this.http.get<ImpactSet>(`${this.base}/api/graph/impact?${params.toString()}`);
+  }
+
+  getGraphNeighborhood(nodeId: string, hops = 1, kinds?: string[]): Observable<GraphNeighborhoodDto> {
+    const params = new URLSearchParams({ nodeId, hops: String(hops) });
+    for (const kind of kinds ?? []) params.append('kinds', kind);
+    return this.http.get<GraphNeighborhoodDto>(`${this.base}/api/graph/neighborhood?${params.toString()}`);
   }
 
   searchSymbols(projectId: string, query: string, limit = 20): Observable<SymbolSummaryDto[]> {

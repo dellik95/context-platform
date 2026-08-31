@@ -10,6 +10,8 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
+import { MatTabsModule } from '@angular/material/tabs';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { ApiService } from '../../core/api.service';
 import { Memory } from '../../core/models';
 import { SignalrService } from '../../core/signalr.service';
@@ -27,6 +29,8 @@ import { ProjectContextService } from '../projects/project-context.service';
     MatInputModule,
     MatCheckboxModule,
     MatProgressBarModule,
+    MatTabsModule,
+    MatTooltipModule,
   ],
   templateUrl: './memories-panel.component.html',
   styleUrl: './memories-panel.component.scss',
@@ -41,6 +45,7 @@ export class MemoriesPanelComponent {
 
   protected readonly memories = signal<Memory[]>([]);
   protected readonly loading = signal(true);
+  protected readonly deletingId = signal<string | null>(null);
 
   protected readonly form = this.fb.nonNullable.group({
     query: [''],
@@ -95,15 +100,58 @@ export class MemoriesPanelComponent {
   /** Parses Memory.factsJson (a JSON array of short bullet-point facts) — an LLM-produced field,
    *  so a parse failure is expected (not exceptional) and just hides the facts list. */
   protected facts(memory: Memory): string[] | null {
-    if (!memory.factsJson) {
+    return this.parseStringArray(memory.factsJson);
+  }
+
+  /** Memory.conceptsJson — fixed-taxonomy tags (see models.ts), same defensive-parse shape as facts(). */
+  protected concepts(memory: Memory): string[] | null {
+    return this.parseStringArray(memory.conceptsJson);
+  }
+
+  protected filesRead(memory: Memory): string[] | null {
+    return this.parseStringArray(memory.filesReadJson);
+  }
+
+  protected filesModified(memory: Memory): string[] | null {
+    return this.parseStringArray(memory.filesModifiedJson);
+  }
+
+  /** True when there's anything to show beyond the always-present Facts/Narrative tabs — controls
+   *  whether the Details tab renders at all, so an ordinary memory with no concepts/files doesn't
+   *  get an empty third tab. */
+  protected hasDetails(memory: Memory): boolean {
+    return this.concepts(memory) !== null || this.filesRead(memory) !== null || this.filesModified(memory) !== null;
+  }
+
+  private parseStringArray(json: string | null): string[] | null {
+    if (!json) {
       return null;
     }
     try {
-      const parsed = JSON.parse(memory.factsJson);
+      const parsed = JSON.parse(json);
       return Array.isArray(parsed) && parsed.length > 0 ? (parsed as string[]) : null;
     } catch {
       return null;
     }
+  }
+
+  protected deleteMemory(memory: Memory): void {
+    if (!confirm(`Delete this memory permanently?\n\n"${memory.title}"`)) {
+      return;
+    }
+
+    this.deletingId.set(memory.id);
+    this.api.deleteMemory(memory.id).subscribe({
+      next: () => {
+        this.memories.update((current) => current.filter((m) => m.id !== memory.id));
+        this.deletingId.set(null);
+        this.snackBar.open('Memory deleted.', 'Dismiss', { duration: 3000 });
+      },
+      error: () => {
+        this.deletingId.set(null);
+        this.snackBar.open('Failed to delete memory.', 'Dismiss');
+      },
+    });
   }
 
   /** Small distinct chip styling for the handful of most common memory types; the rest fall back to a neutral chip. */

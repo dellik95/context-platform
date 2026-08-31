@@ -101,12 +101,67 @@
 
 .memory-facts {
   margin: 0;
-  padding-left: 20px;
+  padding: 4px 0 4px 20px;
   display: flex;
   flex-direction: column;
   gap: 4px;
   font-weight: 500;
   line-height: 1.4;
+}
+
+// mat-tab-group already renders its own ink-bar/header chrome — this just gives the tab body a
+// touch of breathing room so content doesn't sit flush against the tab strip.
+.memory-tabs {
+  ::ng-deep .mat-mdc-tab-body-content {
+    padding: 12px 0 0;
+  }
+}
+
+.memory-details {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.detail-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detail-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.concept-chip {
+  display: inline-flex;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--mat-sys-tertiary-container);
+  color: var(--mat-sys-on-tertiary-container);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.file-list {
+  margin: 0;
+  padding-left: 20px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.82rem;
+
+  li {
+    margin-bottom: 2px;
+  }
 }
 
 .memory-meta {
