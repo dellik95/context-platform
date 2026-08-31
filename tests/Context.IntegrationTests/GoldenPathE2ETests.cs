@@ -14,7 +14,6 @@ using Context.Retrieval.Abstractions;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using DomainFile = Context.Domain.Entities.File;
 using DomainMemory = Context.Domain.Entities.Memory;
 
 namespace Context.IntegrationTests;

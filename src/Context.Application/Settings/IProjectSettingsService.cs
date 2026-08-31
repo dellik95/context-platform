@@ -2,11 +2,17 @@ namespace Context.Application.Settings;
 
 public interface IProjectSettingsService
 {
-    // Returns saved settings from Project.ConfigJson; if a project has never saved settings,
-    // returns a DTO seeded from the host's current IOptions<Context.Providers.ContextProvidersOptions>
-    // (so the UI shows real effective values, not blanks) with ReindexEnabled=false, ReindexIntervalMinutes=60.
+    // Returns effective settings merged from appsettings defaults, Project.ConfigJson (database),
+    // and optional project-local overrides in .claude/context-platform.local.json (settings node).
     Task<ProjectSettingsDto> GetAsync(Guid projectId, CancellationToken ct);
 
     // Serializes settings to Project.ConfigJson and persists via IProjectRepository.UpdateAsync.
+    // Used by internal services (schedulers) for DB-backed state updates.
     Task UpdateAsync(Guid projectId, ProjectSettingsDto settings, CancellationToken ct);
+
+    // Writes settings into the project-local .claude/context-platform.local.json "settings" node.
+    Task UpdateLocalAsync(Guid projectId, ProjectSettingsDto settings, CancellationToken ct);
+
+    // Applies the requested write target for runtime API callers.
+    Task UpdateAsync(Guid projectId, ProjectSettingsDto settings, ProjectSettingsWriteTarget target, CancellationToken ct);
 }

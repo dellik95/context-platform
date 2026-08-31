@@ -42,7 +42,7 @@ public sealed class ContextHostOptions
         var root = Path.GetFullPath(
             configuration["CONTEXT_PLATFORM_ROOT"] is { Length: > 0 } configuredRoot
                 ? configuredRoot
-                : Directory.GetCurrentDirectory());
+                : FindDefaultProjectRoot());
 
         var dataDir = Path.Combine(root, ".context");
         var dbPath = Path.Combine(dataDir, "context.db");
@@ -68,4 +68,26 @@ public sealed class ContextHostOptions
             BindHost = bindHost
         };
     }
+
+    // `dotnet run` (unlike Visual Studio's F5) does NOT apply launchSettings.json's
+    // "workingDirectory", so Directory.GetCurrentDirectory() depends on whatever folder the shell
+    // happened to be in - e.g. running from apps/host/Context.Host itself silently binds to THAT
+    // folder instead of the repo checked out around it, creating a second, disconnected
+    // .context database with none of the settings/history the real one has. Prefer the nearest
+    // ancestor of this binary's own (fixed) location that looks like a repo root instead; only
+    // fall back to cwd if none is found (e.g. published standalone with no .git, where
+    // CONTEXT_PLATFORM_ROOT is expected to be set explicitly anyway - see Dockerfile/deploy/).
+    private static string FindDefaultProjectRoot()
+    {
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+            if (Directory.Exists(Path.Combine(dir.FullName, ".git")))
+            {
+                return dir.FullName;
+            }
+        }
+
+        return Directory.GetCurrentDirectory();
+    }
 }
+

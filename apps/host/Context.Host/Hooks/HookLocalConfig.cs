@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Context.Host.Hooks;
@@ -12,4 +13,5 @@ public sealed record HookLocalConfig(
     [property: JsonPropertyName("projectId")] string? ProjectId,
     [property: JsonPropertyName("port")] int Port,
     [property: JsonPropertyName("bearerToken")] string? BearerToken,
-    [property: JsonPropertyName("generatedAt")] string? GeneratedAt);
+    [property: JsonPropertyName("generatedAt")] string? GeneratedAt,
+    [property: JsonPropertyName("settings")] JsonElement? Settings = null);

@@ -3,6 +3,8 @@ using Context.Providers.Embeddings;
 using Context.Providers.Llm;
 using Context.Providers.Reranking;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Context.Providers;
 
@@ -21,6 +23,7 @@ public static class ServiceCollectionExtensions
     {
         options ??= new ContextProvidersOptions();
 
+        services.AddSingleton(Options.Create(options));
         services.AddSingleton(options.OpenAi);
         services.AddSingleton(options.Ollama);
         services.AddSingleton(options.OllamaChat);
@@ -30,10 +33,12 @@ public static class ServiceCollectionExtensions
         switch (options.EmbeddingProvider.Trim().ToLowerInvariant())
         {
             case "openai":
-                services.AddHttpClient<IEmbeddingProvider, OpenAiEmbeddingProvider>();
+                services.AddSingleton<IEmbeddingProvider, OpenAiEmbeddingProvider>();
                 break;
             case "ollama":
-                services.AddHttpClient<IEmbeddingProvider, OllamaEmbeddingProvider>();
+                services.AddHttpClient<IEmbeddingProvider, OllamaEmbeddingProvider>()
+                    .AddHttpMessageHandler(sp => new OllamaHostFallbackHandler(
+                        options.Ollama.BaseUrl, "Ollama embeddings", sp.GetService<ILoggerFactory>()?.CreateLogger<OllamaHostFallbackHandler>()));
                 break;
             case "noop":
             default:
@@ -58,7 +63,9 @@ public static class ServiceCollectionExtensions
                 services.AddHttpClient<ILlmProvider, AnthropicLlmProvider>();
                 break;
             case "ollama":
-                services.AddHttpClient<ILlmProvider, OllamaLlmProvider>();
+                services.AddHttpClient<ILlmProvider, OllamaLlmProvider>()
+                    .AddHttpMessageHandler(sp => new OllamaHostFallbackHandler(
+                        options.OllamaChat.BaseUrl, "Ollama chat", sp.GetService<ILoggerFactory>()?.CreateLogger<OllamaHostFallbackHandler>()));
                 break;
             case "noop":
             default:

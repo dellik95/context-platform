@@ -1,4 +1,5 @@
 using Context.Domain.Enums;
+using Microsoft.Extensions.Options;
 
 namespace Context.Retrieval.Scoring;
 
@@ -9,11 +10,11 @@ namespace Context.Retrieval.Scoring;
 /// </summary>
 public sealed class HybridScorer : IHybridScorer
 {
-    public const double DefaultLexicalWeight = 0.25;
-    public const double DefaultVectorWeight = 0.35;
+    public const double DefaultLexicalWeight = 0.20;
+    public const double DefaultVectorWeight = 0.45;
     public const double DefaultGraphWeight = 0.20;
     public const double DefaultRecencyWeight = 0.10;
-    public const double DefaultMemoryWeight = 0.10;
+    public const double DefaultMemoryWeight = 0.05;
 
     /// <summary>
     /// Codemem-inspired kind-based re-rank bonus (ROADMAP.md's "hybrid pack re-ranking
@@ -37,20 +38,29 @@ public sealed class HybridScorer : IHybridScorer
     };
 
     private readonly HybridScoringOptions _options;
+    private readonly IOptionsMonitor<HybridScoringOptions>? _optionsMonitor;
 
     public HybridScorer(HybridScoringOptions? options = null)
     {
         _options = options ?? new HybridScoringOptions();
     }
 
+    public HybridScorer(IOptionsMonitor<HybridScoringOptions> optionsMonitor)
+    {
+        _optionsMonitor = optionsMonitor;
+        _options = optionsMonitor.CurrentValue;
+    }
+
     public double Combine(NormalizedSignals signals)
     {
+        var options = _optionsMonitor?.CurrentValue ?? _options;
+
         var score =
-            _options.LexicalWeight * Clamp01(signals.Lexical01) +
-            _options.VectorWeight * Clamp01(signals.Vector01) +
-            _options.GraphWeight * Clamp01(signals.Graph01) +
-            _options.RecencyWeight * Clamp01(signals.Recency01) +
-            _options.MemoryWeight * Clamp01(signals.Memory01);
+            options.LexicalWeight * Clamp01(signals.Lexical01) +
+            options.VectorWeight * Clamp01(signals.Vector01) +
+            options.GraphWeight * Clamp01(signals.Graph01) +
+            options.RecencyWeight * Clamp01(signals.Recency01) +
+            options.MemoryWeight * Clamp01(signals.Memory01);
 
         return Clamp01(score);
     }

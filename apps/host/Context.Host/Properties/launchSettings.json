@@ -2,7 +2,9 @@
   "profiles": {
     "Context.Host": {
       "commandName": "Project",
-      "launchBrowser": false,
+      "launchBrowser": true,
+      "applicationUrl": "http://127.0.0.1:47923",
+      "workingDirectory": "..\\..\\..\\",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       }

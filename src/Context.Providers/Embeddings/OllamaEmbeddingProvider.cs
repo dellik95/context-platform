@@ -1,36 +1,39 @@
-using System.Net.Http.Json;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using Context.Providers.Abstractions;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using OllamaSharp;
 
 namespace Context.Providers.Embeddings;
 
 /// <summary>
-/// HTTP-based embedding provider for a local Ollama server
-/// (POST {BaseUrl}/api/embeddings, default http://localhost:11434). Ollama's legacy
-/// embeddings endpoint accepts a single prompt per call, so batches are issued sequentially.
-/// Host resolution (including the container fallback-host retry) is delegated to
-/// <see cref="OllamaHostResolver"/>, shared with <see cref="Llm.OllamaLlmProvider"/>.
+/// Embedding provider for a local Ollama server, built on OllamaSharp's
+/// <see cref="IEmbeddingGenerator{TInput,TEmbedding}"/> implementation (Microsoft.Extensions.AI)
+/// instead of hand-rolled HTTP calls. Host resolution (including the container fallback-host
+/// retry) is delegated to <see cref="OllamaHostFallbackHandler"/>, attached to the HttpClient this
+/// is constructed with (see ServiceCollectionExtensions), shared with <see cref="Llm.OllamaLlmProvider"/>.
 /// </summary>
 public sealed class OllamaEmbeddingProvider : IEmbeddingProvider
 {
-    private static readonly JsonSerializerOptions JsonOptions = new();
+    // Different embedding models have different context windows (e.g. embeddinggemma vs.
+    // nomic-embed-text), and Ollama doesn't expose it up front - so rather than guess a token
+    // budget per model, an oversized chunk/file-summary is retried with the prompt halved each
+    // time until it fits, capped so a truly pathological input still fails fast instead of
+    // halving down to a near-empty (and therefore useless) embedding.
+    private const int MaxContextLengthRetries = 5;
+    private const int MinRetryTextLength = 64;
 
-    private readonly HttpClient _http;
+    private readonly IEmbeddingGenerator<string, Embedding<float>> _generator;
     private readonly OllamaOptions _options;
-    private readonly OllamaHostResolver _hostResolver;
+    private readonly ILogger _logger;
     private int _dimensions;
 
     public OllamaEmbeddingProvider(HttpClient httpClient, OllamaOptions options, ILogger<OllamaEmbeddingProvider>? logger = null)
     {
-        _http = httpClient;
         _options = options;
-        // No fixed BaseAddress: OllamaHostResolver builds the full URI per request so it can
-        // retry against fallback hosts when running in a container (see its own remarks).
-        _hostResolver = new OllamaHostResolver(_http, _options.BaseUrl, "Ollama embeddings", logger ?? NullLogger<OllamaEmbeddingProvider>.Instance);
-
+        _logger = logger ?? NullLogger<OllamaEmbeddingProvider>.Instance;
+        httpClient.BaseAddress ??= new Uri(options.BaseUrl.TrimEnd('/') + "/");
+        _generator = new OllamaApiClient(httpClient, options.Model);
         _dimensions = options.Dimensions ?? 768;
     }
 
@@ -40,24 +43,31 @@ public sealed class OllamaEmbeddingProvider : IEmbeddingProvider
 
     public async Task<float[]> EmbedAsync(string text, CancellationToken ct)
     {
-        using var response = await _hostResolver.SendAsync(
-            HttpMethod.Post,
-            "api/embeddings",
-            () => JsonContent.Create(new OllamaEmbedRequest(_options.Model, text), options: JsonOptions),
-            ct).ConfigureAwait(false);
-
-        var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
+        var prompt = text;
+        for (var attempt = 1; ; attempt++)
         {
-            throw new InvalidOperationException(
-                $"Ollama embeddings request failed with status {(int)response.StatusCode}: {body}");
+            try
+            {
+                var result = await _generator
+                    .GenerateAsync(prompt, new EmbeddingGenerationOptions { ModelId = _options.Model }, ct)
+                    .ConfigureAwait(false);
+
+                var vector = result.Vector.ToArray();
+                _dimensions = vector.Length;
+                return vector;
+            }
+            catch (Exception ex) when (
+                ex is not OperationCanceledException
+                && IsContextLengthError(ex)
+                && attempt < MaxContextLengthRetries
+                && prompt.Length > MinRetryTextLength)
+            {
+                prompt = prompt[..(prompt.Length / 2)];
+                _logger.LogWarning(
+                    "Ollama embeddings model '{Model}' rejected a {OriginalLength}-char prompt as exceeding its context length; retrying attempt {Attempt} truncated to {TruncatedLength} chars.",
+                    _options.Model, text.Length, attempt + 1, prompt.Length);
+            }
         }
-
-        var parsed = JsonSerializer.Deserialize<OllamaEmbedResponse>(body, JsonOptions)
-            ?? throw new InvalidOperationException("Ollama embeddings response could not be parsed.");
-
-        _dimensions = parsed.Embedding.Length;
-        return parsed.Embedding;
     }
 
     public async Task<float[][]> EmbedBatchAsync(IReadOnlyList<string> texts, CancellationToken ct)
@@ -72,10 +82,6 @@ public sealed class OllamaEmbeddingProvider : IEmbeddingProvider
         return results;
     }
 
-    private sealed record OllamaEmbedRequest(
-        [property: JsonPropertyName("model")] string Model,
-        [property: JsonPropertyName("prompt")] string Prompt);
-
-    private sealed record OllamaEmbedResponse(
-        [property: JsonPropertyName("embedding")] float[] Embedding);
+    private static bool IsContextLengthError(Exception ex) =>
+        ex.Message.Contains("context length", StringComparison.OrdinalIgnoreCase);
 }

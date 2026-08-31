@@ -87,9 +87,9 @@ export class SettingsPanelComponent {
         this.form.reset({
           embeddingProvider: settings.embeddingProvider,
           llmProvider: settings.llmProvider,
-          ollamaBaseUrl: settings.ollamaBaseUrl ?? '',
-          ollamaEmbeddingModel: settings.ollamaEmbeddingModel ?? '',
-          ollamaChatModel: settings.ollamaChatModel ?? '',
+          ollamaBaseUrl: settings.ollamaBaseUrl ?? 'http://localhost:11434',
+          ollamaEmbeddingModel: settings.ollamaEmbeddingModel ?? 'embeddinggemma',
+          ollamaChatModel: settings.ollamaChatModel ?? 'qwen2.5-coder:1.5b',
           reindexEnabled: settings.reindexEnabled,
           reindexIntervalMinutes: settings.reindexIntervalMinutes,
           sessionSummaryEnabled: settings.sessionSummaryIntervalMinutes > 0,

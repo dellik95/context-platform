@@ -1,5 +1,4 @@
 using Context.Domain.Enums;
-using Context.Indexing;
 using Context.Indexing.Abstractions;
 using FluentAssertions;
 

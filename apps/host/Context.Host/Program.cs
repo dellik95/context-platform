@@ -1,7 +1,8 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Context.Application;
+using Context.Application.Settings;
 using Context.Claude;
-using Context.Claude.Installation;
 using Context.Domain.Entities;
 using Context.Graph;
 using Context.Host;
@@ -9,7 +10,6 @@ using Context.Host.Api;
 using Context.Host.BackgroundServices;
 using Context.Host.Hooks;
 using Context.Host.Hubs;
-using Context.Host.Mcp;
 using Context.Indexing;
 using Context.Infrastructure;
 using Context.Infrastructure.Abstractions;
@@ -19,7 +19,14 @@ using Context.Retrieval;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 
-var hostOptions = ContextHostOptions.FromEnvironment(new ConfigurationBuilder().AddEnvironmentVariables().Build());
+var startupConfiguration = new ConfigurationBuilder()
+    .SetBasePath(Directory.GetCurrentDirectory())
+    .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+    .AddJsonFile($"appsettings.{Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production"}.json", optional: true, reloadOnChange: true)
+    .AddEnvironmentVariables()
+    .Build();
+
+var hostOptions = ContextHostOptions.FromEnvironment(startupConfiguration);
 Directory.CreateDirectory(hostOptions.ProjectDataDir);
 var logsDir = Path.Combine(hostOptions.ProjectDataDir, "logs");
 Directory.CreateDirectory(logsDir);
@@ -40,31 +47,18 @@ try
         "Starting Context.Host — project root {ProjectRoot}, bind {BindHost}:{Port}",
         hostOptions.ProjectRoot, hostOptions.BindHost, hostOptions.Port);
 
-    // ContentRootPath must NOT default to the current working directory: that's
-    // CONTEXT_PLATFORM_ROOT's mounted project (e.g. Docker's WORKDIR /workspace), which has
-    // nothing to do with where this executable — and the wwwroot published beside it — actually
-    // live. Pin it to the binary's own directory so UseStaticFiles/MapFallbackToFile below (and
-    // the Directory.Exists("wwwroot") check) resolve correctly regardless of the launch cwd.
     var builder = WebApplication.CreateBuilder(new WebApplicationOptions
     {
         Args = args,
         ContentRootPath = AppContext.BaseDirectory,
     });
-    // AddSingleton<TService>(TService) requires a reference type; HostStartTime is a value type, so
-    // register it through the non-generic Type/instance overload instead.
+
     builder.Services.AddSingleton(typeof(HostStartTime), new HostStartTime(DateTimeOffset.UtcNow));
 
-    // Single-process, local-only host (spec's "one host process" decision): bind Kestrel per
-    // ContextHostOptions.BindHost — loopback-only bare-metal, 0.0.0.0 in a container (see that
-    // property's remarks for how the container case still keeps the same effective boundary).
     builder.WebHost.UseUrls($"http://{hostOptions.BindHost}:{hostOptions.Port}");
 
     builder.Host.UseSerilog();
 
-    // Both calls are no-ops unless the process was actually launched by that platform's service
-    // manager (Windows SCM / systemd), so it's safe to call both on every OS — this is what lets
-    // the exact same published binary run interactively, as a Windows Service, or as a systemd
-    // unit. See deploy/ for the corresponding service definitions.
     builder.Host.UseWindowsService(o => o.ServiceName = "ContextPlatformHost");
     builder.Host.UseSystemd();
 
@@ -72,54 +66,39 @@ try
     builder.Services.AddSingleton<HostProjectContext>();
     builder.Services.AddSingleton<ClaudeSessionMap>();
 
-    // --- Every layer's own AddContextX, in dependency order (CONTRACTS.md §11). ---
     builder.Services.AddContextInfrastructure(hostOptions.DbPath);
     builder.Services.AddContextIndexing();
     builder.Services.AddContextGraph();
-    builder.Services.AddContextRetrieval();
+    var retrievalScoringOptions = BuildHybridScoringOptions(builder.Configuration);
+    var retrievalSearchOptions = BuildHybridSearchOptions(builder.Configuration);
+    var retrievalPackOptions = BuildContextPackOptions(builder.Configuration);
+    builder.Services.AddContextRetrieval(retrievalScoringOptions, retrievalSearchOptions, retrievalPackOptions);
     builder.Services.AddContextMemory();
-    var providersOptions = BuildProvidersOptions(builder.Configuration);
+    // The Settings tab's saved .claude/context-platform.local.json overrides CONTEXT_* env vars -
+    // this is what "Provider changes require a Context.Host restart" in the Dashboard refers to.
+    var localProjectSettings = await TryReadLocalProjectSettingsAsync(hostOptions.ProjectRoot).ConfigureAwait(false);
+    var providersOptions = BuildProvidersOptions(builder.Configuration, localProjectSettings);
     builder.Services.AddContextProviders(providersOptions);
-    // AddContextProviders takes the options as a plain instance (see its own signature) and never
-    // registers IOptions<ContextProvidersOptions> itself - ProjectSettingsService needs the real
-    // values (not the framework's silently-empty default IOptions<T>) to seed a project's
-    // never-configured settings from what this host is actually running with.
+
     builder.Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(providersOptions));
     builder.Services.AddContextClaude(o => o.HostPort = hostOptions.Port);
 
-    // Context.Application composes every layer above plus the seam adapters between them, and
-    // registers JobDispatcher as the app's own IHostedService (HydrateOnStartupAsync then
-    // StartProcessingAsync run automatically as part of the host's own startup - see
-    // Context.Application.ServiceCollectionExtensions.AddJobDispatcher).
     builder.Services.AddContextApplication(hostOptions.ProjectDataDir);
 
     builder.Services.AddHostedService<FileWatcherHostedService>();
 
     builder.Services.AddOpenApi();
 
-    // Every JSON response (Memory.Type/Tier, GraphNode.Kind, etc.) should read as "Decision"/
-    // "Class", not a bare ordinal — the Dashboard and any other API consumer shouldn't need to
-    // hardcode this project's enum member order.
     builder.Services.ConfigureHttpJsonOptions(o =>
         o.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 
-    // Dashboard live updates (spec §13) — Angular clients join a per-project group and receive
-    // ProjectStatusChanged pushes from ProjectEndpoints' background reindex, instead of polling.
     builder.Services.AddSignalR()
         .AddJsonProtocol(o => o.PayloadSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
     builder.Services.AddSingleton<IndexingHubNotifier>();
 
-    // Overrides AddContextApplication's NullIndexingProgressReporter default (last AddSingleton for
-    // a given interface wins) - same override mechanism AddContextProviders already relies on for
-    // its own placeholder-provider registrations.
     builder.Services.AddSingleton<Context.Application.Indexing.IIndexingProgressReporter, Context.Host.Hubs.SignalRIndexingProgressReporter>();
     builder.Services.AddSingleton<Context.Application.Notifications.IProjectActivityNotifier, Context.Host.Hubs.SignalRProjectActivityNotifier>();
 
-    // The API/hub is loopback-only at the network level (ContextHostOptions.BindHost/Docker port
-    // publish) — CORS here only governs which *browser origins* may call it, and a locally-run
-    // Angular dev server (ng serve, a different port on the same machine) is exactly that case.
-    // Permissive by design: anything that can already reach this loopback-bound port is already
-    // within the same local-first trust boundary the rest of the app assumes.
     const string DashboardCorsPolicy = "Dashboard";
     builder.Services.AddCors(o => o.AddPolicy(DashboardCorsPolicy, p => p
         .SetIsOriginAllowed(_ => true)
@@ -127,21 +106,12 @@ try
         .AllowAnyMethod()
         .AllowCredentials()));
 
-    // MCP server hosted inside this same ASP.NET Core process (spec §9.14/§10): the installed
-    // ModelContextProtocol.AspNetCore preview exposes a streamable-HTTP transport that maps onto
-    // the existing app via WithHttpTransport()/MapMcp() rather than stdio - see the remarks below
-    // MapMcp() call for the resulting mismatch with ClaudeIntegrationOptions' stdio-based
-    // .mcp.json entry.
     builder.Services.AddMcpServer()
         .WithHttpTransport()
         .WithToolsFromAssembly();
 
     var app = builder.Build();
 
-    // Unlike Context.Cli (which migrates explicitly per command), this is the only entrypoint
-    // that owns the database for as long as the host process runs, so it must bring the schema
-    // up to date itself on every startup — MigrateAsync is a no-op once already current, so this
-    // is safe to run unconditionally (including on every container restart).
     await using (var migrationScope = app.Services.CreateAsyncScope())
     {
         var db = migrationScope.ServiceProvider.GetRequiredService<ContextDbContext>();
@@ -198,35 +168,137 @@ finally
     await Log.CloseAndFlushAsync();
 }
 
-static ContextProvidersOptions BuildProvidersOptions(IConfiguration configuration)
+static Context.Retrieval.Scoring.HybridScoringOptions BuildHybridScoringOptions(IConfiguration configuration)
+{
+    var section = configuration.GetSection("ContextPlatform:Retrieval:Scoring");
+
+    return new Context.Retrieval.Scoring.HybridScoringOptions
+    {
+        LexicalWeight = double.TryParse(section["LexicalWeight"], out var lexical) ? lexical : Context.Retrieval.Scoring.HybridScorer.DefaultLexicalWeight,
+        VectorWeight = double.TryParse(section["VectorWeight"], out var vector) ? vector : Context.Retrieval.Scoring.HybridScorer.DefaultVectorWeight,
+        GraphWeight = double.TryParse(section["GraphWeight"], out var graph) ? graph : Context.Retrieval.Scoring.HybridScorer.DefaultGraphWeight,
+        RecencyWeight = double.TryParse(section["RecencyWeight"], out var recency) ? recency : Context.Retrieval.Scoring.HybridScorer.DefaultRecencyWeight,
+        MemoryWeight = double.TryParse(section["MemoryWeight"], out var memory) ? memory : Context.Retrieval.Scoring.HybridScorer.DefaultMemoryWeight,
+    };
+}
+
+static Context.Retrieval.HybridSearchOptions BuildHybridSearchOptions(IConfiguration configuration)
+{
+    var section = configuration.GetSection("ContextPlatform:Retrieval:Search");
+
+    return new Context.Retrieval.HybridSearchOptions
+    {
+        GraphExpansionSeedCount = int.TryParse(section["GraphExpansionSeedCount"], out var seeds)
+            ? seeds
+            : Context.Retrieval.HybridSearchEngine.DefaultGraphExpansionSeedCount,
+        GraphExpansionHops = int.TryParse(section["GraphExpansionHops"], out var hops)
+            ? hops
+            : Context.Retrieval.HybridSearchEngine.DefaultGraphExpansionHops,
+        RerankTopK = int.TryParse(section["RerankTopK"], out var rerankTopK)
+            ? rerankTopK
+            : Context.Retrieval.HybridSearchEngine.DefaultRerankTopK,
+        SemanticBoostEnabled = bool.TryParse(section["SemanticBoostEnabled"], out var semanticBoostEnabled)
+            ? semanticBoostEnabled
+            : true,
+        SemanticStrongMatchThreshold = double.TryParse(section["SemanticStrongMatchThreshold"], out var semanticStrongMatchThreshold)
+            ? semanticStrongMatchThreshold
+            : Context.Retrieval.HybridSearchEngine.DefaultSemanticStrongMatchThreshold,
+        SemanticBoostFactor = double.TryParse(section["SemanticBoostFactor"], out var semanticBoostFactor)
+            ? semanticBoostFactor
+            : Context.Retrieval.HybridSearchEngine.DefaultSemanticBoostFactor,
+    };
+}
+
+static Context.Retrieval.ContextPackOptions BuildContextPackOptions(IConfiguration configuration)
+{
+    var section = configuration.GetSection("ContextPlatform:Retrieval:ContextPack");
+
+    return new Context.Retrieval.ContextPackOptions
+    {
+        ArchitectureReserveRatio = double.TryParse(section["ArchitectureReserveRatio"], out var architectureReserve)
+            ? architectureReserve
+            : Context.Retrieval.ContextPackBuilder.DefaultArchitectureReserveRatio,
+        PrimaryReserveRatio = double.TryParse(section["PrimaryReserveRatio"], out var primaryReserve)
+            ? primaryReserve
+            : Context.Retrieval.ContextPackBuilder.DefaultPrimaryReserveRatio,
+        HistoricalReserveRatio = double.TryParse(section["HistoricalReserveRatio"], out var historicalReserve)
+            ? historicalReserve
+            : Context.Retrieval.ContextPackBuilder.DefaultHistoricalReserveRatio,
+        OpenIssuesReserveRatio = double.TryParse(section["OpenIssuesReserveRatio"], out var openIssuesReserve)
+            ? openIssuesReserve
+            : Context.Retrieval.ContextPackBuilder.DefaultOpenIssuesReserveRatio,
+        SafetyReserveRatio = double.TryParse(section["SafetyReserveRatio"], out var safetyReserve)
+            ? safetyReserve
+            : Context.Retrieval.ContextPackBuilder.DefaultSafetyReserveRatio,
+    };
+}
+
+static async Task<ProjectSettingsDto?> TryReadLocalProjectSettingsAsync(string projectRoot)
+{
+    var path = Path.Combine(projectRoot, ".claude", "context-platform.local.json");
+    if (!System.IO.File.Exists(path))
+    {
+        return null;
+    }
+
+    try
+    {
+        var json = await System.IO.File.ReadAllTextAsync(path).ConfigureAwait(false);
+        var root = JsonNode.Parse(json) as JsonObject;
+        return root?["settings"]?.Deserialize<ProjectSettingsDto>();
+    }
+    catch (JsonException)
+    {
+        return null;
+    }
+    catch (IOException)
+    {
+        return null;
+    }
+}
+
+static ContextProvidersOptions BuildProvidersOptions(IConfiguration configuration, ProjectSettingsDto? localProjectSettings)
 {
     var openAiKey = configuration["CONTEXT_OPENAI_API_KEY"];
     var anthropicKey = configuration["CONTEXT_ANTHROPIC_API_KEY"];
 
-    // A local Ollama install (CONTEXT_EMBEDDING_PROVIDER=ollama and/or CONTEXT_LLM_PROVIDER=ollama)
-    // is the fully-offline, no-API-key upgrade path over the noop defaults: real embeddings for
-    // search, and a real model for session summarization/memory extraction (Context.Memory) that
-    // currently degrade to templated heuristics under noop. Base URL/model are overridable in case
-    // Ollama isn't on localhost:11434 or a different model was pulled.
+    // A local Ollama install (CONTEXT_EMBEDDING_PROVIDER=ollama and/or CONTEXT_LLM_PROVIDER=ollama,
+    // or the Dashboard's Settings tab, which wins over these env vars - see localProjectSettings
+    // below) is the fully-offline, no-API-key upgrade path over the noop defaults: real embeddings
+    // for search, and a real model for session summarization/memory extraction (Context.Memory)
+    // that currently degrade to templated heuristics under noop. Base URL/model are overridable in
+    // case Ollama isn't on localhost:11434 or a different model was pulled.
     var ollamaBaseUrl = configuration["CONTEXT_OLLAMA_BASE_URL"];
     var ollamaEmbeddingModel = configuration["CONTEXT_OLLAMA_EMBEDDING_MODEL"];
     var ollamaChatModel = configuration["CONTEXT_OLLAMA_CHAT_MODEL"];
 
+    var effectiveOllamaBaseUrl = localProjectSettings?.OllamaBaseUrl is { Length: > 0 } localBaseUrl
+        ? localBaseUrl
+        : ollamaBaseUrl is { Length: > 0 } ? ollamaBaseUrl : "http://localhost:11434";
+
     return new ContextProvidersOptions
     {
-        EmbeddingProvider = configuration["CONTEXT_EMBEDDING_PROVIDER"] is { Length: > 0 } embedding ? embedding : "noop",
-        LlmProvider = configuration["CONTEXT_LLM_PROVIDER"] is { Length: > 0 } llm ? llm : "noop",
+        EmbeddingProvider = localProjectSettings?.EmbeddingProvider is { Length: > 0 } localEmbeddingProvider
+            ? localEmbeddingProvider
+            : configuration["CONTEXT_EMBEDDING_PROVIDER"] is { Length: > 0 } embedding ? embedding : "noop",
+        LlmProvider = localProjectSettings?.LlmProvider is { Length: > 0 } localLlmProvider
+            ? localLlmProvider
+            : configuration["CONTEXT_LLM_PROVIDER"] is { Length: > 0 } llm ? llm : "noop",
         OpenAi = new Context.Providers.Embeddings.OpenAiOptions { ApiKey = openAiKey },
         Anthropic = new Context.Providers.Llm.AnthropicOptions { ApiKey = anthropicKey },
         Ollama = new Context.Providers.Embeddings.OllamaOptions
         {
-            BaseUrl = ollamaBaseUrl is { Length: > 0 } ? ollamaBaseUrl : "http://localhost:11434",
-            Model = ollamaEmbeddingModel is { Length: > 0 } ? ollamaEmbeddingModel : "nomic-embed-text"
+            BaseUrl = effectiveOllamaBaseUrl,
+            Model = localProjectSettings?.OllamaEmbeddingModel is { Length: > 0 } localEmbeddingModel
+                ? localEmbeddingModel
+                : ollamaEmbeddingModel is { Length: > 0 } ? ollamaEmbeddingModel : "embeddinggemma"
         },
         OllamaChat = new Context.Providers.Llm.OllamaChatOptions
         {
-            BaseUrl = ollamaBaseUrl is { Length: > 0 } ? ollamaBaseUrl : "http://localhost:11434",
-            Model = ollamaChatModel is { Length: > 0 } ? ollamaChatModel : Context.Providers.Llm.OllamaChatOptions.DefaultModel
+            BaseUrl = effectiveOllamaBaseUrl,
+            Model = localProjectSettings?.OllamaChatModel is { Length: > 0 } localChatModel
+                ? localChatModel
+                : ollamaChatModel is { Length: > 0 } ? ollamaChatModel : Context.Providers.Llm.OllamaChatOptions.DefaultModel
         }
     };
 }

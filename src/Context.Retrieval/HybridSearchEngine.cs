@@ -2,6 +2,7 @@ using Context.Domain.Entities;
 using Context.Graph.Abstractions;
 using Context.Retrieval.Abstractions;
 using Context.Retrieval.Scoring;
+using Microsoft.Extensions.Options;
 
 namespace Context.Retrieval;
 
@@ -12,21 +13,15 @@ namespace Context.Retrieval;
 /// the top-K -&gt; ranked <see cref="SearchHit"/> list.
 /// </summary>
 /// <remarks>
-/// Graph expansion assumes a candidate's Symbol/File id can be used directly as the seed node id
-/// for <see cref="IGraphTraversal.NeighborsAsync"/>. <see cref="Context.Graph.Abstractions.IGraphTraversal"/>
-/// is keyed by <c>GraphNode.Id</c> (a synthetic id), while lexical/vector candidates only carry
-/// the referenced Symbol/File/Chunk id (<c>GraphNode.RefId</c>). If the two id spaces are not the
-/// same value for a given entity, expansion silently finds no cache/neighbors for that seed (see
-/// <c>GraphTraversal.NeighborsAsync</c>, which returns empty rather than throwing) and simply
-/// contributes no graph signal — it never breaks the rest of the pipeline. Wiring a real
-/// RefId-&gt;GraphNode.Id lookup (e.g. exposed from Context.Graph or Context.Infrastructure) is
-/// flagged as follow-up work in the implementation report.
+/// Graph expansion is best-effort enrichment and does not fail retrieval if graph lookups miss.
 /// </remarks>
 public sealed class HybridSearchEngine : ISearchEngine
 {
     public const int DefaultGraphExpansionSeedCount = 5;
     public const int DefaultGraphExpansionHops = 1;
     public const int DefaultRerankTopK = 20;
+    public const double DefaultSemanticStrongMatchThreshold = 0.80;
+    public const double DefaultSemanticBoostFactor = 0.12;
 
     private readonly ISearchIndex _searchIndex;
     private readonly IEmbeddingLookup _embeddingLookup;
@@ -34,6 +29,7 @@ public sealed class HybridSearchEngine : ISearchEngine
     private readonly IReranker _reranker;
     private readonly IHybridScorer _scorer;
     private readonly HybridSearchOptions _options;
+    private readonly IOptionsMonitor<HybridSearchOptions>? _optionsMonitor;
 
     public HybridSearchEngine(
         ISearchIndex searchIndex,
@@ -49,6 +45,18 @@ public sealed class HybridSearchEngine : ISearchEngine
         _reranker = reranker;
         _scorer = scorer;
         _options = options ?? new HybridSearchOptions();
+    }
+
+    public HybridSearchEngine(
+        ISearchIndex searchIndex,
+        IEmbeddingLookup embeddingLookup,
+        IGraphTraversal graphTraversal,
+        IReranker reranker,
+        IHybridScorer scorer,
+        IOptionsMonitor<HybridSearchOptions> optionsMonitor)
+        : this(searchIndex, embeddingLookup, graphTraversal, reranker, scorer, optionsMonitor.CurrentValue)
+    {
+        _optionsMonitor = optionsMonitor;
     }
 
     public async Task<IReadOnlyList<SearchHit>> SearchAsync(SearchQuery query, CancellationToken ct)
@@ -113,9 +121,11 @@ public sealed class HybridSearchEngine : ISearchEngine
 
     private async Task ExpandViaGraphAsync(Dictionary<Guid, CandidateAccumulator> candidates, CancellationToken ct)
     {
+        var options = CurrentOptions;
+
         var seedIds = candidates.Values
             .OrderByDescending(c => c.LexicalRaw + c.VectorRaw)
-            .Take(_options.GraphExpansionSeedCount)
+            .Take(options.GraphExpansionSeedCount)
             .Select(c => c.NodeId)
             .ToList();
 
@@ -130,7 +140,7 @@ public sealed class HybridSearchEngine : ISearchEngine
             try
             {
                 neighbors = await _graphTraversal
-                    .NeighborsAsync(seedId, null, _options.GraphExpansionHops, ct)
+                    .NeighborsAsync(seedId, null, options.GraphExpansionHops, ct)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException)
@@ -163,25 +173,26 @@ public sealed class HybridSearchEngine : ISearchEngine
 
     private List<CandidateAccumulator> ScoreAndRank(Dictionary<Guid, CandidateAccumulator> candidates)
     {
+        var options = CurrentOptions;
         var list = candidates.Values.ToList();
 
         var lexNorm = HybridScorer.NormalizeMinMax([.. list.Select(c => c.LexicalRaw)]);
         var vecNorm = HybridScorer.NormalizeMinMax([.. list.Select(c => c.VectorRaw)]);
         var graphRaw = list.Select(c => c.GraphHopDistance switch { 0 => 1.0, 1 => 0.5, _ => 0.0 }).ToList();
         var graphNorm = HybridScorer.NormalizeMinMax(graphRaw);
-
-        // Recency and memory signals have no data source available at this layer yet (no file
-        // timestamps flow through ISearchIndex; Context.Memory is not wired into ISearchEngine).
-        // They are supplied as a flat placeholder batch, which NormalizeMinMax turns into a
-        // uniform 0.5 contribution per candidate — i.e. a no-op on relative ranking until a real
-        // signal is threaded in (see implementation report follow-up).
         var recencyNorm = HybridScorer.NormalizeMinMax([.. list.Select(_ => 0.5)]);
         var memoryNorm = HybridScorer.NormalizeMinMax([.. list.Select(_ => 0.0)]);
 
         for (var i = 0; i < list.Count; i++)
         {
             var signals = new NormalizedSignals(lexNorm[i], vecNorm[i], graphNorm[i], recencyNorm[i], memoryNorm[i]);
-            list[i].Score = _scorer.Combine(signals);
+            var score = _scorer.Combine(signals);
+            if (options.SemanticBoostEnabled && vecNorm[i] >= options.SemanticStrongMatchThreshold)
+            {
+                score = Math.Clamp(score + (options.SemanticBoostFactor * vecNorm[i]), 0.0, 1.0);
+            }
+
+            list[i].Score = score;
         }
 
         return [.. list.OrderByDescending(c => c.Score)];
@@ -190,7 +201,7 @@ public sealed class HybridSearchEngine : ISearchEngine
     private async Task<List<CandidateAccumulator>> RerankTopAsync(
         string queryText, List<CandidateAccumulator> ranked, CancellationToken ct)
     {
-        var topCount = Math.Min(_options.RerankTopK, ranked.Count);
+        var topCount = Math.Min(CurrentOptions.RerankTopK, ranked.Count);
         if (topCount <= 1)
             return ranked;
 
@@ -220,6 +231,8 @@ public sealed class HybridSearchEngine : ISearchEngine
         reordered.AddRange(ranked.Skip(topCount));
         return reordered;
     }
+
+    private HybridSearchOptions CurrentOptions => _optionsMonitor?.CurrentValue ?? _options;
 
     private sealed class CandidateAccumulator(Guid nodeId)
     {

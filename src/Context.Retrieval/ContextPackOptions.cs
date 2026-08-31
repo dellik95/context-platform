@@ -7,9 +7,9 @@ namespace Context.Retrieval;
 /// </summary>
 public sealed class ContextPackOptions
 {
-    public double ArchitectureReserveRatio { get; init; } = ContextPackBuilder.DefaultArchitectureReserveRatio;
-    public double PrimaryReserveRatio { get; init; } = ContextPackBuilder.DefaultPrimaryReserveRatio;
-    public double HistoricalReserveRatio { get; init; } = ContextPackBuilder.DefaultHistoricalReserveRatio;
-    public double OpenIssuesReserveRatio { get; init; } = ContextPackBuilder.DefaultOpenIssuesReserveRatio;
-    public double SafetyReserveRatio { get; init; } = ContextPackBuilder.DefaultSafetyReserveRatio;
+    public double ArchitectureReserveRatio { get; set; } = ContextPackBuilder.DefaultArchitectureReserveRatio;
+    public double PrimaryReserveRatio { get; set; } = ContextPackBuilder.DefaultPrimaryReserveRatio;
+    public double HistoricalReserveRatio { get; set; } = ContextPackBuilder.DefaultHistoricalReserveRatio;
+    public double OpenIssuesReserveRatio { get; set; } = ContextPackBuilder.DefaultOpenIssuesReserveRatio;
+    public double SafetyReserveRatio { get; set; } = ContextPackBuilder.DefaultSafetyReserveRatio;
 }

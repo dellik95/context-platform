@@ -1,4 +1,3 @@
-using Context.Retrieval; // ContextPackBuilder, ContextPackOptions
 using Context.Retrieval.Abstractions;
 using Context.Retrieval.Tests.TestDoubles;
 using Context.Shared;

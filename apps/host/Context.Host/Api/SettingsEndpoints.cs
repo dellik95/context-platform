@@ -28,11 +28,16 @@ public static class SettingsEndpoints
         }
     }
 
-    private static async Task<IResult> UpdateAsync(Guid id, ProjectSettingsDto dto, IProjectSettingsService settings, CancellationToken ct)
+    private static async Task<IResult> UpdateAsync(
+        Guid id,
+        ProjectSettingsDto dto,
+        IProjectSettingsService settings,
+        ProjectSettingsWriteTarget? target,
+        CancellationToken ct)
     {
         try
         {
-            await settings.UpdateAsync(id, dto, ct).ConfigureAwait(false);
+            await settings.UpdateAsync(id, dto, target ?? ProjectSettingsWriteTarget.Both, ct).ConfigureAwait(false);
             return Results.NoContent();
         }
         catch (KeyNotFoundException)

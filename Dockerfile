@@ -20,7 +20,7 @@ COPY global.json Directory.Build.props Directory.Packages.props ./
 COPY apps/host/Context.Host/Context.Host.csproj apps/host/Context.Host/
 COPY apps/cli/Context.Cli/Context.Cli.csproj apps/cli/Context.Cli/
 COPY src/ src/
-RUN dotnet restore apps/host/Context.Host/Context.Host.csproj -r linux-x64 \
+RUN dotnet restore apps/host/Context.Host/Context.Host.csproj -r linux-x64 -p:SkipDashboardBuild=true \
  && dotnet restore apps/cli/Context.Cli/Context.Cli.csproj -r linux-x64
 
 COPY apps/ apps/

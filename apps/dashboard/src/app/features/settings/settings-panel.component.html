@@ -45,13 +45,13 @@
             @if (showOllamaEmbeddingModel()) {
               <mat-form-field appearance="outline">
                 <mat-label>Ollama embedding model</mat-label>
-                <input matInput formControlName="ollamaEmbeddingModel" placeholder="e.g. nomic-embed-text" />
+                <input matInput formControlName="ollamaEmbeddingModel" placeholder="e.g. embeddinggemma" />
               </mat-form-field>
             }
             @if (showOllamaChatModel()) {
               <mat-form-field appearance="outline">
                 <mat-label>Ollama chat model</mat-label>
-                <input matInput formControlName="ollamaChatModel" placeholder="e.g. llama3" />
+                <input matInput formControlName="ollamaChatModel" placeholder="e.g. qwen2.5-coder:1.5b" />
               </mat-form-field>
             }
           </div>

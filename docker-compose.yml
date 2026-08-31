@@ -20,7 +20,7 @@ services:
       # Windows Firewall block rule on ollama.exe was the blocker here) — if health still reports
       # embeddingProvider/llmProvider "ollama" but every search/session-end request 500s with
       # "Connection refused", that firewall path is still the first thing to check, not this config.
-      # OllamaHostResolver (src/Context.Providers/OllamaHostResolver.cs) now softens the rest of
+      # OllamaHostFallbackHandler (src/Context.Providers/OllamaHostFallbackHandler.cs) now softens the rest of
       # this: when running in a container it detects that (via /.dockerenv) and, if the FIRST
       # connection attempt to CONTEXT_OLLAMA_BASE_URL fails at the connection level (refused/
       # unreachable/timeout — not a real HTTP error response from Ollama), automatically retries a

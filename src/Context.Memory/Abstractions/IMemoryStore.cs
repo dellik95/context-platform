@@ -1,5 +1,3 @@
-using Context.Domain.Entities;
-
 namespace Context.Memory.Abstractions;
 
 /// <summary>

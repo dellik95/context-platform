@@ -24,4 +24,7 @@ public sealed record ProjectSettingsDto(
     // least this many new SessionEvents since the last summary before firing one, so an idle or
     // barely-active session doesn't burn an LLM call (and produce a low-value memory) just because
     // the clock ran out. Default chosen to represent a real batch of activity, not a single action.
-    int MinEventsForSessionSummary = 15);
+    int MinEventsForSessionSummary = 15,
+    // Maximum number of ranked memories included in each context section (historical notes/open
+    // issues). Runtime-tunable so projects can trade retrieval breadth vs prompt size.
+    int MaxMemoryNotesPerSection = 20);

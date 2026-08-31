@@ -5,6 +5,7 @@ using Context.Graph.Abstractions;
 using Context.Infrastructure.Abstractions;
 using Context.Retrieval;
 using Context.Retrieval.Abstractions;
+using Context.Application.Settings;
 using FluentAssertions;
 using Moq;
 using DomainFile = Context.Domain.Entities.File;
@@ -30,6 +31,7 @@ public sealed class ContextEngineTests
     private readonly Mock<IChunkRepository> _chunkRepository = new();
     private readonly Mock<IMemoryRepository> _memoryRepository = new();
     private readonly Mock<ISessionRepository> _sessionRepository = new();
+    private readonly Mock<IProjectSettingsService> _projectSettingsService = new();
     private readonly SessionDeliveryCache _deliveryCache = new();
     private readonly ContextEngine _sut;
 
@@ -48,7 +50,8 @@ public sealed class ContextEngineTests
             _chunkRepository.Object,
             _memoryRepository.Object,
             _sessionRepository.Object,
-            _deliveryCache);
+            _deliveryCache,
+            _projectSettingsService.Object);
 
         // Neutral defaults so tests only need to configure what they actually exercise.
         _symbolRepository.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
@@ -57,6 +60,19 @@ public sealed class ContextEngineTests
             .ReturnsAsync((DomainFile?)null);
         _memoryRepository.Setup(r => r.ListByProjectAsync(It.IsAny<Guid>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<DomainMemory>)[]);
+        _projectSettingsService.Setup(s => s.GetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProjectSettingsDto(
+                EmbeddingProvider: "noop",
+                LlmProvider: "noop",
+                OllamaBaseUrl: null,
+                OllamaEmbeddingModel: null,
+                OllamaChatModel: null,
+                ReindexEnabled: false,
+                ReindexIntervalMinutes: 60,
+                LastReindexScheduledAt: null,
+                SessionSummaryIntervalMinutes: 0,
+                MinEventsForSessionSummary: 15,
+                MaxMemoryNotesPerSection: 20));
         _searchEngine.Setup(s => s.SearchAsync(It.IsAny<SearchQuery>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<SearchHit>)[]);
     }
@@ -114,6 +130,43 @@ public sealed class ContextEngineTests
 
         pack.HistoricalNotes.Should().BeEmpty();
         pack.OpenIssues.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SearchContextAsync_respects_runtime_max_memory_notes_per_section()
+    {
+        var projectId = Guid.NewGuid();
+        _projectSettingsService.Setup(s => s.GetAsync(projectId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProjectSettingsDto(
+                EmbeddingProvider: "noop",
+                LlmProvider: "noop",
+                OllamaBaseUrl: null,
+                OllamaEmbeddingModel: null,
+                OllamaChatModel: null,
+                ReindexEnabled: false,
+                ReindexIntervalMinutes: 60,
+                LastReindexScheduledAt: null,
+                SessionSummaryIntervalMinutes: 0,
+                MinEventsForSessionSummary: 15,
+                MaxMemoryNotesPerSection: 1));
+
+        var memories = new List<DomainMemory>
+        {
+            MakeMemory(projectId, MemoryType.Decision, "Decision A", "Body A", confidence: 0.2),
+            MakeMemory(projectId, MemoryType.Decision, "Decision B", "Body B", confidence: 0.9, pinned: true),
+            MakeMemory(projectId, MemoryType.Issue, "Issue A", "Issue Body A", confidence: 0.4),
+            MakeMemory(projectId, MemoryType.Issue, "Issue B", "Issue Body B", confidence: 0.8)
+        };
+
+        _memoryRepository.Setup(r => r.ListByProjectAsync(projectId, false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(memories);
+
+        var query = new SearchQuery(projectId, "status", null, TokenBudget: 5000);
+
+        var pack = await _sut.SearchContextAsync(query, CancellationToken.None);
+
+        pack.HistoricalNotes.Should().ContainSingle();
+        pack.OpenIssues.Should().ContainSingle();
     }
 
     // ---- 2. Session-scoped delivery cache ----

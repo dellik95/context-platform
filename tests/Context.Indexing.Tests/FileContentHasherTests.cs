@@ -1,5 +1,4 @@
 using System.Text;
-using Context.Indexing;
 using FluentAssertions;
 
 namespace Context.Indexing.Tests;

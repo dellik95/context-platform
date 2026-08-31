@@ -4,11 +4,17 @@ namespace Context.Retrieval;
 public sealed class HybridSearchOptions
 {
     /// <summary>How many of the top merged lexical/vector candidates seed graph expansion.</summary>
-    public int GraphExpansionSeedCount { get; init; } = HybridSearchEngine.DefaultGraphExpansionSeedCount;
+    public int GraphExpansionSeedCount { get; set; } = HybridSearchEngine.DefaultGraphExpansionSeedCount;
 
     /// <summary>Hop count passed to <see cref="Context.Graph.Abstractions.IGraphTraversal.NeighborsAsync"/> per seed.</summary>
-    public int GraphExpansionHops { get; init; } = HybridSearchEngine.DefaultGraphExpansionHops;
+    public int GraphExpansionHops { get; set; } = HybridSearchEngine.DefaultGraphExpansionHops;
 
     /// <summary>How many top-scored candidates are handed to the reranker.</summary>
-    public int RerankTopK { get; init; } = HybridSearchEngine.DefaultRerankTopK;
+    public int RerankTopK { get; set; } = HybridSearchEngine.DefaultRerankTopK;
+
+    public bool SemanticBoostEnabled { get; set; } = true;
+
+    public double SemanticStrongMatchThreshold { get; set; } = HybridSearchEngine.DefaultSemanticStrongMatchThreshold;
+
+    public double SemanticBoostFactor { get; set; } = HybridSearchEngine.DefaultSemanticBoostFactor;
 }

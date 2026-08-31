@@ -13,6 +13,4 @@ public sealed record AnthropicOptions
     public string BaseUrl { get; init; } = "https://api.anthropic.com/v1";
 
     public int MaxTokens { get; init; } = 1024;
-
-    public string AnthropicVersion { get; init; } = "2023-06-01";
 }

@@ -1,19 +1,10 @@
 using Context.Retrieval.Abstractions;
 using Context.Retrieval.Scoring;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace Context.Retrieval;
 
-/// <summary>
-/// DI wiring for Context.Retrieval. Registers the scoring/merge/rerank/budget logic
-/// (<see cref="HybridScorer"/>, <see cref="HybridSearchEngine"/>, <see cref="ContextPackBuilder"/>)
-/// with their default option objects. The caller (Context.Application) must separately register
-/// the persistence-facing seams this project does not implement: <see cref="ISearchIndex"/>
-/// (backed by Context.Infrastructure + SQLite FTS5), <see cref="IEmbeddingLookup"/> and
-/// <see cref="IReranker"/> (adapters over the real Context.Providers implementations).
-/// <see cref="Context.Graph.Abstractions.IGraphTraversal"/> is expected to already be registered
-/// via <c>AddContextGraph</c>.
-/// </summary>
 public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddContextRetrieval(
@@ -22,13 +13,54 @@ public static class ServiceCollectionExtensions
         HybridSearchOptions? searchOptions = null,
         ContextPackOptions? packOptions = null)
     {
-        services.AddSingleton(scoringOptions ?? new HybridScoringOptions());
-        services.AddSingleton(searchOptions ?? new HybridSearchOptions());
-        services.AddSingleton(packOptions ?? new ContextPackOptions());
+        var scoring = scoringOptions ?? new HybridScoringOptions();
+        var search = searchOptions ?? new HybridSearchOptions();
+        var pack = packOptions ?? new ContextPackOptions();
 
-        services.AddSingleton<IHybridScorer, HybridScorer>();
-        services.AddSingleton<ISearchEngine, HybridSearchEngine>();
-        services.AddSingleton<IContextPackBuilder, ContextPackBuilder>();
+        services.AddOptions<HybridScoringOptions>().Configure(o =>
+        {
+            o.LexicalWeight = scoring.LexicalWeight;
+            o.VectorWeight = scoring.VectorWeight;
+            o.GraphWeight = scoring.GraphWeight;
+            o.RecencyWeight = scoring.RecencyWeight;
+            o.MemoryWeight = scoring.MemoryWeight;
+        });
+
+        services.AddOptions<HybridSearchOptions>().Configure(o =>
+        {
+            o.GraphExpansionSeedCount = search.GraphExpansionSeedCount;
+            o.GraphExpansionHops = search.GraphExpansionHops;
+            o.RerankTopK = search.RerankTopK;
+            o.SemanticBoostEnabled = search.SemanticBoostEnabled;
+            o.SemanticStrongMatchThreshold = search.SemanticStrongMatchThreshold;
+            o.SemanticBoostFactor = search.SemanticBoostFactor;
+        });
+
+        services.AddOptions<ContextPackOptions>().Configure(o =>
+        {
+            o.ArchitectureReserveRatio = pack.ArchitectureReserveRatio;
+            o.PrimaryReserveRatio = pack.PrimaryReserveRatio;
+            o.HistoricalReserveRatio = pack.HistoricalReserveRatio;
+            o.OpenIssuesReserveRatio = pack.OpenIssuesReserveRatio;
+            o.SafetyReserveRatio = pack.SafetyReserveRatio;
+        });
+
+        services.AddSingleton<IHybridScorer>(sp =>
+            new HybridScorer(sp.GetRequiredService<IOptionsMonitor<HybridScoringOptions>>()));
+
+        services.AddSingleton<ISearchEngine>(sp =>
+            new HybridSearchEngine(
+                sp.GetRequiredService<ISearchIndex>(),
+                sp.GetRequiredService<IEmbeddingLookup>(),
+                sp.GetRequiredService<Context.Graph.Abstractions.IGraphTraversal>(),
+                sp.GetRequiredService<IReranker>(),
+                sp.GetRequiredService<IHybridScorer>(),
+                sp.GetRequiredService<IOptionsMonitor<HybridSearchOptions>>()));
+
+        services.AddSingleton<IContextPackBuilder>(sp =>
+            new ContextPackBuilder(
+                sp.GetRequiredService<ISearchEngine>(),
+                sp.GetRequiredService<IOptionsMonitor<ContextPackOptions>>().CurrentValue));
 
         return services;
     }

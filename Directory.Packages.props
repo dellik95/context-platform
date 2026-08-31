@@ -25,18 +25,26 @@
     <!-- Utilities -->
     <PackageVersion Include="System.IO.Abstractions" Version="21.1.7" />
     <!-- Microsoft.Extensions (DI/Options/Logging abstractions, used outside ASP.NET hosts too) -->
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+    <!-- 10.0.11, not 10.0.0: Microsoft.Extensions.AI 10.9.0 requires DI/Logging Abstractions >= 10.0.11 -->
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
     <!-- Context.Application: JobDispatcher is a hosted-service-friendly IJobQueue (see JobDispatcher.cs) -->
-    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0" />
+    <!-- 10.0.3, not 10.0.0: Microsoft.Extensions.AI.OpenAI -> OpenAI -> System.ClientModel needs >= 10.0.3 -->
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.11" />
     <!-- Providers (Context.Providers): DI/HTTP plumbing for provider implementations -->
-    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.11" />
+    <!-- Context.Providers: AI provider integrations built on Microsoft.Extensions.AI's IChatClient/
+         IEmbeddingGenerator instead of hand-rolled HTTP calls. -->
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.9.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.9.0" />
+    <PackageVersion Include="OllamaSharp" Version="5.4.30" />
+    <PackageVersion Include="Anthropic.SDK" Version="5.10.0" />
     <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.20.1" />
     <!-- Context.Host: run as a native OS service on either platform (both packages are no-ops
          when the process isn't actually launched by that platform's service manager). -->
-    <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.11" />
     <!-- Context.IntegrationTests: in-process HTTP testing against Context.Host's real Program. -->
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
     <!-- Context.Indexing: real tree-sitter bindings + bundled native grammars for every RID

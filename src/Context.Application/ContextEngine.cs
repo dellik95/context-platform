@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Context.Application.Jobs;
+using Context.Application.Settings;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
 using Context.Graph.Abstractions;
@@ -42,11 +43,9 @@ public sealed class ContextEngine(
     IChunkRepository chunkRepository,
     IMemoryRepository memoryRepository,
     ISessionRepository sessionRepository,
-    SessionDeliveryCache deliveryCache) : IContextEngine
+    SessionDeliveryCache deliveryCache,
+    IProjectSettingsService projectSettingsService) : IContextEngine
 {
-    /// <summary>How many ranked memories feed each of the historical-notes / open-issues sections at most.</summary>
-    private const int MaxMemoryNotesPerSection = 20;
-
     private const int SummaryCharLimit = 800;
 
     public async Task<ContextPack> SearchContextAsync(SearchQuery query, CancellationToken ct)
@@ -204,6 +203,9 @@ public sealed class ContextEngine(
             return ([], []);
         }
 
+        var settings = await projectSettingsService.GetAsync(projectId, ct).ConfigureAwait(false);
+        var maxMemoryNotesPerSection = Math.Clamp(settings.MaxMemoryNotesPerSection, 1, 200);
+
         var now = DateTimeOffset.UtcNow;
         var relevanceRanked = memories.OrderByDescending(m => RelevanceOf(m, now)).ToList();
 
@@ -213,13 +215,13 @@ public sealed class ContextEngine(
 
         var historicalNotes = notesSource
             .Where(m => m.Type != MemoryType.Issue)
-            .Take(MaxMemoryNotesPerSection)
+            .Take(maxMemoryNotesPerSection)
             .Select(FormatMemoryNote)
             .ToList();
 
         var openIssues = relevanceRanked
             .Where(m => m.Type == MemoryType.Issue)
-            .Take(MaxMemoryNotesPerSection)
+            .Take(maxMemoryNotesPerSection)
             .Select(FormatMemoryNote)
             .ToList();
 

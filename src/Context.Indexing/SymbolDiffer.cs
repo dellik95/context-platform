@@ -1,4 +1,3 @@
-using System.Linq;
 using Context.Indexing.Abstractions;
 using Context.Shared;
 

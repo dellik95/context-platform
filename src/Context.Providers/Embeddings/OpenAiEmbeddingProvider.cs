@@ -1,32 +1,39 @@
-using System.Net.Http.Headers;
-using System.Net.Http.Json;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using System.ClientModel;
 using Context.Providers.Abstractions;
+using Microsoft.Extensions.AI;
+using OpenAI;
+using OpenAI.Embeddings;
 
 namespace Context.Providers.Embeddings;
 
 /// <summary>
-/// Real HTTP-based embedding provider calling the OpenAI embeddings REST endpoint
-/// (POST {BaseUrl}/embeddings, default https://api.openai.com/v1/embeddings).
-/// Registered as a typed client (see ServiceCollectionExtensions.AddContextProviders) so
-/// <see cref="HttpClient"/> instances are pooled correctly.
+/// Embedding provider for the OpenAI embeddings API, built on the official OpenAI SDK's
+/// <see cref="IEmbeddingGenerator{TInput,TEmbedding}"/> adapter (Microsoft.Extensions.AI) instead
+/// of hand-rolled HTTP calls.
 /// </summary>
 public sealed class OpenAiEmbeddingProvider : IEmbeddingProvider
 {
-    private static readonly JsonSerializerOptions JsonOptions = new();
-
-    private readonly HttpClient _http;
+    private readonly IEmbeddingGenerator<string, Embedding<float>> _generator;
     private readonly OpenAiOptions _options;
 
-    public OpenAiEmbeddingProvider(HttpClient httpClient, OpenAiOptions options)
+    public OpenAiEmbeddingProvider(OpenAiOptions options)
     {
-        _http = httpClient;
         _options = options;
-        if (_http.BaseAddress is null && !string.IsNullOrWhiteSpace(_options.BaseUrl))
+        if (string.IsNullOrWhiteSpace(options.ApiKey))
         {
-            _http.BaseAddress = new Uri(_options.BaseUrl.TrimEnd('/') + "/");
+            throw new InvalidOperationException(
+                "OpenAiEmbeddingProvider requires an API key. Configure OpenAiOptions.ApiKey " +
+                "(e.g. sourced from the OPENAI_API_KEY environment variable) before use.");
         }
+
+        var clientOptions = new OpenAIClientOptions();
+        if (!string.IsNullOrWhiteSpace(options.BaseUrl))
+        {
+            clientOptions.Endpoint = new Uri(options.BaseUrl);
+        }
+
+        _generator = new EmbeddingClient(options.Model, new ApiKeyCredential(options.ApiKey), clientOptions)
+            .AsIEmbeddingGenerator();
     }
 
     public string Name => "openai";
@@ -41,51 +48,13 @@ public sealed class OpenAiEmbeddingProvider : IEmbeddingProvider
 
     public async Task<float[]> EmbedAsync(string text, CancellationToken ct)
     {
-        var batch = await EmbedBatchAsync([text], ct).ConfigureAwait(false);
-        return batch[0];
+        var result = await _generator.GenerateAsync(text, cancellationToken: ct).ConfigureAwait(false);
+        return result.Vector.ToArray();
     }
 
     public async Task<float[][]> EmbedBatchAsync(IReadOnlyList<string> texts, CancellationToken ct)
     {
-        EnsureConfigured();
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, "embeddings");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
-        request.Content = JsonContent.Create(
-            new OpenAiEmbeddingRequest(_options.Model, [.. texts]), options: JsonOptions);
-
-        using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
-        var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new InvalidOperationException(
-                $"OpenAI embeddings request failed with status {(int)response.StatusCode}: {body}");
-        }
-
-        var parsed = JsonSerializer.Deserialize<OpenAiEmbeddingResponse>(body, JsonOptions)
-            ?? throw new InvalidOperationException("OpenAI embeddings response could not be parsed.");
-
-        return [.. parsed.Data.OrderBy(d => d.Index).Select(d => d.Embedding)];
+        var result = await _generator.GenerateAsync(texts, cancellationToken: ct).ConfigureAwait(false);
+        return [.. result.Select(e => e.Vector.ToArray())];
     }
-
-    private void EnsureConfigured()
-    {
-        if (string.IsNullOrWhiteSpace(_options.ApiKey))
-        {
-            throw new InvalidOperationException(
-                "OpenAiEmbeddingProvider requires an API key. Configure OpenAiOptions.ApiKey " +
-                "(e.g. sourced from the OPENAI_API_KEY environment variable) before use.");
-        }
-    }
-
-    private sealed record OpenAiEmbeddingRequest(
-        [property: JsonPropertyName("model")] string Model,
-        [property: JsonPropertyName("input")] string[] Input);
-
-    private sealed record OpenAiEmbeddingDatum(
-        [property: JsonPropertyName("index")] int Index,
-        [property: JsonPropertyName("embedding")] float[] Embedding);
-
-    private sealed record OpenAiEmbeddingResponse(
-        [property: JsonPropertyName("data")] List<OpenAiEmbeddingDatum> Data);
 }

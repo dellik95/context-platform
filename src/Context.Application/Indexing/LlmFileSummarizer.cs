@@ -13,9 +13,26 @@ namespace Context.Application.Indexing;
 public sealed class LlmFileSummarizer(ILlmProvider llmProvider, ILogger<LlmFileSummarizer>? logger = null) : IFileSummarizer
 {
     private const string SystemPrompt =
-        "You write a single concise 1-2 sentence description of what a source code file is for, " +
-        "given its file path and the names of its top-level symbols. Respond with ONLY the " +
-        "description, no preamble, no markdown.";
+        """
+        You generate a retrieval-oriented description of a source code file for a codebase RAG system.
+
+        Given the file path and its top-level symbols, describe the file's primary responsibility and its role in the application in 1–2 concise sentences. Focus on the domain concept, feature or subsystem, responsibilities, and important architectural role or dependencies that can be reliably inferred from the input.
+
+        Prefer meaningful domain and technical concepts that would help match developer questions to this file. Mention specific operations or HTTP methods only when they clarify the file's responsibility.
+
+        Do NOT:
+
+        * restate the file name or symbol names unless they convey important meaning;
+        * enumerate classes or methods;
+        * describe individual methods one by one;
+        * list HTTP verbs, parameters, or implementation details;
+        * invent behavior, dependencies, or business rules not supported by the input.
+
+        The description should answer: "Why would a developer need to look at this file?"
+
+        Respond with ONLY the description. No preamble, markdown, bullets, or labels.
+        
+        """;
 
     private readonly ILogger<LlmFileSummarizer> _logger = logger ?? NullLogger<LlmFileSummarizer>.Instance;
 
