@@ -39,7 +39,7 @@ public static class ServiceCollectionExtensions
                             "(e.g. sourced from the OPENAI_API_KEY environment variable) before use.");
                     }
 
-                    var clientOptions = new OpenAIClientOptions();
+                    var clientOptions = new OpenAIClientOptions { NetworkTimeout = TimeSpan.FromSeconds(options.LlmTimeoutSeconds) };
                     if (!string.IsNullOrWhiteSpace(o.BaseUrl))
                     {
                         clientOptions.Endpoint = new Uri(o.BaseUrl);
@@ -57,6 +57,7 @@ public static class ServiceCollectionExtensions
                 {
                     var o = sp.GetRequiredService<IOptionsMonitor<OllamaOptions>>().Get(OllamaOptions.EmbeddingName);
                     var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("ollama-embeddings");
+                    http.Timeout = TimeSpan.FromSeconds(options.LlmTimeoutSeconds);
                     http.BaseAddress ??= new Uri(o.BaseUrl.TrimEnd('/') + "/");
                     IEmbeddingGenerator<string, Embedding<float>> inner = new OllamaApiClient(http, o.Model);
                     return new OllamaEmbeddingGeneratorDecorator(inner, sp.GetService<ILogger<OllamaEmbeddingGeneratorDecorator>>());
@@ -91,7 +92,7 @@ public static class ServiceCollectionExtensions
                             "(e.g. sourced from the ANTHROPIC_API_KEY environment variable) before use.");
                     }
 
-                    var http = new HttpClient();
+                    var http = new HttpClient { Timeout = TimeSpan.FromSeconds(options.LlmTimeoutSeconds) };
                     if (!string.IsNullOrWhiteSpace(o.BaseUrl))
                     {
                         http.BaseAddress = new Uri(o.BaseUrl.TrimEnd('/') + "/");
@@ -109,7 +110,7 @@ public static class ServiceCollectionExtensions
                 {
                     var o = sp.GetRequiredService<IOptionsMonitor<OllamaOptions>>().Get(OllamaOptions.ChatName);
                     var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("ollama-chat");
-                    http.Timeout = TimeSpan.FromMinutes(5);
+                    http.Timeout = TimeSpan.FromSeconds(options.LlmTimeoutSeconds);
                     http.BaseAddress ??= new Uri(o.BaseUrl.TrimEnd('/') + "/");
                     IChatClient inner = new OllamaApiClient(http, o.Model);
                     return new OllamaChatClientDecorator(inner, o.Model);

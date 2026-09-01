@@ -37,6 +37,9 @@ public static class ContextProvidersOptionsResolver
                 : configuration["CONTEXT_LLM_PROVIDER"] is { Length: > 0 } envLlm ? envLlm : "noop",
             OpenAiApiKey = configuration["CONTEXT_OPENAI_API_KEY"],
             AnthropicApiKey = configuration["CONTEXT_ANTHROPIC_API_KEY"],
+            LlmTimeoutSeconds = int.TryParse(configuration["CONTEXT_LLM_TIMEOUT_SECONDS"], out var timeoutSeconds) && timeoutSeconds > 0
+                ? timeoutSeconds
+                : ContextProvidersOptions.DefaultLlmTimeoutSeconds,
         };
     }
 }

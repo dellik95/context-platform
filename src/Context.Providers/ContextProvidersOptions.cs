@@ -13,6 +13,8 @@ namespace Context.Providers;
 /// </summary>
 public sealed record ContextProvidersOptions
 {
+    public const int DefaultLlmTimeoutSeconds = 600;
+
     /// <summary>"noop" (default), "openai", or "ollama".</summary>
     public string EmbeddingProvider { get; init; } = "noop";
 
@@ -25,4 +27,9 @@ public sealed record ContextProvidersOptions
     public string? OpenAiApiKey { get; init; }
 
     public string? AnthropicApiKey { get; init; }
+
+    /// <summary>HTTP timeout applied to every LLM/embedding call (Ollama, Anthropic, OpenAI) -- these
+    /// can run long on a big prompt or a slow local model, well past the .NET HttpClient default of
+    /// 100s. Configurable via CONTEXT_LLM_TIMEOUT_SECONDS.</summary>
+    public int LlmTimeoutSeconds { get; init; } = DefaultLlmTimeoutSeconds;
 }
