@@ -351,15 +351,25 @@ export class GraphImpactPanelComponent implements OnDestroy {
     if (!this.network) {
       this.network = new Network(container, data, this.buildNetworkOptions(dense));
       this.network.on('click', (params: { nodes: string[] }) => this.onNetworkNodeClick(params));
+      // barnesHut has no natural rest state for a graph with loosely-connected/isolated nodes
+      // (repulsion never fully balances against the few springs pulling them back) -- left
+      // running, physics never settles and the whole graph drifts/jitters indefinitely. Freezing
+      // it once the initial layout stabilizes, then only re-enabling for the duration of an
+      // active drag, is vis-network's standard fix for this.
+      this.network.on('dragStart', () => this.network?.setOptions({ physics: true }));
+      this.network.on('dragEnd', () => this.network?.setOptions({ physics: false }));
     } else {
       this.network.setOptions(this.buildNetworkOptions(dense));
       this.network.setData(data);
     }
 
     // Physics-based layout settles asynchronously -- fit immediately (covers a tiny neighborhood
-    // that never needs to stabilize) and again once stabilization actually finishes.
+    // that never needs to stabilize) and again once stabilization actually finishes, then freeze.
     this.network.fit();
-    this.network.once('stabilizationIterationsDone', () => this.network?.fit());
+    this.network.once('stabilizationIterationsDone', () => {
+      this.network?.fit();
+      this.network?.setOptions({ physics: false });
+    });
   }
 
   private onNetworkNodeClick(params: { nodes: string[] }): void {
