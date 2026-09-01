@@ -15,7 +15,14 @@ public sealed record DeleteFilePayload(Guid ProjectId, string RelativePath);
 /// </summary>
 public sealed record UpdateGraphPayload(Guid ProjectId, Guid FileId, bool Invalidate);
 
-public sealed record EmbedChunkPayload(Guid ChunkId, string ContentHash, string Text);
+/// <summary>
+/// One job per distinct content hash needing embedding (dedup: two chunks with byte-identical
+/// content share one embedding-provider call), but <see cref="ChunkIds"/> lists every chunk that
+/// content hash covers -- each of them needs its own record in the per-chunk vector index
+/// (<see cref="Abstractions.IChunkVectorIndex"/>) even though they share one
+/// <see cref="Context.Domain.Entities.Embedding"/> cache row.
+/// </summary>
+public sealed record EmbedChunkPayload(Guid ProjectId, IReadOnlyList<Guid> ChunkIds, string ContentHash, string Text);
 
 public sealed record SummarizeSessionPayload(Guid SessionId);
 

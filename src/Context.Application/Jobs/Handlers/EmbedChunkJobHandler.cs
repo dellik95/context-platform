@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Context.Application.Abstractions;
 using Context.Application.Support;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
@@ -7,8 +8,13 @@ using Context.Providers.Abstractions;
 
 namespace Context.Application.Jobs.Handlers;
 
-/// <summary>Computes and stores the embedding for one chunk's content, keyed by content hash.</summary>
-public sealed class EmbedChunkJobHandler(IEmbeddingRepository embeddings, IEmbeddingProvider embeddingProvider) : IJobHandler
+/// <summary>
+/// Computes (or reuses) the embedding for one content hash, then upserts a per-chunk record into
+/// <see cref="IChunkVectorIndex"/> for every chunk that content hash covers -- see
+/// <see cref="EmbedChunkPayload"/>'s remarks on why a single job can own multiple chunk ids.
+/// </summary>
+public sealed class EmbedChunkJobHandler(
+    IEmbeddingRepository embeddings, IChunkVectorIndex vectorIndex, IEmbeddingProvider embeddingProvider) : IJobHandler
 {
     public JobType Type => JobType.EmbedChunk;
 
@@ -21,23 +27,30 @@ public sealed class EmbedChunkJobHandler(IEmbeddingRepository embeddings, IEmbed
         // (same content hash, different chunk id - e.g. two symbols with byte-identical bodies)
         // may have already embedded this content since this job was enqueued.
         var existing = await embeddings.GetByContentHashAsync(payload.ContentHash, embeddingProvider.Name, ct).ConfigureAwait(false);
+
+        float[] vector;
         if (existing is not null)
         {
-            return;
+            vector = EmbeddingVectorCodec.Decode(existing.Vector);
+        }
+        else
+        {
+            vector = await embeddingProvider.EmbedAsync(payload.Text, ct).ConfigureAwait(false);
+
+            await embeddings.UpsertAsync(new Embedding
+            {
+                ContentHash = payload.ContentHash,
+                Provider = embeddingProvider.Name,
+                Model = embeddingProvider.Name,
+                Dim = vector.Length,
+                Vector = EmbeddingVectorCodec.Encode(vector),
+                CreatedAt = DateTimeOffset.UtcNow
+            }, ct).ConfigureAwait(false);
         }
 
-        var vector = await embeddingProvider.EmbedAsync(payload.Text, ct).ConfigureAwait(false);
-
-        var embedding = new Embedding
+        foreach (var chunkId in payload.ChunkIds)
         {
-            ContentHash = payload.ContentHash,
-            Provider = embeddingProvider.Name,
-            Model = embeddingProvider.Name,
-            Dim = vector.Length,
-            Vector = EmbeddingVectorCodec.Encode(vector),
-            CreatedAt = DateTimeOffset.UtcNow
-        };
-
-        await embeddings.UpsertAsync(embedding, ct).ConfigureAwait(false);
+            await vectorIndex.UpsertAsync(chunkId, payload.ProjectId, embeddingProvider.Name, vector, ct).ConfigureAwait(false);
+        }
     }
 }

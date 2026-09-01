@@ -218,7 +218,7 @@ public sealed class IndexingPipeline(
         await symbols.ReplaceForFileAsync(fileEntity.Id, [], ct).ConfigureAwait(false);
         await chunks.ReplaceForFileAsync(fileEntity.Id, [chunk], ct).ConfigureAwait(false);
 
-        await EnqueueEmbedIfMissingAsync([chunk], ct).ConfigureAwait(false);
+        await EnqueueEmbedIfMissingAsync(projectId, [chunk], ct).ConfigureAwait(false);
 
         if (isFirstIndex)
         {
@@ -343,7 +343,7 @@ public sealed class IndexingPipeline(
         var chunksNeedingEmbedCheck = newChunkRows
             .Where(c => (c.SymbolId.HasValue && changedOrAddedSymbolIds.Contains(c.SymbolId.Value)) || c == summaryChunk)
             .ToList();
-        await EnqueueEmbedIfMissingAsync(chunksNeedingEmbedCheck, ct).ConfigureAwait(false);
+        await EnqueueEmbedIfMissingAsync(projectId, chunksNeedingEmbedCheck, ct).ConfigureAwait(false);
 
         var hasStructuralChange = diff.Added.Count > 0 || diff.Changed.Count > 0 || diff.Removed.Count > 0;
         if (hasStructuralChange || isFirstIndex)
@@ -395,7 +395,7 @@ public sealed class IndexingPipeline(
         return new PreviousSymbolInfo(drafts, idByQualifiedName);
     }
 
-    private async Task EnqueueEmbedIfMissingAsync(IReadOnlyList<Chunk> candidateChunks, CancellationToken ct)
+    private async Task EnqueueEmbedIfMissingAsync(Guid projectId, IReadOnlyList<Chunk> candidateChunks, CancellationToken ct)
     {
         if (candidateChunks.Count == 0)
         {
@@ -409,17 +409,31 @@ public sealed class IndexingPipeline(
             return;
         }
 
+        // One EmbedChunk job per distinct content hash (dedup: two chunks with byte-identical
+        // content share one embedding-provider call), but the job's payload lists every chunk id
+        // that hash covers -- EmbedChunkJobHandler upserts a vector-index record per id, since the
+        // vector index is keyed by ChunkId, not ContentHash (see EmbedChunkPayload's remarks).
         var missingSet = missing.ToHashSet();
-        var alreadyEnqueued = new HashSet<string>();
+        var chunkIdsByHash = new Dictionary<string, List<Guid>>();
+        foreach (var chunk in candidateChunks.Where(c => missingSet.Contains(c.ContentHash)))
+        {
+            if (!chunkIdsByHash.TryGetValue(chunk.ContentHash, out var ids))
+            {
+                chunkIdsByHash[chunk.ContentHash] = ids = [];
+            }
+
+            ids.Add(chunk.Id);
+        }
 
         foreach (var chunk in candidateChunks)
         {
-            if (!missingSet.Contains(chunk.ContentHash) || !alreadyEnqueued.Add(chunk.ContentHash))
+            if (!chunkIdsByHash.Remove(chunk.ContentHash, out var chunkIds))
             {
-                continue; // already embedded, or an earlier chunk in this batch has identical content
+                continue; // already embedded, or an earlier chunk in this batch owns this hash's job
             }
 
-            await jobQueue.EnqueueAsync(JobType.EmbedChunk, new EmbedChunkPayload(chunk.Id, chunk.ContentHash, chunk.Text), ct: ct)
+            await jobQueue.EnqueueAsync(
+                JobType.EmbedChunk, new EmbedChunkPayload(projectId, chunkIds, chunk.ContentHash, chunk.Text), ct: ct)
                 .ConfigureAwait(false);
         }
     }

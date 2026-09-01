@@ -1,7 +1,8 @@
 using System.Data.Common;
 using System.Text;
-using Context.Application.Support;
+using Context.Application.Abstractions;
 using Context.Infrastructure;
+using Context.Providers.Abstractions;
 using Context.Retrieval.Abstractions;
 using Microsoft.EntityFrameworkCore;
 
@@ -11,11 +12,10 @@ namespace Context.Application.Adapters;
 /// Adapts Context.Retrieval's persistence-facing <see cref="ISearchIndex"/> seam onto SQLite:
 /// <see cref="LexicalSearchAsync"/> is a real FTS5/BM25 query against a <c>chunks_fts</c> virtual
 /// table kept in sync with the <c>Chunks</c> table by triggers (lazily created on first use — see
-/// <see cref="EnsureFtsInitializedAsync"/>); <see cref="VectorSearchAsync"/> is a brute-force
-/// cosine scan over every project chunk's stored <see cref="Domain.Entities.Embedding"/>, which is
-/// perfectly adequate at the single-project, local-first scale this platform targets (see
-/// CONTRACTS.md §9 task brief) but would need a real ANN index (e.g. sqlite-vec, or an external
-/// vector store) past roughly tens of thousands of chunks per project — flagged as follow-up.
+/// <see cref="EnsureFtsInitializedAsync"/>); <see cref="VectorSearchAsync"/> delegates the actual
+/// nearest-neighbor search to <see cref="IChunkVectorIndex"/> (a real ANN index, sqlite-vec-backed
+/// — see <see cref="SqliteChunkVectorIndex"/>) and then joins the hits back to <c>Chunks</c>/
+/// <c>Files</c> for the file/symbol/snippet a search result needs.
 /// </summary>
 /// <remarks>
 /// <b>Lifetime:</b> registered as a singleton because Context.Retrieval's <c>HybridSearchEngine</c>
@@ -26,7 +26,10 @@ namespace Context.Application.Adapters;
 /// <c>AddContextApplication</c>, targeting the same database file). See the identical note on
 /// <see cref="GraphPersistenceAdapter"/>.
 /// </remarks>
-public sealed class SqliteSearchIndex(IDbContextFactory<ContextDbContext> dbContextFactory) : ISearchIndex
+public sealed class SqliteSearchIndex(
+    IDbContextFactory<ContextDbContext> dbContextFactory,
+    IChunkVectorIndex vectorIndex,
+    IEmbeddingProvider embeddingProvider) : ISearchIndex
 {
     private const int LexicalLimit = 50;
     private const int VectorLimit = 50;
@@ -97,27 +100,39 @@ public sealed class SqliteSearchIndex(IDbContextFactory<ContextDbContext> dbCont
     public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double CosineScore)>> VectorSearchAsync(
         Guid projectId, float[] queryEmbedding, CancellationToken ct)
     {
-        await using var db = await dbContextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        var hits = await vectorIndex.SearchAsync(projectId, embeddingProvider.Name, queryEmbedding, VectorLimit, ct)
+            .ConfigureAwait(false);
+        if (hits.Count == 0)
+        {
+            return [];
+        }
 
+        var scoreByChunkId = hits.ToDictionary(h => h.ChunkId, h => h.Score);
+
+        await using var db = await dbContextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        var chunkIds = hits.Select(h => h.ChunkId).ToArray();
+
+        // A hit whose ChunkId no longer resolves here (its chunk was replaced by a reindex, or its
+        // file got deleted, after the vector index last saw it) is silently dropped -- the vector
+        // index has no proactive delete-on-reindex step (see SqliteChunkVectorIndex's remarks), so
+        // this join is what keeps a stale hit from ever reaching a real result.
         var rows = await (
             from c in db.Chunks.AsNoTracking()
             join f in db.Files.AsNoTracking() on c.FileId equals f.Id
-            join e in db.Embeddings.AsNoTracking() on c.ContentHash equals e.ContentHash
-            where f.ProjectId == projectId && !f.IsDeleted
-            select new { c.Id, c.FileId, c.SymbolId, c.Text, e.Vector }
+            where chunkIds.Contains(c.Id) && f.ProjectId == projectId && !f.IsDeleted
+            select new { c.Id, c.FileId, c.SymbolId, c.Text }
         ).ToListAsync(ct).ConfigureAwait(false);
 
-        var scored = new List<(Guid, Guid?, Guid?, string, double)>(rows.Count);
-        foreach (var row in rows)
-        {
-            var vector = EmbeddingVectorCodec.Decode(row.Vector);
-            var score = CosineSimilarity.Compute(queryEmbedding, vector);
-            var snippet = row.Text.Length > SnippetLength ? row.Text[..SnippetLength] : row.Text;
-            scored.Add((row.Id, row.FileId, row.SymbolId, snippet, score));
-        }
+        var scored = rows
+            .Select(row =>
+            {
+                var snippet = row.Text.Length > SnippetLength ? row.Text[..SnippetLength] : row.Text;
+                return (row.Id, (Guid?)row.FileId, row.SymbolId, snippet, scoreByChunkId[row.Id]);
+            })
+            .OrderByDescending(r => r.Item5)
+            .ToList();
 
-        scored.Sort((a, b) => b.Item5.CompareTo(a.Item5));
-        return scored.Count > VectorLimit ? scored.GetRange(0, VectorLimit) : scored;
+        return scored;
     }
 
     /// <summary>

@@ -17,6 +17,10 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <!-- SqliteChunkVectorIndex: real ANN vector search backing ISearchIndex.VectorSearchAsync
+         (see Adapters/SqliteChunkVectorIndex.cs). -->
+    <PackageReference Include="Microsoft.Extensions.VectorData.Abstractions" />
+    <PackageReference Include="Microsoft.SemanticKernel.Connectors.SqliteVec" />
   </ItemGroup>
 
   <PropertyGroup>

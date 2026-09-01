@@ -51,7 +51,7 @@ public static class ServiceCollectionExtensions
         var dbPath = Path.Combine(projectDataDir, "context.db");
         services.AddPooledDbContextFactory<ContextDbContext>(options => options.UseSqlite($"Data Source={dbPath}"));
 
-        AddSeamAdapters(services);
+        AddSeamAdapters(services, dbPath);
         AddJobHandlers(services);
         AddJobDispatcher(services);
         AddIndexingPipeline(services);
@@ -77,11 +77,18 @@ public static class ServiceCollectionExtensions
     /// Implements every small cross-project seam interface the other layers defined so they could
     /// be composed without illegal project references (task brief §1).
     /// </summary>
-    private static void AddSeamAdapters(IServiceCollection services)
+    private static void AddSeamAdapters(IServiceCollection services, string dbPath)
     {
         // Consumed by Context.Graph's singleton GraphCacheProvider/GraphStore -> must itself be a
         // singleton (see IDbContextFactory remark above).
         services.AddSingleton<IGraphPersistence, GraphPersistenceAdapter>();
+
+        // Consumed by SqliteSearchIndex below (and by EmbedChunkJobHandler, Scoped, on the write
+        // side) -> singleton for the same IDbContextFactory-captured-by-a-singleton reason as
+        // every other adapter here; it also caches one SqliteCollection per embedding provider for
+        // the process's lifetime (see its own remarks).
+        services.AddSingleton<IChunkVectorIndex>(sp =>
+            new SqliteChunkVectorIndex(dbPath, sp.GetRequiredService<IDbContextFactory<ContextDbContext>>()));
 
         // Consumed by Context.Retrieval's singleton HybridSearchEngine -> must itself be a
         // singleton (see IDbContextFactory remark above).
