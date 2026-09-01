@@ -266,6 +266,51 @@ public sealed class TreeSitterCSharpParserTests
             && r.TargetName == "Prepare");
     }
 
+    private const string CrossFileCallSource = """
+        namespace Acme.Widgets;
+
+        public class Consumer
+        {
+            private readonly IWorker _worker;
+
+            public void Run()
+            {
+                _worker.DoWork();
+            }
+        }
+        """;
+
+    // Regression coverage for a real bug: a call whose callee is declared in a DIFFERENT file (the
+    // overwhelming majority of real calls -- anything reached through an injected interface, like
+    // _worker.DoWork() here) was silently dropped, because the per-file "known method names" set
+    // only ever contained names declared in *this* file. A live search for a real method called
+    // exactly this way (Context.Application.Indexing.LlmFileSummarizer.SummarizeAsync, called via
+    // an injected IFileSummarizer from a different file) showed zero callers despite a real call
+    // site existing.
+    [Fact]
+    public void ExtractRelations_CrossFileMemberAccessCall_DroppedWithoutProjectSymbolNames()
+    {
+        using var parser = new TreeSitterCSharpParser();
+
+        var relations = parser.ExtractRelations(parser.Parse(CrossFileCallSource));
+
+        relations.Should().NotContain(r => r.TargetName == "DoWork");
+    }
+
+    [Fact]
+    public void ExtractRelations_CrossFileMemberAccessCall_IncludedWithProjectSymbolNames()
+    {
+        using var parser = new TreeSitterCSharpParser();
+
+        var relations = parser.ExtractRelations(
+            parser.Parse(CrossFileCallSource), projectSymbolNames: new HashSet<string> { "DoWork" });
+
+        relations.Should().ContainSingle(r =>
+            r.Kind == RelationKind.Calls
+            && r.SourceQualifiedName == "Acme.Widgets.Consumer.Run"
+            && r.TargetName == "DoWork");
+    }
+
     [Fact]
     public void ExtractRelations_MethodGroupReferenceAsArgument_ProducesCallsRelation()
     {

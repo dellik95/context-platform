@@ -27,6 +27,18 @@ public class SymbolRepository(ContextDbContext db) : ISymbolRepository
         ).Take(limit).ToListAsync(ct);
     }
 
+    public async Task<IReadOnlySet<string>> GetAllNamesAsync(Guid projectId, CancellationToken ct)
+    {
+        var names = await (
+            from s in db.Symbols.AsNoTracking()
+            join f in db.Files.AsNoTracking() on s.FileId equals f.Id
+            where f.ProjectId == projectId && !f.IsDeleted
+            select s.Name
+        ).Distinct().ToListAsync(ct);
+
+        return names.ToHashSet(StringComparer.Ordinal);
+    }
+
     public async Task ReplaceForFileAsync(Guid fileId, IReadOnlyList<Symbol> symbols, CancellationToken ct)
     {
         await using var tx = await db.Database.BeginTransactionAsync(ct);

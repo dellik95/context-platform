@@ -20,5 +20,13 @@ public interface ILanguageParser
 
     IReadOnlyList<SymbolDraft> ExtractSymbols(ParsedAst ast);
 
-    IReadOnlyList<RelationDraft> ExtractRelations(ParsedAst ast);
+    /// <param name="projectSymbolNames">
+    /// Names of every symbol already indexed elsewhere in the project (not just this file) --
+    /// without this, a call whose callee is declared in a different file (the overwhelming
+    /// majority of real calls, e.g. anything reached through an injected interface) can't be told
+    /// apart from a call into third-party/framework code with no corresponding project symbol at
+    /// all, and gets silently dropped rather than flooding the graph with an UnresolvedExternal
+    /// node per BCL/framework call. Null/omitted is treated as empty (this file's own declarations only).
+    /// </param>
+    IReadOnlyList<RelationDraft> ExtractRelations(ParsedAst ast, IReadOnlySet<string>? projectSymbolNames = null);
 }

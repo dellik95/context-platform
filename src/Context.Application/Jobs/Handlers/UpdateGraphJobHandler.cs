@@ -147,7 +147,8 @@ public sealed class UpdateGraphJobHandler(
 
             var sourceText = await System.IO.File.ReadAllTextAsync(absolutePath, ct).ConfigureAwait(false);
             var ast = parser.Parse(sourceText);
-            relationDrafts = parser.ExtractRelations(ast);
+            var projectSymbolNames = await symbols.GetAllNamesAsync(projectId, ct).ConfigureAwait(false);
+            relationDrafts = parser.ExtractRelations(ast, projectSymbolNames);
         }
         catch (OperationCanceledException)
         {

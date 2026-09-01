@@ -206,7 +206,7 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
         }
     }
 
-    public IReadOnlyList<RelationDraft> ExtractRelations(ParsedAst ast)
+    public IReadOnlyList<RelationDraft> ExtractRelations(ParsedAst ast, IReadOnlySet<string>? projectSymbolNames = null)
     {
         var wrapper = RequireTree(ast);
         try
@@ -216,7 +216,7 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
 
             AddInheritanceRelations(root, relations);
             AddImportRelations(root, relations);
-            AddCallRelations(root, relations);
+            AddCallRelations(root, relations, projectSymbolNames);
 
             return relations;
         }
@@ -309,9 +309,14 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
     // Calls
     // ------------------------------------------------------------------
 
-    private void AddCallRelations(TS.Node root, List<RelationDraft> relations)
+    private void AddCallRelations(TS.Node root, List<RelationDraft> relations, IReadOnlySet<string>? projectSymbolNames)
     {
         var knownMethodNames = new HashSet<string>(StringComparer.Ordinal);
+        if (projectSymbolNames is not null)
+        {
+            knownMethodNames.UnionWith(projectSymbolNames);
+        }
+
         using (var namesQuery = new TS.Query(_language, MethodNamesQuery))
         {
             foreach (var match in namesQuery.Execute(root).Matches)

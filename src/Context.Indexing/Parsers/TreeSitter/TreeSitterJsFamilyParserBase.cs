@@ -170,7 +170,7 @@ public abstract class TreeSitterJsFamilyParserBase : ILanguageParser, IDisposabl
         }
     }
 
-    public IReadOnlyList<RelationDraft> ExtractRelations(ParsedAst ast)
+    public IReadOnlyList<RelationDraft> ExtractRelations(ParsedAst ast, IReadOnlySet<string>? projectSymbolNames = null)
     {
         var wrapper = RequireTree(ast);
         try
@@ -185,7 +185,7 @@ public abstract class TreeSitterJsFamilyParserBase : ILanguageParser, IDisposabl
 
             AddInheritanceRelations(root, relations);
             AddImportRelations(root, relations);
-            AddCallRelations(root, symbolDrafts, relations);
+            AddCallRelations(root, symbolDrafts, relations, projectSymbolNames);
             AddExportRelations(root, symbolDrafts, relations);
 
             return relations;
@@ -559,13 +559,19 @@ public abstract class TreeSitterJsFamilyParserBase : ILanguageParser, IDisposabl
     // Calls
     // ------------------------------------------------------------------
 
-    private void AddCallRelations(TS.Node root, List<SymbolDraft> symbolDrafts, List<RelationDraft> relations)
+    private void AddCallRelations(
+        TS.Node root, List<SymbolDraft> symbolDrafts, List<RelationDraft> relations, IReadOnlySet<string>? projectSymbolNames)
     {
-        // Exactly TreeSitterCSharpParser's approach: only a callee name that matches one of this
-        // file's own declared functions/methods counts, so a call to an external/library function
-        // (`console.log(...)`, an imported helper, etc.) is correctly excluded rather than reported
-        // as a same-file Calls relation.
+        // A callee name matching either this file's own declared functions/methods, or any symbol
+        // already indexed elsewhere in the project (projectSymbolNames), counts as a relation --
+        // otherwise a call to an external/library function (`console.log(...)`, an imported helper,
+        // etc.) with no corresponding project symbol is correctly excluded.
         var knownNames = new HashSet<string>(StringComparer.Ordinal);
+        if (projectSymbolNames is not null)
+        {
+            knownNames.UnionWith(projectSymbolNames);
+        }
+
         foreach (var draft in symbolDrafts)
         {
             if (draft.Kind is SymbolKind.Function or SymbolKind.Method)

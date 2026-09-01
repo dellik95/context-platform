@@ -64,7 +64,8 @@ public sealed class RegexHeuristicParser : ILanguageParser
 
     public IReadOnlyList<SymbolDraft> ExtractSymbols(ParsedAst ast) => RequireTree(ast).Symbols;
 
-    public IReadOnlyList<RelationDraft> ExtractRelations(ParsedAst ast) => RequireTree(ast).Relations;
+    public IReadOnlyList<RelationDraft> ExtractRelations(ParsedAst ast, IReadOnlySet<string>? projectSymbolNames = null) =>
+        RequireTree(ast).Relations;
 
     private static RegexAstTree RequireTree(ParsedAst ast) =>
         ast.Tree as RegexAstTree
