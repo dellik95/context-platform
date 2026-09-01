@@ -109,7 +109,7 @@ public sealed class GoldenPathE2ETests : IAsyncLifetime
         services.AddContextProviders();
         services.AddContextRetrieval();
         services.AddContextMemory();
-        services.AddContextApplication(dataDir);
+        services.AddContextApplication(_projectRoot.FullName, dataDir);
 
         _provider = services.BuildServiceProvider();
 

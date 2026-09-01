@@ -1,22 +1,21 @@
+using System.ClientModel;
+using Anthropic.SDK;
 using Context.Providers.Abstractions;
 using Context.Providers.Embeddings;
 using Context.Providers.Llm;
 using Context.Providers.Reranking;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using OllamaSharp;
+using OpenAI;
+using OpenAI.Embeddings;
 
 namespace Context.Providers;
 
 public static class ServiceCollectionExtensions
 {
-    /// <summary>
-    /// Registers <see cref="IEmbeddingProvider"/>, <see cref="IRerankerProvider"/> and
-    /// <see cref="ILlmProvider"/> based on the selector flags in <paramref name="options"/>.
-    /// With no options supplied, everything defaults to the offline/local implementations
-    /// (<see cref="NoOpEmbeddingProvider"/>, <see cref="LocalOnnxReranker"/> in heuristic-fallback
-    /// mode, <see cref="NoOpLlmProvider"/>) so the pipeline works with zero external dependencies.
-    /// </summary>
     public static IServiceCollection AddContextProviders(
         this IServiceCollection services,
         ContextProvidersOptions? options = null)
@@ -24,25 +23,47 @@ public static class ServiceCollectionExtensions
         options ??= new ContextProvidersOptions();
 
         services.AddSingleton(Options.Create(options));
-        services.AddSingleton(options.OpenAi);
-        services.AddSingleton(options.Ollama);
-        services.AddSingleton(options.OllamaChat);
-        services.AddSingleton(options.LocalOnnx);
-        services.AddSingleton(options.Anthropic);
+        services.Configure<AnthropicOptions>(o => o.ApiKey = options.AnthropicApiKey);
+        services.Configure<OpenAiOptions>(o => o.ApiKey = options.OpenAiApiKey);
 
         switch (options.EmbeddingProvider.Trim().ToLowerInvariant())
         {
             case "openai":
-                services.AddSingleton<IEmbeddingProvider, OpenAiEmbeddingProvider>();
+                services.AddEmbeddingGenerator(sp =>
+                {
+                    var o = sp.GetRequiredService<IOptions<OpenAiOptions>>().Value;
+                    if (string.IsNullOrWhiteSpace(o.ApiKey))
+                    {
+                        throw new InvalidOperationException(
+                            "OpenAiEmbeddingProvider requires an API key. Configure OpenAiOptions.ApiKey " +
+                            "(e.g. sourced from the OPENAI_API_KEY environment variable) before use.");
+                    }
+
+                    var clientOptions = new OpenAIClientOptions();
+                    if (!string.IsNullOrWhiteSpace(o.BaseUrl))
+                    {
+                        clientOptions.Endpoint = new Uri(o.BaseUrl);
+                    }
+
+                    return new EmbeddingClient(o.Model, new ApiKeyCredential(o.ApiKey), clientOptions).AsIEmbeddingGenerator();
+                });
                 break;
             case "ollama":
-                services.AddHttpClient<IEmbeddingProvider, OllamaEmbeddingProvider>()
+                services.AddHttpClient("ollama-embeddings")
                     .AddHttpMessageHandler(sp => new OllamaHostFallbackHandler(
-                        options.Ollama.BaseUrl, "Ollama embeddings", sp.GetService<ILoggerFactory>()?.CreateLogger<OllamaHostFallbackHandler>()));
+                        sp.GetRequiredService<IOptionsMonitor<OllamaOptions>>().Get(OllamaOptions.EmbeddingName).BaseUrl,
+                        "Ollama embeddings", sp.GetService<ILoggerFactory>()?.CreateLogger<OllamaHostFallbackHandler>()));
+                services.AddEmbeddingGenerator(sp =>
+                {
+                    var o = sp.GetRequiredService<IOptionsMonitor<OllamaOptions>>().Get(OllamaOptions.EmbeddingName);
+                    var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("ollama-embeddings");
+                    http.BaseAddress ??= new Uri(o.BaseUrl.TrimEnd('/') + "/");
+                    IEmbeddingGenerator<string, Embedding<float>> inner = new OllamaApiClient(http, o.Model);
+                    return new OllamaEmbeddingGeneratorDecorator(inner, sp.GetService<ILogger<OllamaEmbeddingGeneratorDecorator>>());
+                });
                 break;
-            case "noop":
             default:
-                services.AddSingleton<IEmbeddingProvider, NoOpEmbeddingProvider>();
+                services.AddEmbeddingGenerator(_ => new NoOpEmbeddingGenerator());
                 break;
         }
 
@@ -60,16 +81,42 @@ public static class ServiceCollectionExtensions
         switch (options.LlmProvider.Trim().ToLowerInvariant())
         {
             case "anthropic":
-                services.AddHttpClient<ILlmProvider, AnthropicLlmProvider>();
+                services.AddChatClient(sp =>
+                {
+                    var o = sp.GetRequiredService<IOptions<AnthropicOptions>>().Value;
+                    if (string.IsNullOrWhiteSpace(o.ApiKey))
+                    {
+                        throw new InvalidOperationException(
+                            "AnthropicLlmProvider requires an API key. Configure AnthropicOptions.ApiKey " +
+                            "(e.g. sourced from the ANTHROPIC_API_KEY environment variable) before use.");
+                    }
+
+                    var http = new HttpClient();
+                    if (!string.IsNullOrWhiteSpace(o.BaseUrl))
+                    {
+                        http.BaseAddress = new Uri(o.BaseUrl.TrimEnd('/') + "/");
+                    }
+
+                    return new AnthropicClient(new APIAuthentication(o.ApiKey), http).Messages;
+                });
                 break;
             case "ollama":
-                services.AddHttpClient<ILlmProvider, OllamaLlmProvider>()
+                services.AddHttpClient("ollama-chat")
                     .AddHttpMessageHandler(sp => new OllamaHostFallbackHandler(
-                        options.OllamaChat.BaseUrl, "Ollama chat", sp.GetService<ILoggerFactory>()?.CreateLogger<OllamaHostFallbackHandler>()));
+                        sp.GetRequiredService<IOptionsMonitor<OllamaOptions>>().Get(OllamaOptions.ChatName).BaseUrl,
+                        "Ollama chat", sp.GetService<ILoggerFactory>()?.CreateLogger<OllamaHostFallbackHandler>()));
+                services.AddChatClient(sp =>
+                {
+                    var o = sp.GetRequiredService<IOptionsMonitor<OllamaOptions>>().Get(OllamaOptions.ChatName);
+                    var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("ollama-chat");
+                    http.Timeout = TimeSpan.FromMinutes(5);
+                    http.BaseAddress ??= new Uri(o.BaseUrl.TrimEnd('/') + "/");
+                    IChatClient inner = new OllamaApiClient(http, o.Model);
+                    return new OllamaChatClientDecorator(inner, o.Model);
+                });
                 break;
-            case "noop":
             default:
-                services.AddSingleton<ILlmProvider, NoOpLlmProvider>();
+                services.AddChatClient(_ => new NoOpChatClient());
                 break;
         }
 

@@ -1,6 +1,8 @@
 using Context.Infrastructure;
+using Context.Providers;
 using Context.Providers.Abstractions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.AI;
 
 namespace Context.Host.Api;
 
@@ -18,9 +20,9 @@ public static class HealthEndpoints
 
     private static async Task<IResult> HealthAsync(
         IDbContextFactory<ContextDbContext> dbFactory,
-        IEmbeddingProvider embeddingProvider,
+        IEmbeddingGenerator<string, Embedding<float>> embeddingGenerator,
         IRerankerProvider rerankerProvider,
-        ILlmProvider llmProvider,
+        IChatClient chatClient,
         CancellationToken ct)
     {
         var databaseReachable = await HealthChecks.CheckDatabaseAsync(dbFactory, ct).ConfigureAwait(false);
@@ -36,7 +38,7 @@ public static class HealthEndpoints
 
         var healthy = databaseReachable && jobDispatcherAlive;
         var response = new HealthResponse(
-            healthy, databaseReachable, jobDispatcherAlive, embeddingProvider.Name, rerankerProvider.Name, llmProvider.Name);
+            healthy, databaseReachable, jobDispatcherAlive, embeddingGenerator.GetProviderName(), rerankerProvider.Name, chatClient.GetProviderName());
 
         return healthy ? Results.Ok(response) : Results.Json(response, statusCode: StatusCodes.Status503ServiceUnavailable);
     }

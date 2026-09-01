@@ -30,15 +30,20 @@ namespace Context.Application;
 /// </summary>
 public static class ServiceCollectionExtensions
 {
+    /// <param name="projectRoot">
+    /// <c>{repo-root}</c> — needed by provider-options setup classes (<see cref="Providers.OllamaOptionsSetup"/>)
+    /// that read the Dashboard Settings tab's saved <c>.claude/context-platform.local.json</c> override.
+    /// </param>
     /// <param name="projectDataDir">
     /// <c>{repo-root}/.context/</c> (CONTRACTS.md §9) — the same directory whose <c>context.db</c>
     /// was passed to <c>AddContextInfrastructure</c>. Needed here for two things: computing the
     /// same SQLite connection string for the singleton-safe <see cref="IDbContextFactory{TContext}"/>
     /// registration below, and <c>BackupDbJobHandler</c>'s <c>VACUUM INTO ... /backups/</c> target.
     /// </param>
-    public static IServiceCollection AddContextApplication(this IServiceCollection services, string projectDataDir)
+    public static IServiceCollection AddContextApplication(this IServiceCollection services, string projectRoot, string projectDataDir)
     {
-        services.AddSingleton(new ContextApplicationOptions { ProjectDataDir = projectDataDir });
+        services.AddSingleton(new ContextApplicationOptions { ProjectRoot = projectRoot, ProjectDataDir = projectDataDir });
+        services.ConfigureOptions<Providers.OllamaOptionsSetup>();
 
         // A handful of Context.Application adapters are consumed by singletons registered in
         // Context.Graph / Context.Retrieval (the warm graph cache and the hybrid search engine
@@ -58,7 +63,7 @@ public static class ServiceCollectionExtensions
         AddContextEngine(services);
 
         // Real default: LlmFileSummarizer already degrades to a no-op internally when the
-        // configured ILlmProvider is "noop", so (unlike IIndexingProgressReporter above) there's
+        // configured IChatClient is "noop", so (unlike IIndexingProgressReporter above) there's
         // no separate Null-then-override registration needed here.
         services.AddSingleton<IFileSummarizer, LlmFileSummarizer>();
 
@@ -95,7 +100,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISearchIndex, SqliteSearchIndex>();
 
         // Also consumed by the singleton HybridSearchEngine, but their own dependencies
-        // (Context.Providers' IEmbeddingProvider/IRerankerProvider) are themselves registered
+        // (Context.Providers' IEmbeddingGenerator/IRerankerProvider) are themselves registered
         // singleton by AddContextProviders in every built-in configuration, so these are safe as
         // singletons too (and must be, for the same DI-lifetime reason as the two adapters above).
         services.AddSingleton<IEmbeddingLookup, EmbeddingLookupAdapter>();

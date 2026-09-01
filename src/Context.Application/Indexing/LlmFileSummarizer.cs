@@ -1,16 +1,17 @@
-using Context.Providers.Abstractions;
+using Context.Providers;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Context.Application.Indexing;
 
 /// <summary>
-/// Default <see cref="IFileSummarizer"/>: asks the configured <see cref="ILlmProvider"/> for a
+/// Default <see cref="IFileSummarizer"/>: asks the configured <see cref="IChatClient"/> for a
 /// short natural-language description of a file, given its path and top-level symbol names.
 /// Degrades to a no-op (returns null) when there's no signal to summarize from (no symbols) or
 /// the provider is offline, matching <c>LlmMemoryExtractor</c>'s own offline-provider convention.
 /// </summary>
-public sealed class LlmFileSummarizer(ILlmProvider llmProvider, ILogger<LlmFileSummarizer>? logger = null) : IFileSummarizer
+public sealed class LlmFileSummarizer(IChatClient chatClient, ILogger<LlmFileSummarizer>? logger = null) : IFileSummarizer
 {
     private const string SystemPrompt =
         """
@@ -38,28 +39,27 @@ public sealed class LlmFileSummarizer(ILlmProvider llmProvider, ILogger<LlmFileS
 
     public async Task<string?> SummarizeAsync(string relativePath, IReadOnlyList<string> symbolNames, CancellationToken ct)
     {
-        if (symbolNames.Count == 0 || IsOffline(llmProvider))
+        if (symbolNames.Count == 0 || chatClient.IsNoOp())
         {
             return null;
         }
 
         var userPrompt = $"File: {relativePath}\nTop-level symbols: {string.Join(", ", symbolNames)}";
+        List<ChatMessage> messages = [new(ChatRole.System, SystemPrompt), new(ChatRole.User, userPrompt)];
 
         string response;
         try
         {
-            response = await llmProvider.CompleteAsync(SystemPrompt, userPrompt, ct).ConfigureAwait(false);
+            var chatResponse = await chatClient.GetResponseAsync(messages, cancellationToken: ct).ConfigureAwait(false);
+            response = chatResponse.Text;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex, "LLM provider {Provider} failed to summarize file {RelativePath}.", llmProvider.Name, relativePath);
+            _logger.LogWarning(ex, "LLM provider {Provider} failed to summarize file {RelativePath}.", chatClient.GetProviderName(), relativePath);
             return null;
         }
 
         var trimmed = response.Trim();
         return trimmed.Length == 0 ? null : trimmed;
     }
-
-    private static bool IsOffline(ILlmProvider provider) =>
-        string.Equals(provider.Name, "noop", StringComparison.OrdinalIgnoreCase);
 }

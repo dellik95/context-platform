@@ -390,60 +390,6 @@ namespace Context.Infrastructure.Migrations
                     b.ToTable("MemoryEmbeddings", (string)null);
                 });
 
-            modelBuilder.Entity("Context.Domain.Entities.MemoryFile", b =>
-                {
-                    b.Property<Guid>("MemoryId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid>("FileId")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("MemoryId", "FileId");
-
-                    b.HasIndex("FileId");
-
-                    b.ToTable("MemoryFiles", (string)null);
-                });
-
-            modelBuilder.Entity("Context.Domain.Entities.MemoryRelation", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("Kind")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<Guid>("MemoryId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid>("RelatedMemoryId")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("MemoryId");
-
-                    b.HasIndex("RelatedMemoryId");
-
-                    b.ToTable("MemoryRelations", (string)null);
-                });
-
-            modelBuilder.Entity("Context.Domain.Entities.MemorySymbol", b =>
-                {
-                    b.Property<Guid>("MemoryId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid>("SymbolId")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("MemoryId", "SymbolId");
-
-                    b.HasIndex("SymbolId");
-
-                    b.ToTable("MemorySymbols", (string)null);
-                });
-
             modelBuilder.Entity("Context.Domain.Entities.Project", b =>
                 {
                     b.Property<Guid>("Id")
@@ -815,51 +761,6 @@ namespace Context.Infrastructure.Migrations
                     b.HasOne("Context.Domain.Entities.Memory", null)
                         .WithOne()
                         .HasForeignKey("Context.Domain.Entities.MemoryEmbedding", "MemoryId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("Context.Domain.Entities.MemoryFile", b =>
-                {
-                    b.HasOne("Context.Domain.Entities.File", null)
-                        .WithMany()
-                        .HasForeignKey("FileId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("Context.Domain.Entities.Memory", null)
-                        .WithMany()
-                        .HasForeignKey("MemoryId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("Context.Domain.Entities.MemoryRelation", b =>
-                {
-                    b.HasOne("Context.Domain.Entities.Memory", null)
-                        .WithMany()
-                        .HasForeignKey("MemoryId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("Context.Domain.Entities.Memory", null)
-                        .WithMany()
-                        .HasForeignKey("RelatedMemoryId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("Context.Domain.Entities.MemorySymbol", b =>
-                {
-                    b.HasOne("Context.Domain.Entities.Memory", null)
-                        .WithMany()
-                        .HasForeignKey("MemoryId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("Context.Domain.Entities.Symbol", null)
-                        .WithMany()
-                        .HasForeignKey("SymbolId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

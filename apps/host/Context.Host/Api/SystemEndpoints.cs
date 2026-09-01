@@ -1,7 +1,8 @@
 using Context.Domain.Enums;
 using Context.Infrastructure;
-using Context.Providers.Abstractions;
+using Context.Providers;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.AI;
 
 namespace Context.Host.Api;
 
@@ -19,8 +20,8 @@ public static class SystemEndpoints
 
     private static async Task<IResult> StatusAsync(
         IDbContextFactory<ContextDbContext> dbFactory,
-        IEmbeddingProvider embeddingProvider,
-        ILlmProvider llmProvider,
+        IEmbeddingGenerator<string, Embedding<float>> embeddingGenerator,
+        IChatClient chatClient,
         HostStartTime startTime,
         CancellationToken ct)
     {
@@ -49,8 +50,8 @@ public static class SystemEndpoints
             databaseReachable,
             jobDispatcherAlive,
             mcpAlive,
-            embeddingProvider.Name,
-            llmProvider.Name,
+            embeddingGenerator.GetProviderName(),
+            chatClient.GetProviderName(),
             CountFor(JobStatus.Pending),
             CountFor(JobStatus.Running),
             CountFor(JobStatus.Failed),

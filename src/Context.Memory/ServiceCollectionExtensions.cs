@@ -9,8 +9,8 @@ public static class ServiceCollectionExtensions
 {
     /// <summary>
     /// Registers <see cref="ISessionSummarizer"/> and <see cref="IMemoryExtractor"/>.
-    /// Callers must separately register <c>Context.Providers.Abstractions.ILlmProvider</c> /
-    /// <c>IEmbeddingProvider</c> (e.g. via <c>AddContextProviders</c>) and the
+    /// Callers must separately register <c>IChatClient</c>/<c>IEmbeddingGenerator&lt;string, Embedding&lt;float&gt;&gt;</c>
+    /// (e.g. via <c>Context.Providers.AddContextProviders</c>) and the
     /// <see cref="ISessionEventSource"/> / <see cref="IMemoryStore"/> seam implementations
     /// (Context.Application wires these to the real repositories).
     /// </summary>

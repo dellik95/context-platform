@@ -34,7 +34,7 @@ public sealed class ProjectSettingsService(
             }
         }
 
-        var localSettings = await TryReadLocalSettingsAsync(project.RootPath, ct).ConfigureAwait(false);
+        var localSettings = await LocalProjectSettingsReader.TryReadAsync(project.RootPath, ct).ConfigureAwait(false);
         if (localSettings is not null)
         {
             effective = localSettings;
@@ -118,30 +118,6 @@ public sealed class ProjectSettingsService(
             MaxMemoryNotesPerSection: int.TryParse(section?["MaxMemoryNotesPerSection"], out var maxMemoryNotesPerSection)
                 ? maxMemoryNotesPerSection
                 : 20);
-    }
-
-    private static async Task<ProjectSettingsDto?> TryReadLocalSettingsAsync(string projectRoot, CancellationToken ct)
-    {
-        var path = Path.Combine(projectRoot, ".claude", "context-platform.local.json");
-        if (!File.Exists(path))
-        {
-            return null;
-        }
-
-        try
-        {
-            var json = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
-            var root = JsonNode.Parse(json) as JsonObject;
-            return root?["settings"]?.Deserialize<ProjectSettingsDto>();
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-        catch (IOException)
-        {
-            return null;
-        }
     }
 
     // A malformed/legacy ConfigJson must fall back to defaults rather than fail GetAsync outright.

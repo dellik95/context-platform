@@ -549,7 +549,7 @@ static async Task<ServiceProvider> InitializeAsync(string root, bool migrate, Ca
     services.AddContextRetrieval();
     services.AddContextMemory();
     services.AddContextClaude();
-    services.AddContextApplication(dataDir);
+    services.AddContextApplication(root, dataDir);
 
     var provider = services.BuildServiceProvider();
 

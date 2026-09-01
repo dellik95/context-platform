@@ -2,8 +2,8 @@ namespace Context.Application.Settings;
 
 // Persisted verbatim (as JSON) into Project.ConfigJson - the whole field is this DTO's
 // serialization, nothing else uses ConfigJson today. Provider fields are informational/
-// override-on-next-restart only: Context.Providers wires concrete IEmbeddingProvider/
-// ILlmProvider instances once at Context.Host startup via DI (see CONTRACTS.md SS5), there is
+// override-on-next-restart only: Context.Providers wires concrete IEmbeddingGenerator/
+// IChatClient instances once at Context.Host startup via DI (see CONTRACTS.md SS5), there is
 // no per-request/per-project provider resolution, so changing these fields does NOT hot-swap
 // the running provider - the Settings UI must say so next to the provider fields.
 // ReindexEnabled/ReindexIntervalMinutes and SessionSummaryIntervalMinutes DO take effect live

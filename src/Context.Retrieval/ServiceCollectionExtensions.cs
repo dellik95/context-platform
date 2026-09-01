@@ -7,43 +7,19 @@ namespace Context.Retrieval;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddContextRetrieval(
-        this IServiceCollection services,
-        HybridScoringOptions? scoringOptions = null,
-        HybridSearchOptions? searchOptions = null,
-        ContextPackOptions? packOptions = null)
+    /// <summary>
+    /// Registers the scoring/merge/rerank/budget pipeline against whatever <see cref="HybridScoringOptions"/>/
+    /// <see cref="HybridSearchOptions"/>/<see cref="ContextPackOptions"/> are already configured in
+    /// <paramref name="services"/> (each options class's own property initializers supply the
+    /// default when nothing configures it) -- bind real config via
+    /// <c>services.Configure&lt;HybridScoringOptions&gt;(configuration.GetSection(...))</c> etc.
+    /// (see Context.Host's Program.cs) before calling this.
+    /// </summary>
+    public static IServiceCollection AddContextRetrieval(this IServiceCollection services)
     {
-        var scoring = scoringOptions ?? new HybridScoringOptions();
-        var search = searchOptions ?? new HybridSearchOptions();
-        var pack = packOptions ?? new ContextPackOptions();
-
-        services.AddOptions<HybridScoringOptions>().Configure(o =>
-        {
-            o.LexicalWeight = scoring.LexicalWeight;
-            o.VectorWeight = scoring.VectorWeight;
-            o.GraphWeight = scoring.GraphWeight;
-            o.RecencyWeight = scoring.RecencyWeight;
-            o.MemoryWeight = scoring.MemoryWeight;
-        });
-
-        services.AddOptions<HybridSearchOptions>().Configure(o =>
-        {
-            o.GraphExpansionSeedCount = search.GraphExpansionSeedCount;
-            o.GraphExpansionHops = search.GraphExpansionHops;
-            o.RerankTopK = search.RerankTopK;
-            o.SemanticBoostEnabled = search.SemanticBoostEnabled;
-            o.SemanticStrongMatchThreshold = search.SemanticStrongMatchThreshold;
-            o.SemanticBoostFactor = search.SemanticBoostFactor;
-        });
-
-        services.AddOptions<ContextPackOptions>().Configure(o =>
-        {
-            o.ArchitectureReserveRatio = pack.ArchitectureReserveRatio;
-            o.PrimaryReserveRatio = pack.PrimaryReserveRatio;
-            o.HistoricalReserveRatio = pack.HistoricalReserveRatio;
-            o.OpenIssuesReserveRatio = pack.OpenIssuesReserveRatio;
-            o.SafetyReserveRatio = pack.SafetyReserveRatio;
-        });
+        services.AddOptions<HybridScoringOptions>();
+        services.AddOptions<HybridSearchOptions>();
+        services.AddOptions<ContextPackOptions>();
 
         services.AddSingleton<IHybridScorer>(sp =>
             new HybridScorer(sp.GetRequiredService<IOptionsMonitor<HybridScoringOptions>>()));

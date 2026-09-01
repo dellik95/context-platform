@@ -2,7 +2,8 @@ using System.Text.Json;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
 using Context.Memory.Abstractions;
-using Context.Providers.Abstractions;
+using Context.Providers;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace Context.Memory.Extraction;
@@ -23,8 +24,8 @@ namespace Context.Memory.Extraction;
 public sealed class LlmMemoryExtractor(
     ISessionEventSource sessionEventSource,
     IMemoryStore memoryStore,
-    ILlmProvider llmProvider,
-    IEmbeddingProvider embeddingProvider,
+    IChatClient chatClient,
+    IEmbeddingGenerator<string, Embedding<float>> embeddingGenerator,
     ILogger<LlmMemoryExtractor>? logger = null) : IMemoryExtractor
 {
     private const double SimilarityThreshold = 0.92;
@@ -34,7 +35,7 @@ public sealed class LlmMemoryExtractor(
     {
         var projectId = await sessionEventSource.GetProjectIdAsync(summary.SessionId, ct).ConfigureAwait(false);
 
-        var candidates = IsOffline(llmProvider)
+        var candidates = chatClient.IsNoOp()
             ? MemoryCandidateHeuristics.FromSummary(summary)
             : await ExtractCandidatesViaLlmAsync(summary, ct).ConfigureAwait(false);
 
@@ -51,16 +52,17 @@ public sealed class LlmMemoryExtractor(
         {
             ct.ThrowIfCancellationRequested();
 
-            var embedding = await embeddingProvider
-                .EmbedAsync($"{candidate.Title}\n{candidate.Body}", ct)
+            var embeddingResult = await embeddingGenerator
+                .GenerateAsync($"{candidate.Title}\n{candidate.Body}", cancellationToken: ct)
                 .ConfigureAwait(false);
+            var embedding = embeddingResult.Vector.ToArray();
 
             var bestMatch = FindBestMatch(embedding, existing);
 
             if (bestMatch is { Similarity: > SimilarityThreshold })
             {
                 var oldMemory = bestMatch.Value.Existing.Memory;
-                var consistent = IsOffline(llmProvider)
+                var consistent = chatClient.IsNoOp()
                     ? MemoryConsistencyChecker.HeuristicIsConsistent(oldMemory, candidate)
                     : await CheckConsistencyViaLlmAsync(oldMemory, candidate, ct).ConfigureAwait(false);
 
@@ -98,17 +100,17 @@ public sealed class LlmMemoryExtractor(
     private async Task<IReadOnlyList<MemoryCandidate>> ExtractCandidatesViaLlmAsync(SessionSummary summary, CancellationToken ct)
     {
         var userPrompt = MemoryExtractionPromptBuilder.BuildUserPrompt(summary);
+        List<ChatMessage> messages = [new(ChatRole.System, MemoryExtractionPromptBuilder.SystemPrompt), new(ChatRole.User, userPrompt)];
 
         string response;
         try
         {
-            response = await llmProvider
-                .CompleteAsync(MemoryExtractionPromptBuilder.SystemPrompt, userPrompt, ct)
-                .ConfigureAwait(false);
+            var chatResponse = await chatClient.GetResponseAsync(messages, cancellationToken: ct).ConfigureAwait(false);
+            response = chatResponse.Text;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger?.LogWarning(ex, "LLM provider {Provider} failed to extract candidate memories for session {SessionId}.", llmProvider.Name, summary.SessionId);
+            logger?.LogWarning(ex, "LLM provider {Provider} failed to extract candidate memories for session {SessionId}.", chatClient.GetProviderName(), summary.SessionId);
             return [];
         }
 
@@ -117,19 +119,20 @@ public sealed class LlmMemoryExtractor(
 
     private async Task<bool> CheckConsistencyViaLlmAsync(Context.Domain.Entities.Memory oldMemory, MemoryCandidate candidate, CancellationToken ct)
     {
+        List<ChatMessage> messages =
+        [
+            new(ChatRole.System, MemoryConsistencyChecker.SystemPrompt),
+            new(ChatRole.User, MemoryConsistencyChecker.BuildUserPrompt(oldMemory, candidate)),
+        ];
+
         try
         {
-            var response = await llmProvider
-                .CompleteAsync(
-                    MemoryConsistencyChecker.SystemPrompt,
-                    MemoryConsistencyChecker.BuildUserPrompt(oldMemory, candidate),
-                    ct)
-                .ConfigureAwait(false);
-            return MemoryConsistencyChecker.ParseIsConsistent(response);
+            var chatResponse = await chatClient.GetResponseAsync(messages, cancellationToken: ct).ConfigureAwait(false);
+            return MemoryConsistencyChecker.ParseIsConsistent(chatResponse.Text);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger?.LogWarning(ex, "LLM provider {Provider} failed the consistency check for memory {MemoryId}; defaulting to reinforcement.", llmProvider.Name, oldMemory.Id);
+            logger?.LogWarning(ex, "LLM provider {Provider} failed the consistency check for memory {MemoryId}; defaulting to reinforcement.", chatClient.GetProviderName(), oldMemory.Id);
             return true; // fail open toward reinforcing rather than forking memory history
         }
     }
@@ -173,7 +176,4 @@ public sealed class LlmMemoryExtractor(
         CreatedAt = now,
         LastReinforcedAt = now
     };
-
-    private static bool IsOffline(ILlmProvider provider) =>
-        string.Equals(provider.Name, "noop", StringComparison.OrdinalIgnoreCase);
 }

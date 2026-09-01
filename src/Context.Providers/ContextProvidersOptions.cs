@@ -1,14 +1,15 @@
-using Context.Providers.Embeddings;
-using Context.Providers.Llm;
-using Context.Providers.Reranking;
-
 namespace Context.Providers;
 
 /// <summary>
-/// Simple config surface consumed by <see cref="ServiceCollectionExtensions.AddContextProviders"/>.
+/// Provider-<em>selection</em> surface consumed by <see cref="ServiceCollectionExtensions.AddContextProviders"/>.
 /// String selector properties pick which implementation of each provider category to register;
 /// everything defaults to the offline/local variants so the platform runs with zero external
-/// dependencies out of the box.
+/// dependencies out of the box. Per-provider settings (<see cref="OllamaOptions"/>,
+/// <see cref="Embeddings.OpenAiOptions"/>, <see cref="Llm.AnthropicOptions"/>) are configured
+/// independently via the standard Options pattern, not nested here -- see
+/// <c>Context.Application.Providers</c> for the setup classes that layer env vars/local overrides
+/// into them, and <c>Context.Application.Providers.ContextProvidersOptionsResolver</c>'s remarks
+/// for why *this* type's selector strings alone have to be resolved eagerly instead.
 /// </summary>
 public sealed record ContextProvidersOptions
 {
@@ -21,13 +22,7 @@ public sealed record ContextProvidersOptions
     /// <summary>"noop" (default), "anthropic", or "ollama".</summary>
     public string LlmProvider { get; init; } = "noop";
 
-    public OpenAiOptions OpenAi { get; init; } = new();
+    public string? OpenAiApiKey { get; init; }
 
-    public OllamaOptions Ollama { get; init; } = new();
-
-    public OllamaChatOptions OllamaChat { get; init; } = new();
-
-    public LocalOnnxRerankerOptions LocalOnnx { get; init; } = new();
-
-    public AnthropicOptions Anthropic { get; init; } = new();
+    public string? AnthropicApiKey { get; init; }
 }

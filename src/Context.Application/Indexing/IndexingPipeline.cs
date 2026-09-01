@@ -5,8 +5,9 @@ using Context.Domain.Enums;
 using Context.Indexing;
 using Context.Indexing.Abstractions;
 using Context.Infrastructure.Abstractions;
-using Context.Providers.Abstractions;
+using Context.Providers;
 using Context.Shared;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using DomainFile = Context.Domain.Entities.File;
@@ -47,7 +48,7 @@ public sealed class IndexingPipeline(
     ISymbolRepository symbols,
     IChunkRepository chunks,
     IEmbeddingRepository embeddings,
-    IEmbeddingProvider embeddingProvider,
+    IEmbeddingGenerator<string, Embedding<float>> embeddingGenerator,
     IFileScanner scanner,
     Func<string, IIgnoreMatcher> ignoreFactory,
     IEnumerable<ILanguageParser> parsers,
@@ -403,7 +404,7 @@ public sealed class IndexingPipeline(
         }
 
         var hashes = candidateChunks.Select(c => c.ContentHash).Distinct().ToList();
-        var missing = await embeddings.GetMissingContentHashesAsync(hashes, embeddingProvider.Name, ct).ConfigureAwait(false);
+        var missing = await embeddings.GetMissingContentHashesAsync(hashes, embeddingGenerator.GetProviderName(), ct).ConfigureAwait(false);
         if (missing.Count == 0)
         {
             return;

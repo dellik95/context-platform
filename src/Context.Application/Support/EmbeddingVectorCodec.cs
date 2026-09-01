@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 namespace Context.Application.Support;
 
 /// <summary>
-/// Packs/unpacks the <c>float[]</c> embeddings produced by <c>IEmbeddingProvider</c> into the
+/// Packs/unpacks the <c>float[]</c> embeddings produced by <c>IEmbeddingGenerator</c> into the
 /// raw <c>byte[]</c> blob format stored in <c>Embedding.Vector</c> / <c>MemoryEmbedding.Vector</c>
 /// (CONTRACTS.md §1: "packed float32[]"). Little-endian, matching the host architecture this
 /// platform actually ships on (x86/x64/ARM64 are all little-endian) — see remarks for the

@@ -1,16 +1,12 @@
 namespace Context.Providers.Llm;
 
-/// <summary>
-/// Configuration for <see cref="AnthropicLlmProvider"/>. Populate <see cref="ApiKey"/> from a
-/// secret store or environment variable (e.g. ANTHROPIC_API_KEY) — never hardcode it.
-/// </summary>
-public sealed record AnthropicOptions
+public sealed class AnthropicOptions
 {
-    public string? ApiKey { get; init; }
+    public string? ApiKey { get; set; }
 
-    public string Model { get; init; } = "claude-3-5-sonnet-20241022";
+    public string Model { get; set; } = "claude-3-5-sonnet-20241022";
 
-    public string BaseUrl { get; init; } = "https://api.anthropic.com/v1";
+    public string BaseUrl { get; set; } = "https://api.anthropic.com/v1";
 
-    public int MaxTokens { get; init; } = 1024;
+    public int MaxTokens { get; set; } = 1024;
 }

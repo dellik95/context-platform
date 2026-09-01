@@ -27,9 +27,6 @@ public class ContextDbContext : DbContext
     public DbSet<SessionEvent> SessionEvents => Set<SessionEvent>();
     public DbSet<SessionSummary> SessionSummaries => Set<SessionSummary>();
     public DbSet<Memory> Memories => Set<Memory>();
-    public DbSet<MemoryRelation> MemoryRelations => Set<MemoryRelation>();
-    public DbSet<MemoryFile> MemoryFiles => Set<MemoryFile>();
-    public DbSet<MemorySymbol> MemorySymbols => Set<MemorySymbol>();
     public DbSet<MemoryEmbedding> MemoryEmbeddings => Set<MemoryEmbedding>();
     public DbSet<Job> Jobs => Set<Job>();
     public DbSet<Provider> Providers => Set<Provider>();
