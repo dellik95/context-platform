@@ -78,3 +78,13 @@ body {
   text-align: center;
   color: var(--mat-sys-on-surface-variant);
 }
+
+// MatTooltip renders into a cdk-overlay-container appended directly to <body>, outside every
+// component's view-encapsulation boundary -- a matTooltipClass has to be styled globally here,
+// a component-scoped rule of the same name would never reach it. Widens the System tab's Failed
+// jobs "last error" tooltip past Material's default ~250px so the full error text is legible
+// instead of wrapping into a tall sliver.
+.error-tooltip {
+  max-width: 360px !important;
+  white-space: pre-wrap;
+}
