@@ -66,11 +66,10 @@ public static class ServiceCollectionExtensions
                     var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("ollama-embeddings");
                     http.Timeout = System.Threading.Timeout.InfiniteTimeSpan; // the resilience pipeline above is the sole timeout authority
                     http.BaseAddress ??= new Uri(o.BaseUrl.TrimEnd('/') + "/");
-                    // Not something a generic retry handler can do: Ollama rejects a too-long prompt with
-                    // a "context length" error, and the fix is to halve the PAYLOAD and resend, not to
-                    // repeat the same request. That's app-specific, so it stays a decorator.
+                    // Not something a generic retry handler can do: turns "content too long for this
+                    // model's context window" into an actionable error instead of a retry decision.
                     IEmbeddingGenerator<string, Embedding<float>> inner = new OllamaApiClient(http, o.Model);
-                    return new OllamaEmbeddingGeneratorDecorator(inner, sp.GetService<ILogger<OllamaEmbeddingGeneratorDecorator>>());
+                    return new OllamaEmbeddingGeneratorDecorator(inner, o.Model);
                 });
                 break;
             default:
