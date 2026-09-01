@@ -34,6 +34,9 @@
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.11" />
     <!-- Providers (Context.Providers): DI/HTTP plumbing for provider implementations -->
     <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.11" />
+    <!-- Context.Providers: ready-made retry/timeout for Ollama/Anthropic HTTP calls (AddResilienceHandler),
+         instead of hand-rolling retry logic; see ServiceCollectionExtensions.ConfigureLlmRetry. -->
+    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.9.0" />
     <!-- Context.Providers: AI provider integrations built on Microsoft.Extensions.AI's IChatClient/
          IEmbeddingGenerator instead of hand-rolled HTTP calls. -->
     <PackageVersion Include="Microsoft.Extensions.AI" Version="10.9.0" />
