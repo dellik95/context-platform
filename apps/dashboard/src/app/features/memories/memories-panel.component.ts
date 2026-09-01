@@ -1,10 +1,10 @@
 import { CommonModule } from '@angular/common';
-import { Component, DestroyRef, effect, inject, signal } from '@angular/core';
+import { Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { FormBuilder, ReactiveFormsModule } from '@angular/forms';
+import { FormField, form } from '@angular/forms/signals';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
-import { MatCheckboxModule } from '@angular/material/checkbox';
+import { MatCheckboxChange, MatCheckboxModule } from '@angular/material/checkbox';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
@@ -21,7 +21,7 @@ import { ProjectContextService } from '../projects/project-context.service';
   selector: 'app-memories-panel',
   imports: [
     CommonModule,
-    ReactiveFormsModule,
+    FormField,
     MatCardModule,
     MatButtonModule,
     MatIconModule,
@@ -37,20 +37,19 @@ import { ProjectContextService } from '../projects/project-context.service';
 })
 export class MemoriesPanelComponent {
   private readonly api = inject(ApiService);
-  private readonly fb = inject(FormBuilder);
   private readonly snackBar = inject(MatSnackBar);
   private readonly signalr = inject(SignalrService);
   private readonly destroyRef = inject(DestroyRef);
   protected readonly ctx = inject(ProjectContextService);
 
-  protected readonly memories = signal<Memory[]>([]);
-  protected readonly loading = signal(true);
-  protected readonly deletingId = signal<string | null>(null);
+  protected readonly searchModel = signal({ query: '', includeSuperseded: false });
+  protected readonly searchForm = form(this.searchModel);
 
-  protected readonly form = this.fb.nonNullable.group({
-    query: [''],
-    includeSuperseded: [false],
-  });
+  private readonly committedQuery = signal<{ projectId: string; query: string; includeSuperseded: boolean } | undefined>(undefined);
+  private readonly resource = this.api.memoriesResource(this.committedQuery);
+  protected readonly memories = computed(() => (this.resource.hasValue() ? this.resource.value() : []));
+  protected readonly loading = this.resource.isLoading;
+  protected readonly deletingId = signal<string | null>(null);
 
   private lastSearchedProjectId = '';
 
@@ -64,7 +63,7 @@ export class MemoriesPanelComponent {
       const id = this.ctx.projectId();
       if (id && id !== this.lastSearchedProjectId) {
         this.lastSearchedProjectId = id;
-        this.runSearch();
+        this.commitSearch();
       }
     });
 
@@ -73,28 +72,28 @@ export class MemoriesPanelComponent {
     // user having to re-run the search themselves.
     this.signalr.projectActivity$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((event) => {
       if (event.kind === 'MemoryCreated' && event.projectId === this.ctx.projectId()) {
-        this.runSearch();
+        this.resource.reload();
+      }
+    });
+
+    effect(() => {
+      if (this.resource.error()) {
+        this.snackBar.open('Failed to search memories — is Context.Host running?', 'Dismiss');
       }
     });
   }
 
   protected submit(): void {
-    this.runSearch();
+    this.commitSearch();
   }
 
-  private runSearch(): void {
-    const { query, includeSuperseded } = this.form.getRawValue();
-    this.loading.set(true);
-    this.api.searchMemories(this.ctx.projectId(), query, includeSuperseded).subscribe({
-      next: (memories) => {
-        this.memories.set(memories);
-        this.loading.set(false);
-      },
-      error: () => {
-        this.loading.set(false);
-        this.snackBar.open('Failed to search memories — is Context.Host running?', 'Dismiss');
-      },
-    });
+  protected setIncludeSuperseded(event: MatCheckboxChange): void {
+    this.searchModel.update((current) => ({ ...current, includeSuperseded: event.checked }));
+  }
+
+  private commitSearch(): void {
+    const { query, includeSuperseded } = this.searchForm().value();
+    this.committedQuery.set({ projectId: this.ctx.projectId(), query, includeSuperseded });
   }
 
   /** Parses Memory.factsJson (a JSON array of short bullet-point facts) — an LLM-produced field,
@@ -143,7 +142,7 @@ export class MemoriesPanelComponent {
     this.deletingId.set(memory.id);
     this.api.deleteMemory(memory.id).subscribe({
       next: () => {
-        this.memories.update((current) => current.filter((m) => m.id !== memory.id));
+        this.resource.update((current) => (current ?? []).filter((m) => m.id !== memory.id));
         this.deletingId.set(null);
         this.snackBar.open('Memory deleted.', 'Dismiss', { duration: 3000 });
       },

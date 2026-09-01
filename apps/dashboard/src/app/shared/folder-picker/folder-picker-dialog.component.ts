@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, computed, effect, inject, signal } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
 import { MatDialogModule, MatDialogRef } from '@angular/material/dialog';
 import { MatIconModule } from '@angular/material/icon';
@@ -24,40 +24,30 @@ export class FolderPickerDialogComponent {
   private readonly snackBar = inject(MatSnackBar);
   private readonly dialogRef = inject(MatDialogRef<FolderPickerDialogComponent, string>);
 
-  protected readonly currentPath = signal('');
-  protected readonly parentPath = signal<string | null>(null);
-  protected readonly directories = signal<DirectoryEntryDto[]>([]);
-  protected readonly loading = signal(true);
-  protected readonly isRoot = signal(true);
+  private readonly requestedPath = signal<string | undefined>(undefined);
+  private readonly resource = this.api.browseDirectoryResource(this.requestedPath);
+
+  protected readonly currentPath = computed(() => (this.resource.hasValue() ? this.resource.value().path : ''));
+  protected readonly parentPath = computed(() => (this.resource.hasValue() ? this.resource.value().parentPath : null));
+  protected readonly directories = computed(() => (this.resource.hasValue() ? this.resource.value().directories : []));
+  protected readonly isRoot = computed(() => !this.requestedPath());
+  protected readonly loading = this.resource.isLoading;
 
   constructor() {
-    this.load(undefined);
-  }
-
-  private load(path: string | undefined): void {
-    this.loading.set(true);
-    this.api.browseDirectory(path).subscribe({
-      next: (res) => {
-        this.currentPath.set(res.path);
-        this.parentPath.set(res.parentPath);
-        this.directories.set(res.directories);
-        this.isRoot.set(!path);
-        this.loading.set(false);
-      },
-      error: () => {
-        this.loading.set(false);
+    effect(() => {
+      if (this.resource.error()) {
         this.snackBar.open('Could not list that directory.', 'Dismiss');
-      },
+      }
     });
   }
 
   protected navigateInto(dir: DirectoryEntryDto): void {
-    this.load(dir.fullPath);
+    this.requestedPath.set(dir.fullPath);
   }
 
   protected navigateUp(): void {
     // A drive root's parentPath is null — going "up" from there means back to the drive list.
-    this.load(this.parentPath() ?? undefined);
+    this.requestedPath.set(this.parentPath() ?? undefined);
   }
 
   protected selectCurrent(): void {

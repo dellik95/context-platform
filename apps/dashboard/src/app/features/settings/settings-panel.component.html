@@ -13,11 +13,11 @@
         Provider changes require a Context.Host restart to take effect.
       </p>
 
-      <form class="settings-form" [formGroup]="form" (ngSubmit)="save()">
+      <form class="settings-form" (submit)="$event.preventDefault(); save()">
         <div class="field-row">
           <mat-form-field appearance="outline">
             <mat-label>Embedding provider</mat-label>
-            <mat-select formControlName="embeddingProvider">
+            <mat-select [value]="settingsForm.embeddingProvider().value()" (selectionChange)="setEmbeddingProvider($event)">
               <mat-option value="noop">noop</mat-option>
               <mat-option value="openai">openai</mat-option>
               <mat-option value="ollama">ollama</mat-option>
@@ -26,7 +26,7 @@
 
           <mat-form-field appearance="outline">
             <mat-label>LLM provider</mat-label>
-            <mat-select formControlName="llmProvider">
+            <mat-select [value]="settingsForm.llmProvider().value()" (selectionChange)="setLlmProvider($event)">
               <mat-option value="noop">noop</mat-option>
               <mat-option value="anthropic">anthropic</mat-option>
               <mat-option value="ollama">ollama</mat-option>
@@ -39,19 +39,19 @@
             @if (showOllamaBaseUrl()) {
               <mat-form-field appearance="outline">
                 <mat-label>Ollama base URL</mat-label>
-                <input matInput formControlName="ollamaBaseUrl" placeholder="http://localhost:11434" />
+                <input matInput [formField]="settingsForm.ollamaBaseUrl" placeholder="http://localhost:11434" />
               </mat-form-field>
             }
             @if (showOllamaEmbeddingModel()) {
               <mat-form-field appearance="outline">
                 <mat-label>Ollama embedding model</mat-label>
-                <input matInput formControlName="ollamaEmbeddingModel" placeholder="e.g. embeddinggemma" />
+                <input matInput [formField]="settingsForm.ollamaEmbeddingModel" placeholder="e.g. embeddinggemma" />
               </mat-form-field>
             }
             @if (showOllamaChatModel()) {
               <mat-form-field appearance="outline">
                 <mat-label>Ollama chat model</mat-label>
-                <input matInput formControlName="ollamaChatModel" placeholder="e.g. qwen2.5-coder:1.5b" />
+                <input matInput [formField]="settingsForm.ollamaChatModel" placeholder="e.g. qwen2.5-coder:1.5b" />
               </mat-form-field>
             }
           </div>
@@ -60,11 +60,13 @@
         <h2 class="section-title">Reindexing</h2>
 
         <div class="field-row field-row--align-center">
-          <mat-slide-toggle formControlName="reindexEnabled">Enable scheduled reindexing</mat-slide-toggle>
+          <mat-slide-toggle [checked]="settingsForm.reindexEnabled().value()" (change)="setReindexEnabled($event)">
+            Enable scheduled reindexing
+          </mat-slide-toggle>
 
           <mat-form-field appearance="outline" class="interval-field">
             <mat-label>Interval (minutes)</mat-label>
-            <input matInput type="number" min="1" formControlName="reindexIntervalMinutes" />
+            <input matInput type="number" [formField]="settingsForm.reindexIntervalMinutes" />
           </mat-form-field>
         </div>
 
@@ -76,16 +78,18 @@
         </p>
 
         <div class="field-row field-row--align-center">
-          <mat-slide-toggle formControlName="sessionSummaryEnabled">Enable periodic session summaries</mat-slide-toggle>
+          <mat-slide-toggle [checked]="settingsForm.sessionSummaryEnabled().value()" (change)="setSessionSummaryEnabled($event)">
+            Enable periodic session summaries
+          </mat-slide-toggle>
 
           <mat-form-field appearance="outline" class="interval-field">
             <mat-label>Interval (minutes)</mat-label>
-            <input matInput type="number" min="1" formControlName="sessionSummaryIntervalMinutes" />
+            <input matInput type="number" [formField]="settingsForm.sessionSummaryIntervalMinutes" />
           </mat-form-field>
 
           <mat-form-field appearance="outline" class="interval-field">
             <mat-label>Min. new events</mat-label>
-            <input matInput type="number" min="1" formControlName="minEventsForSessionSummary" />
+            <input matInput type="number" [formField]="settingsForm.minEventsForSessionSummary" />
             <mat-hint>The interval above is a max wait — this many new events must also happen first</mat-hint>
           </mat-form-field>
         </div>

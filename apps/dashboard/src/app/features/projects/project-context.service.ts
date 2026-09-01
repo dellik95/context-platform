@@ -2,7 +2,7 @@ import { Injectable, OnDestroy, computed, inject, signal } from '@angular/core';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { ApiService } from '../../core/api.service';
 import { SignalrService } from '../../core/signalr.service';
-import { ProjectStatusDto, ReindexProgressEvent } from '../../core/models';
+import { ReindexProgressEvent } from '../../core/models';
 
 /**
  * Scoped to the /projects/:id route subtree — see ProjectDetailComponent's `providers` array.
@@ -18,15 +18,16 @@ export class ProjectContextService implements OnDestroy {
   private readonly snackBar = inject(MatSnackBar);
 
   private readonly _projectId = signal<string>('');
-  private readonly _status = signal<ProjectStatusDto | null>(null);
-  private readonly _loading = signal(true);
   private readonly _reindexing = signal(false);
   private readonly _reindexProgress = signal<ReindexProgressEvent | null>(null);
 
   readonly projectId = this._projectId.asReadonly();
-  readonly status = this._status.asReadonly();
-  readonly loading = this._loading.asReadonly();
-  readonly projectName = computed(() => this._status()?.project.name ?? '');
+
+  private readonly statusResource = this.api.projectStatusResource(this._projectId);
+  readonly status = computed(() => (this.statusResource.hasValue() ? this.statusResource.value() : null));
+  /** True while there's no project id yet (nothing to show) or the status fetch is in flight. */
+  readonly loading = computed(() => !this._projectId() || this.statusResource.isLoading());
+  readonly projectName = computed(() => this.status()?.project.name ?? '');
   /** True from the moment a reindex is triggered until its ReindexProgress reports completed. */
   readonly reindexing = this._reindexing.asReadonly();
   readonly reindexProgress = this._reindexProgress.asReadonly();
@@ -34,7 +35,7 @@ export class ProjectContextService implements OnDestroy {
   private readonly subscriptions = [
     this.signalr.projectStatusChanged$.subscribe((dto) => {
       if (dto.project.id === this._projectId()) {
-        this._status.set(dto);
+        this.statusResource.set(dto);
       }
     }),
 
@@ -58,18 +59,10 @@ export class ProjectContextService implements OnDestroy {
     void this.signalr.leaveProject(this._projectId());
     this._projectId.set(projectId);
     void this.signalr.joinProject(projectId);
-    this.refresh();
   }
 
   refresh(): void {
-    this._loading.set(true);
-    this.api.getProjectStatus(this._projectId()).subscribe({
-      next: (status) => {
-        this._status.set(status);
-        this._loading.set(false);
-      },
-      error: () => this._loading.set(false),
-    });
+    this.statusResource.reload();
   }
 
   triggerIndex(full: boolean): void {

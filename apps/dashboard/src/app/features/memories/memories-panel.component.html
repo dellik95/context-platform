@@ -4,14 +4,16 @@
   </header>
 
   <mat-card class="search-card">
-    <form class="search-form" [formGroup]="form" (ngSubmit)="submit()">
+    <form class="search-form" (submit)="$event.preventDefault(); submit()">
       <mat-form-field appearance="outline" class="query-field">
         <mat-label>Search</mat-label>
-        <input matInput formControlName="query" placeholder="e.g. auth flow, migration, retry logic" />
+        <input matInput [formField]="searchForm.query" placeholder="e.g. auth flow, migration, retry logic" />
         <mat-icon matPrefix>search</mat-icon>
       </mat-form-field>
 
-      <mat-checkbox formControlName="includeSuperseded">Include superseded</mat-checkbox>
+      <mat-checkbox [checked]="searchForm.includeSuperseded().value()" (change)="setIncludeSuperseded($event)">
+        Include superseded
+      </mat-checkbox>
 
       <button mat-flat-button color="primary" type="submit" [disabled]="loading()">Search</button>
     </form>
@@ -21,7 +23,7 @@
     <mat-progress-bar mode="indeterminate" />
   } @else if (memories().length === 0) {
     <mat-card class="empty-state">
-      <p>No memories found. Try a different search term{{ form.getRawValue().includeSuperseded ? '' : ', or include superseded memories' }}.</p>
+      <p>No memories found. Try a different search term{{ searchForm.includeSuperseded().value() ? '' : ', or include superseded memories' }}.</p>
     </mat-card>
   } @else {
     <div class="memory-list">

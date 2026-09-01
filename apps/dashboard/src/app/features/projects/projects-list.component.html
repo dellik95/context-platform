@@ -9,21 +9,21 @@
 
   @if (showCreateForm()) {
     <mat-card class="create-card">
-      <form [formGroup]="createForm" (ngSubmit)="submitCreate()">
+      <form (submit)="$event.preventDefault(); submitCreate()">
         <mat-form-field appearance="outline">
           <mat-label>Name</mat-label>
-          <input matInput formControlName="name" placeholder="my-service" />
+          <input matInput [formField]="createForm.name" placeholder="my-service" />
         </mat-form-field>
         <mat-form-field appearance="outline" class="root-path-field">
           <mat-label>Repository root path</mat-label>
-          <input matInput formControlName="rootPath" placeholder="C:\Projects\my-service" readonly (click)="browseForRootPath()" />
+          <input matInput [formField]="createForm.rootPath" placeholder="C:\Projects\my-service" (click)="browseForRootPath()" />
           <button mat-icon-button matSuffix type="button" (click)="browseForRootPath()" aria-label="Browse for folder">
             <mat-icon>folder_open</mat-icon>
           </button>
         </mat-form-field>
         <div class="create-actions">
           <button mat-button type="button" (click)="showCreateForm.set(false)">Cancel</button>
-          <button mat-flat-button color="primary" type="submit" [disabled]="createForm.invalid || creating()">
+          <button mat-flat-button color="primary" type="submit" [disabled]="createForm().invalid() || creating()">
             {{ creating() ? 'Creating…' : 'Create' }}
           </button>
         </div>

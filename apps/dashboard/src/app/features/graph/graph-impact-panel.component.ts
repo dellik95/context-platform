@@ -1,7 +1,8 @@
 import { CommonModule } from '@angular/common';
-import { Component, DestroyRef, ElementRef, OnDestroy, computed, inject, signal, viewChild } from '@angular/core';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { Component, ElementRef, OnDestroy, computed, effect, inject, signal, viewChild } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { FormControl, ReactiveFormsModule } from '@angular/forms';
+import { FormField, form, max, min } from '@angular/forms/signals';
 import { MatAutocompleteModule, MatAutocompleteSelectedEvent } from '@angular/material/autocomplete';
 import { MatButtonModule } from '@angular/material/button';
 import { MatButtonToggleModule, MatButtonToggleChange } from '@angular/material/button-toggle';
@@ -12,7 +13,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
-import { debounceTime, distinctUntilChanged, switchMap } from 'rxjs';
+import { debounceTime } from 'rxjs';
 import { Network, type Edge as VisEdge, type Node as VisNode, type Options as VisOptions } from 'vis-network/standalone';
 import { ApiService } from '../../core/api.service';
 import {
@@ -110,6 +111,7 @@ function shortNodeLabel(label: string): string {
   imports: [
     CommonModule,
     ReactiveFormsModule,
+    FormField,
     MatAutocompleteModule,
     MatButtonModule,
     MatButtonToggleModule,
@@ -127,16 +129,45 @@ export class GraphImpactPanelComponent implements OnDestroy {
   private readonly api = inject(ApiService);
   private readonly ctx = inject(ProjectContextService);
   private readonly snackBar = inject(MatSnackBar);
-  private readonly destroyRef = inject(DestroyRef);
 
   // Typed as string | SymbolSummaryDto: Material's autocomplete writes the selected option's
   // whole value back into this control on selection (see onSymbolSelected/displaySymbol), it's
-  // not always the typed-in string.
+  // not always the typed-in string. Stays a plain FormControl (not signal-forms) because
+  // MatAutocomplete only ever writes through the ControlValueAccessor machinery -- both typing
+  // and option-selection call its registered `onChange`, never a native DOM input event -- and
+  // [formControl] is the only forms directive that wires a CVA up; [formField] listens for DOM
+  // events and would never see either kind of update.
   protected readonly searchControl = new FormControl<string | SymbolSummaryDto>('', { nonNullable: true });
-  protected readonly matches = signal<SymbolSummaryDto[]>([]);
-  protected readonly searching = signal(false);
 
-  protected readonly maxHopsControl = new FormControl(3, { nonNullable: true });
+  // debounceTime has no signal-native equivalent, so this is the one spot in the component that
+  // still touches RxJS -- everything downstream (query derivation, the actual fetch) is signals.
+  private readonly debouncedValue = toSignal(this.searchControl.valueChanges.pipe(debounceTime(300)), {
+    initialValue: this.searchControl.value,
+  });
+
+  private readonly searchQuery = computed(() => {
+    const value = this.debouncedValue();
+    // Selecting an autocomplete option writes the whole SymbolSummaryDto back into the control
+    // (see [displayWith]="displaySymbol" in the template) -- that's not a new search term, it's
+    // handled by onSymbolSelected, so skip re-searching for it here.
+    return typeof value === 'string' ? value.trim() : '';
+  });
+
+  private readonly searchResource = this.api.searchSymbolsResource(
+    computed(() => {
+      const projectId = this.ctx.projectId();
+      const query = this.searchQuery();
+      return projectId && query ? { projectId, query } : undefined;
+    }),
+  );
+  protected readonly matches = computed(() => (this.searchResource.hasValue() ? this.searchResource.value() : []));
+  protected readonly searching = this.searchResource.isLoading;
+
+  protected readonly maxHopsModel = signal(3);
+  protected readonly maxHopsForm = form(this.maxHopsModel, (path) => {
+    min(path, 1);
+    max(path, 10);
+  });
 
   // 'search': type a symbol, see its blast radius + a neighborhood graph centered on it (the
   // original behavior). 'full': an Obsidian-style whole-project graph -- every node and edge,
@@ -170,40 +201,11 @@ export class GraphImpactPanelComponent implements OnDestroy {
   private nodesById = new Map<string, GraphNode>();
 
   constructor() {
-    this.searchControl.valueChanges
-      .pipe(
-        debounceTime(300),
-        distinctUntilChanged(),
-        switchMap((query) => {
-          // Selecting an autocomplete option writes the whole SymbolSummaryDto back into this
-          // control (see [displayWith]="displaySymbol" in the template) — that's not a new
-          // search term, it's handled by onSymbolSelected, so skip re-searching for it here.
-          if (typeof query !== 'string') {
-            this.searching.set(false);
-            return [[] as SymbolSummaryDto[]];
-          }
-          const projectId = this.ctx.projectId();
-          const trimmed = query.trim();
-          if (!projectId || trimmed.length === 0) {
-            this.searching.set(false);
-            return [[] as SymbolSummaryDto[]];
-          }
-          this.searching.set(true);
-          return this.api.searchSymbols(projectId, trimmed);
-        }),
-        takeUntilDestroyed(this.destroyRef),
-      )
-      .subscribe({
-        next: (results) => {
-          this.matches.set(results);
-          this.searching.set(false);
-        },
-        error: () => {
-          this.searching.set(false);
-          this.matches.set([]);
-          this.snackBar.open('Symbol search failed — is Context.Host running?', 'Dismiss');
-        },
-      });
+    effect(() => {
+      if (this.searchResource.error()) {
+        this.snackBar.open('Symbol search failed — is Context.Host running?', 'Dismiss');
+      }
+    });
   }
 
   ngOnDestroy(): void {
@@ -303,7 +305,7 @@ export class GraphImpactPanelComponent implements OnDestroy {
   }
 
   private loadImpact(symbol: SymbolSummaryDto): void {
-    const maxHops = this.maxHopsControl.value || 3;
+    const maxHops = this.maxHopsModel() || 3;
     this.loadingImpact.set(true);
     this.impact.set(null);
     this.api.graphImpact(symbol.id, maxHops).subscribe({
@@ -319,7 +321,7 @@ export class GraphImpactPanelComponent implements OnDestroy {
   }
 
   private loadNeighborhood(nodeId: string): void {
-    const hops = this.maxHopsControl.value || 3;
+    const hops = this.maxHopsModel() || 3;
     this.loadingNeighborhood.set(true);
     this.api.getGraphNeighborhood(nodeId, hops).subscribe({
       next: (neighborhood) => {

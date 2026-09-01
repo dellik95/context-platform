@@ -1,6 +1,6 @@
 import { CommonModule } from '@angular/common';
-import { Component, inject, signal } from '@angular/core';
-import { FormsModule } from '@angular/forms';
+import { Component, computed, effect, inject, signal } from '@angular/core';
+import { FormField, form, min } from '@angular/forms/signals';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
 import { MatFormFieldModule } from '@angular/material/form-field';
@@ -9,14 +9,13 @@ import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { ApiService } from '../../core/api.service';
-import { ContextPack } from '../../core/models';
 import { ProjectContextService } from '../projects/project-context.service';
 
 @Component({
   selector: 'app-search-panel',
   imports: [
     CommonModule,
-    FormsModule,
+    FormField,
     MatCardModule,
     MatButtonModule,
     MatIconModule,
@@ -32,37 +31,35 @@ export class SearchPanelComponent {
   private readonly ctx = inject(ProjectContextService);
   private readonly snackBar = inject(MatSnackBar);
 
-  // Plain (non-signal) two-way-bound form fields — simple template-driven inputs, not part of
-  // reactive local state that anything else needs to react to.
-  protected query = '';
-  protected budget: number | null = null;
+  protected readonly searchModel = signal({ query: '', budget: null as number | null });
+  protected readonly searchForm = form(this.searchModel, (path) => {
+    min(path.budget, 1);
+  });
 
   protected readonly advancedOpen = signal(false);
-  protected readonly loading = signal(false);
-  protected readonly hasSearched = signal(false);
-  protected readonly result = signal<ContextPack | null>(null);
-  protected readonly lastQuery = signal('');
+
+  private readonly committedQuery = signal<{ projectId: string; query: string; budget?: number } | undefined>(undefined);
+  private readonly resource = this.api.searchResource(this.committedQuery);
+
+  protected readonly loading = this.resource.isLoading;
+  protected readonly hasSearched = computed(() => this.committedQuery() !== undefined);
+  protected readonly result = computed(() => (this.resource.hasValue() ? this.resource.value() : null));
+  protected readonly lastQuery = computed(() => this.committedQuery()?.query ?? '');
+
+  constructor() {
+    effect(() => {
+      if (this.resource.error()) {
+        this.snackBar.open('Search failed — is Context.Host running?', 'Dismiss');
+      }
+    });
+  }
 
   protected submitSearch(): void {
-    const query = this.query.trim();
-    if (!query || this.loading()) {
+    const { query, budget } = this.searchForm().value();
+    const trimmed = query.trim();
+    if (!trimmed || this.loading()) {
       return;
     }
-
-    this.loading.set(true);
-    const budget = this.budget && this.budget > 0 ? this.budget : undefined;
-
-    this.api.search(this.ctx.projectId(), query, budget).subscribe({
-      next: (pack) => {
-        this.result.set(pack);
-        this.lastQuery.set(query);
-        this.hasSearched.set(true);
-        this.loading.set(false);
-      },
-      error: () => {
-        this.loading.set(false);
-        this.snackBar.open('Search failed — is Context.Host running?', 'Dismiss');
-      },
-    });
+    this.committedQuery.set({ projectId: this.ctx.projectId(), query: trimmed, budget: budget && budget > 0 ? budget : undefined });
   }
 }

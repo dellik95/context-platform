@@ -38,7 +38,7 @@
 
         <mat-form-field appearance="outline" class="hops-field">
           <mat-label>Max hops</mat-label>
-          <input matInput type="number" min="1" max="10" [formControl]="maxHopsControl" />
+          <input matInput type="number" [formField]="maxHopsForm" />
         </mat-form-field>
 
         <button

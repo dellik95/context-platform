@@ -1,5 +1,5 @@
-import { HttpClient } from '@angular/common/http';
-import { Injectable, inject } from '@angular/core';
+import { HttpClient, HttpResourceRef, httpResource } from '@angular/common/http';
+import { Injectable, Signal, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
@@ -26,7 +26,10 @@ import {
 
 /**
  * Thin typed wrapper over Context.Host's REST surface (apps/host/Context.Host/Api/*.cs).
- * One method per endpoint, no business logic — feature components own presentation/state.
+ * GET reads that a component keys off reactive state (a project id, a committed query, a poll
+ * tick) go through `httpResource` so the fetch re-runs itself when that state changes. Mutations
+ * (POST/PUT/DELETE) and one-shot/imperative reads stay as Observables — feature components own
+ * presentation/state either way.
  */
 @Injectable({ providedIn: 'root' })
 export class ApiService {
@@ -37,16 +40,16 @@ export class ApiService {
     return this.http.get<HealthResponse>(`${this.base}/health`);
   }
 
-  listProjects(): Observable<ProjectDto[]> {
-    return this.http.get<ProjectDto[]>(`${this.base}/api/projects`);
+  projectsResource(): HttpResourceRef<ProjectDto[]> {
+    return httpResource<ProjectDto[]>(() => `${this.base}/api/projects`, { defaultValue: [] });
   }
 
   createProject(request: CreateProjectRequest): Observable<ProjectDto> {
     return this.http.post<ProjectDto>(`${this.base}/api/projects`, request);
   }
 
-  getProjectStatus(id: string): Observable<ProjectStatusDto> {
-    return this.http.get<ProjectStatusDto>(`${this.base}/api/projects/${id}`);
+  projectStatusResource(projectId: Signal<string>): HttpResourceRef<ProjectStatusDto | undefined> {
+    return httpResource<ProjectStatusDto>(() => (projectId() ? `${this.base}/api/projects/${projectId()}` : undefined));
   }
 
   triggerIndex(id: string, full: boolean): Observable<IndexTriggerResponse> {
@@ -60,9 +63,28 @@ export class ApiService {
     return this.http.get<ContextPack>(`${this.base}/api/search?${params.toString()}`);
   }
 
+  /** Params return `undefined` to keep the resource idle (no committed query yet). */
+  searchResource(params: Signal<{ projectId: string; query: string; budget?: number } | undefined>): HttpResourceRef<ContextPack | undefined> {
+    return httpResource<ContextPack>(() => {
+      const p = params();
+      if (!p) return undefined;
+      const requestParams: Record<string, string> = { projectId: p.projectId, q: p.query };
+      if (p.budget) requestParams['budget'] = String(p.budget);
+      return { url: `${this.base}/api/search`, params: requestParams };
+    });
+  }
+
   searchMemories(projectId: string, query: string, includeSuperseded = false): Observable<Memory[]> {
     const params = new URLSearchParams({ projectId, q: query, includeSuperseded: String(includeSuperseded) });
     return this.http.get<Memory[]>(`${this.base}/api/memories?${params.toString()}`);
+  }
+
+  memoriesResource(params: Signal<{ projectId: string; query: string; includeSuperseded: boolean } | undefined>): HttpResourceRef<Memory[]> {
+    return httpResource<Memory[]>(() => {
+      const p = params();
+      if (!p) return undefined;
+      return { url: `${this.base}/api/memories`, params: { projectId: p.projectId, q: p.query, includeSuperseded: String(p.includeSuperseded) } };
+    }, { defaultValue: [] });
   }
 
   deleteMemory(id: string): Observable<void> {
@@ -87,22 +109,30 @@ export class ApiService {
     return this.http.get<GraphNeighborhoodDto>(`${this.base}/api/graph/full?${params.toString()}`);
   }
 
-  searchSymbols(projectId: string, query: string, limit = 20): Observable<SymbolSummaryDto[]> {
-    const params = new URLSearchParams({ projectId, q: query, limit: String(limit) });
-    return this.http.get<SymbolSummaryDto[]>(`${this.base}/api/symbols?${params.toString()}`);
+  searchSymbolsResource(params: Signal<{ projectId: string; query: string } | undefined>, limit = 20): HttpResourceRef<SymbolSummaryDto[]> {
+    return httpResource<SymbolSummaryDto[]>(() => {
+      const p = params();
+      if (!p) return undefined;
+      return { url: `${this.base}/api/symbols`, params: { projectId: p.projectId, q: p.query, limit } };
+    }, { defaultValue: [] });
   }
 
-  listSessions(projectId: string, limit = 50): Observable<SessionListItemDto[]> {
-    const params = new URLSearchParams({ projectId, limit: String(limit) });
-    return this.http.get<SessionListItemDto[]>(`${this.base}/api/sessions?${params.toString()}`);
+  sessionsResource(projectId: Signal<string>): HttpResourceRef<SessionListItemDto[]> {
+    return httpResource<SessionListItemDto[]>(() => {
+      const id = projectId();
+      return id ? { url: `${this.base}/api/sessions`, params: { projectId: id, limit: 50 } } : undefined;
+    }, { defaultValue: [] });
   }
 
-  getSession(id: string): Observable<SessionDetailDto> {
-    return this.http.get<SessionDetailDto>(`${this.base}/api/sessions/${id}`);
+  sessionDetailResource(sessionId: Signal<string | null>): HttpResourceRef<SessionDetailDto | undefined> {
+    return httpResource<SessionDetailDto>(() => {
+      const id = sessionId();
+      return id ? `${this.base}/api/sessions/${id}` : undefined;
+    });
   }
 
-  getSettings(projectId: string): Observable<ProjectSettingsDto> {
-    return this.http.get<ProjectSettingsDto>(`${this.base}/api/projects/${projectId}/settings`);
+  settingsResource(projectId: Signal<string>): HttpResourceRef<ProjectSettingsDto | undefined> {
+    return httpResource<ProjectSettingsDto>(() => (projectId() ? `${this.base}/api/projects/${projectId()}/settings` : undefined));
   }
 
   updateSettings(projectId: string, settings: ProjectSettingsDto): Observable<void> {
@@ -113,29 +143,36 @@ export class ApiService {
     return this.http.post<ClaudeInstallResponse>(`${this.base}/api/projects/${projectId}/claude/install`, {});
   }
 
-  getSystemStatus(): Observable<SystemStatusDto> {
-    return this.http.get<SystemStatusDto>(`${this.base}/api/system/status`);
+  /** `tick` is read only to retrigger the fetch — bump it (e.g. from a `setInterval`) to poll. */
+  systemStatusResource(tick: Signal<number>): HttpResourceRef<SystemStatusDto | undefined> {
+    return httpResource<SystemStatusDto>(() => {
+      tick();
+      return `${this.base}/api/system/status`;
+    });
   }
 
-  browseDirectory(path?: string): Observable<BrowseDirectoryResponse> {
-    const params = path ? `?path=${encodeURIComponent(path)}` : '';
-    return this.http.get<BrowseDirectoryResponse>(`${this.base}/api/fs/browse${params}`);
+  browseDirectoryResource(path: Signal<string | undefined>): HttpResourceRef<BrowseDirectoryResponse | undefined> {
+    return httpResource<BrowseDirectoryResponse>(() => {
+      const p = path();
+      const params: Record<string, string> = p ? { path: p } : {};
+      return { url: `${this.base}/api/fs/browse`, params };
+    });
   }
 
-  listJobs(status?: JobStatus, limit?: number): Observable<JobDto[]> {
-    const params = new URLSearchParams();
-    if (status) params.set('status', status);
-    if (limit) params.set('limit', String(limit));
-    const query = params.toString();
-    return this.http.get<JobDto[]>(`${this.base}/api/jobs${query ? `?${query}` : ''}`);
+  failedJobsResource(): HttpResourceRef<JobDto[]> {
+    return httpResource<JobDto[]>(() => {
+      const params = new URLSearchParams({ status: 'Failed' satisfies JobStatus });
+      return `${this.base}/api/jobs?${params.toString()}`;
+    }, { defaultValue: [] });
   }
 
   retryJob(id: string): Observable<void> {
     return this.http.post<void>(`${this.base}/api/jobs/${id}/retry`, {});
   }
 
-  getLogTail(lines?: number): Observable<LogTailDto> {
-    const params = lines ? `?lines=${lines}` : '';
-    return this.http.get<LogTailDto>(`${this.base}/api/logs/tail${params}`);
+  /** `requested` gates the initial fetch (stays idle until true); call the returned resource's
+   *  own `.reload()` for a subsequent manual refresh. */
+  logTailResource(requested: Signal<boolean>): HttpResourceRef<LogTailDto | undefined> {
+    return httpResource<LogTailDto>(() => (requested() ? `${this.base}/api/logs/tail` : undefined));
   }
 }

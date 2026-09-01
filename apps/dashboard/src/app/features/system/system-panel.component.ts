@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, DestroyRef, inject, signal } from '@angular/core';
+import { Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
@@ -8,9 +8,8 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import { switchMap, timer } from 'rxjs';
 import { ApiService } from '../../core/api.service';
-import { JobDto, LogTailDto, ReindexProgressEvent, SystemStatusDto } from '../../core/models';
+import { JobDto, ReindexProgressEvent } from '../../core/models';
 import { SignalrService } from '../../core/signalr.service';
 import { ProjectContextService } from '../projects/project-context.service';
 
@@ -55,8 +54,12 @@ export class SystemPanelComponent {
   private readonly destroyRef = inject(DestroyRef);
   protected readonly ctx = inject(ProjectContextService);
 
-  protected readonly status = signal<SystemStatusDto | null>(null);
-  protected readonly statusError = signal(false);
+  // No push channel for host/job-queue stats (unlike ProjectStatusChanged) — poll it by bumping
+  // this tick every POLL_INTERVAL_MS; systemStatusResource re-fetches whenever it changes.
+  private readonly pollTick = signal(0);
+  private readonly statusResource = this.api.systemStatusResource(this.pollTick);
+  protected readonly status = computed(() => (this.statusResource.hasValue() ? this.statusResource.value() : null));
+  protected readonly statusError = computed(() => Boolean(this.statusResource.error()));
 
   protected readonly reindexProgress = signal<ReindexProgressEvent | null>(null);
   protected readonly showReindexProgress = signal(false);
@@ -64,35 +67,25 @@ export class SystemPanelComponent {
   // Failed-jobs table: loaded once on tab load + manual refresh, deliberately NOT part of the 3s
   // status poll above -- job failures don't need that aggressive a refresh rate, and refetching a
   // potentially-growing table every 3s would be wasteful.
-  protected readonly failedJobs = signal<JobDto[]>([]);
-  protected readonly jobsLoading = signal(true);
-  protected readonly jobsError = signal(false);
+  private readonly failedJobsResource = this.api.failedJobsResource();
+  protected readonly failedJobs = computed(() => (this.failedJobsResource.hasValue() ? this.failedJobsResource.value() : []));
+  protected readonly jobsLoading = this.failedJobsResource.isLoading;
+  protected readonly jobsError = computed(() => Boolean(this.failedJobsResource.error()));
   protected readonly retryingJobId = signal<string | null>(null);
 
   // Log tail: fetched on demand (button click) rather than eagerly, since most visits to this tab
   // don't need it and a 200-line tail on every load would be wasted work.
-  protected readonly logLines = signal<string[] | null>(null);
-  protected readonly logFilePath = signal<string | null>(null);
-  protected readonly logsLoading = signal(false);
+  private readonly logsRequested = signal(false);
+  private readonly logResource = this.api.logTailResource(this.logsRequested);
+  protected readonly logLines = computed(() => (this.logResource.hasValue() ? this.logResource.value().lines : null));
+  protected readonly logFilePath = computed(() => (this.logResource.hasValue() ? this.logResource.value().filePath : null));
+  protected readonly logsLoading = this.logResource.isLoading;
 
   private hideTimer?: ReturnType<typeof setTimeout>;
 
   constructor() {
-    this.loadFailedJobs();
-
-    // No push channel for host/job-queue stats (unlike ProjectStatusChanged) — poll it.
-    timer(0, POLL_INTERVAL_MS)
-      .pipe(
-        switchMap(() => this.api.getSystemStatus()),
-        takeUntilDestroyed(this.destroyRef),
-      )
-      .subscribe({
-        next: (status) => {
-          this.status.set(status);
-          this.statusError.set(false);
-        },
-        error: () => this.statusError.set(true),
-      });
+    const pollIntervalId = setInterval(() => this.pollTick.update((tick) => tick + 1), POLL_INTERVAL_MS);
+    this.destroyRef.onDestroy(() => clearInterval(pollIntervalId));
 
     // ProjectContextService already joins/leaves this project's SignalR group for the whole
     // /projects/:id subtree (see its init/ngOnDestroy) — nothing more to wire up here.
@@ -110,6 +103,12 @@ export class SystemPanelComponent {
     });
 
     this.destroyRef.onDestroy(() => clearTimeout(this.hideTimer));
+
+    effect(() => {
+      if (this.logResource.error()) {
+        this.snackBar.open('Failed to load log tail — is Context.Host running?', 'Dismiss');
+      }
+    });
   }
 
   protected formatUptime(seconds: number): string {
@@ -127,19 +126,7 @@ export class SystemPanelComponent {
   }
 
   protected loadFailedJobs(): void {
-    this.jobsLoading.set(true);
-    this.jobsError.set(false);
-    this.api.listJobs('Failed').subscribe({
-      next: (jobs) => {
-        this.failedJobs.set(jobs);
-        this.jobsLoading.set(false);
-      },
-      error: () => {
-        this.failedJobs.set([]);
-        this.jobsLoading.set(false);
-        this.jobsError.set(true);
-      },
-    });
+    this.failedJobsResource.reload();
   }
 
   protected retryJob(job: JobDto): void {
@@ -147,7 +134,7 @@ export class SystemPanelComponent {
     this.api.retryJob(job.id).subscribe({
       next: () => {
         this.retryingJobId.set(null);
-        this.failedJobs.update((jobs) => jobs.filter((j) => j.id !== job.id));
+        this.failedJobsResource.update((jobs) => (jobs ?? []).filter((j) => j.id !== job.id));
         this.snackBar.open(`Retry queued for ${job.type} job.`, 'Dismiss');
       },
       error: (err) => {
@@ -168,17 +155,10 @@ export class SystemPanelComponent {
   }
 
   protected loadLogTail(): void {
-    this.logsLoading.set(true);
-    this.api.getLogTail().subscribe({
-      next: (tail: LogTailDto) => {
-        this.logLines.set(tail.lines);
-        this.logFilePath.set(tail.filePath);
-        this.logsLoading.set(false);
-      },
-      error: () => {
-        this.logsLoading.set(false);
-        this.snackBar.open('Failed to load log tail — is Context.Host running?', 'Dismiss');
-      },
-    });
+    if (this.logsRequested()) {
+      this.logResource.reload();
+    } else {
+      this.logsRequested.set(true);
+    }
   }
 }

@@ -75,11 +75,15 @@ export class SessionsPanelComponent {
   private readonly destroyRef = inject(DestroyRef);
   protected readonly ctx = inject(ProjectContextService);
 
-  protected readonly sessions = signal<SessionListItemDto[]>([]);
-  protected readonly loading = signal(true);
   protected readonly selectedId = signal<string | null>(null);
-  protected readonly detail = signal<SessionDetailDto | null>(null);
-  protected readonly detailLoading = signal(false);
+
+  private readonly sessionsResource = this.api.sessionsResource(this.ctx.projectId);
+  protected readonly sessions = computed(() => (this.sessionsResource.hasValue() ? this.sessionsResource.value() : []));
+  protected readonly loading = this.sessionsResource.isLoading;
+
+  private readonly detailResource = this.api.sessionDetailResource(this.selectedId);
+  protected readonly detail = computed(() => (this.detailResource.hasValue() ? this.detailResource.value() : null));
+  protected readonly detailLoading = this.detailResource.isLoading;
 
   protected readonly sessionGroups = computed(() => groupSessionsByDay(this.sessions()));
 
@@ -97,13 +101,11 @@ export class SessionsPanelComponent {
   });
 
   constructor() {
-    // Reacts to the project id becoming available (or changing) rather than reading it once —
-    // this component can be constructed before ProjectDetailComponent's own effect has run.
+    // Switching projects invalidates whatever session was selected for the previous one.
+    // sessionsResource itself already refetches when ctx.projectId() changes.
     effect(() => {
-      const projectId = this.ctx.projectId();
-      if (projectId) {
-        this.loadSessions(projectId);
-      }
+      this.ctx.projectId();
+      this.selectedId.set(null);
     });
 
     // A new/updated summary for this project (session end, or a periodic mid-session summary)
@@ -112,50 +114,22 @@ export class SessionsPanelComponent {
       if (event.kind !== 'SessionSummaryUpdated' || event.projectId !== this.ctx.projectId()) {
         return;
       }
-      this.refreshSessionsPreservingSelection(this.ctx.projectId());
+      this.sessionsResource.reload();
+      if (this.selectedId()) {
+        this.detailResource.reload();
+      }
     });
-  }
 
-  private loadSessions(projectId: string): void {
-    this.loading.set(true);
-    this.selectedId.set(null);
-    this.detail.set(null);
-    this.api.listSessions(projectId).subscribe({
-      next: (sessions) => {
-        this.sessions.set(sessions);
-        this.loading.set(false);
-      },
-      error: () => {
-        this.sessions.set([]);
-        this.loading.set(false);
+    effect(() => {
+      if (this.sessionsResource.error()) {
         this.snackBar.open('Could not load sessions — is Context.Host running?', 'Dismiss');
-      },
+      }
     });
-  }
 
-  /** Same list refresh as loadSessions, but a live update shouldn't blow away whatever the user has open. */
-  private refreshSessionsPreservingSelection(projectId: string): void {
-    this.api.listSessions(projectId).subscribe({
-      next: (sessions) => {
-        this.sessions.set(sessions);
-        const selectedId = this.selectedId();
-        if (selectedId) {
-          this.reloadDetail(selectedId);
-        }
-      },
-      error: () => {
-        // Best-effort refresh — a failed background poll shouldn't surface a snackbar over
-        // whatever the user is already looking at.
-      },
-    });
-  }
-
-  private reloadDetail(sessionId: string): void {
-    this.api.getSession(sessionId).subscribe({
-      next: (detail) => this.detail.set(detail),
-      error: () => {
-        // Same best-effort reasoning as refreshSessionsPreservingSelection.
-      },
+    effect(() => {
+      if (this.detailResource.error()) {
+        this.snackBar.open('Could not load session detail.', 'Dismiss');
+      }
     });
   }
 
@@ -171,22 +145,6 @@ export class SessionsPanelComponent {
   }
 
   protected selectSession(entry: SessionListItemDto): void {
-    const sessionId = entry.session.id;
-    if (this.selectedId() === sessionId) {
-      return;
-    }
-    this.selectedId.set(sessionId);
-    this.detail.set(null);
-    this.detailLoading.set(true);
-    this.api.getSession(sessionId).subscribe({
-      next: (detail) => {
-        this.detail.set(detail);
-        this.detailLoading.set(false);
-      },
-      error: () => {
-        this.detailLoading.set(false);
-        this.snackBar.open('Could not load session detail.', 'Dismiss');
-      },
-    });
+    this.selectedId.set(entry.session.id);
   }
 }

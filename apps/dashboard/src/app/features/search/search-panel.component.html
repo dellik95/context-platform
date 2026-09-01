@@ -9,13 +9,12 @@
         <mat-label>Search query</mat-label>
         <input
           matInput
-          [(ngModel)]="query"
-          [disabled]="loading()"
+          [formField]="searchForm.query"
           (keydown.enter)="submitSearch()"
           placeholder="e.g. authentication middleware"
         />
       </mat-form-field>
-      <button mat-flat-button color="primary" [disabled]="loading() || !query.trim()" (click)="submitSearch()">
+      <button mat-flat-button color="primary" [disabled]="loading() || !searchForm.query().value().trim()" (click)="submitSearch()">
         <mat-icon>search</mat-icon>
         Search
       </button>
@@ -29,7 +28,7 @@
     @if (advancedOpen()) {
       <mat-form-field appearance="outline" class="budget-field">
         <mat-label>Token budget</mat-label>
-        <input matInput type="number" min="1" [(ngModel)]="budget" [disabled]="loading()" placeholder="2000" />
+        <input matInput type="number" [formField]="searchForm.budget" placeholder="2000" />
         <mat-hint>Leave blank to use the backend default (2000)</mat-hint>
       </mat-form-field>
     }
