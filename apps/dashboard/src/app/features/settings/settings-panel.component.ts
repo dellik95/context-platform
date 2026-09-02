@@ -66,6 +66,18 @@ export class SettingsPanelComponent {
   protected readonly showOllamaEmbeddingModel = computed(() => this.settingsModel().embeddingProvider === 'ollama');
   protected readonly showOllamaChatModel = computed(() => this.settingsModel().llmProvider === 'ollama');
 
+  /**
+   * BACKLOG-09 / SEC-5: a user picking `openai`/`anthropic` gets no explanation of what leaves
+   * the machine when that provider is selected. `noop` and `ollama` never send indexed content
+   * off-box, so the disclosure is scoped to exactly the two external providers this Settings tab
+   * can select.
+   */
+  private static readonly CloudProviders = new Set(['openai', 'anthropic']);
+  protected readonly showCloudDisclosure = computed(() => {
+    const m = this.settingsModel();
+    return SettingsPanelComponent.CloudProviders.has(m.embeddingProvider) || SettingsPanelComponent.CloudProviders.has(m.llmProvider);
+  });
+
   private readonly resource = this.api.settingsResource(this.ctx.projectId);
   protected readonly loading = this.resource.isLoading;
 

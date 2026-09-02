@@ -51,7 +51,13 @@ public static class ServiceCollectionExtensions
                         clientOptions.Endpoint = new Uri(o.BaseUrl);
                     }
 
-                    return new EmbeddingClient(o.Model, new ApiKeyCredential(o.ApiKey), clientOptions).AsIEmbeddingGenerator();
+                    IEmbeddingGenerator<string, Embedding<float>> openAiGenerator =
+                        new EmbeddingClient(o.Model, new ApiKeyCredential(o.ApiKey), clientOptions).AsIEmbeddingGenerator();
+                    // BACKLOG-08 / SEC-4: openai is an external provider, so content is scanned for
+                    // secret-shaped substrings and redacted before it leaves this machine.
+                    return new SecretRedactingEmbeddingGeneratorDecorator(
+                        openAiGenerator,
+                        sp.GetRequiredService<ILogger<SecretRedactingEmbeddingGeneratorDecorator>>());
                 });
                 break;
             case "ollama":
@@ -110,7 +116,12 @@ public static class ServiceCollectionExtensions
                         http.BaseAddress = new Uri(o.BaseUrl.TrimEnd('/') + "/");
                     }
 
-                    return new AnthropicClient(new APIAuthentication(o.ApiKey), http).Messages;
+                    IChatClient anthropicChatClient = new AnthropicClient(new APIAuthentication(o.ApiKey), http).Messages;
+                    // BACKLOG-08 / SEC-4: anthropic is an external provider, so content is scanned
+                    // for secret-shaped substrings and redacted before it leaves this machine.
+                    return new SecretRedactingChatClientDecorator(
+                        anthropicChatClient,
+                        sp.GetRequiredService<ILogger<SecretRedactingChatClientDecorator>>());
                 });
                 break;
             case "ollama":

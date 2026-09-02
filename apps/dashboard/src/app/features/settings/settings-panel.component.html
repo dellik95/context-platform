@@ -34,6 +34,14 @@
           </mat-form-field>
         </div>
 
+        @if (showCloudDisclosure()) {
+          <p class="provider-note provider-note--cloud-disclosure">
+            <mat-icon>cloud_upload</mat-icon>
+            Indexed code and content will be sent to the selected external provider (OpenAI/Anthropic) for
+            processing. Choose <strong>ollama</strong> or <strong>noop</strong> instead to keep everything on this machine.
+          </p>
+        }
+
         @if (showOllamaBaseUrl() || showOllamaEmbeddingModel() || showOllamaChatModel()) {
           <div class="field-row">
             @if (showOllamaBaseUrl()) {
