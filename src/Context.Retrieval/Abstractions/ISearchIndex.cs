@@ -12,20 +12,16 @@ public interface ISearchIndex
     /// <summary>
     /// SQLite FTS5 / BM25 lexical search scoped to a project. Each result identifies a chunk and,
     /// where resolvable, the symbol/file it belongs to (<c>SymbolId</c> and/or <c>FileId</c> may be
-    /// null for chunks that are not attached to a resolved symbol). <c>UpdatedAt</c> is the owning
-    /// file's last-(re)indexed timestamp (null when the chunk has no resolvable file), feeding
-    /// <c>HybridSearchEngine</c>'s per-candidate recency signal.
+    /// null for chunks that are not attached to a resolved symbol).
     /// </summary>
-    Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double BM25Score, DateTimeOffset? UpdatedAt)>> LexicalSearchAsync(
+    Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double BM25Score)>> LexicalSearchAsync(
         Guid projectId, string text, CancellationToken ct);
 
     /// <summary>
     /// Vector-similarity search scoped to a project, using a pre-computed query embedding.
     /// <c>CosineScore</c> is the cosine similarity between the query embedding and the chunk's
-    /// stored embedding, typically in [-1, 1]. <c>UpdatedAt</c> is the owning file's
-    /// last-(re)indexed timestamp (null when the chunk has no resolvable file), feeding
-    /// <c>HybridSearchEngine</c>'s per-candidate recency signal.
+    /// stored embedding, typically in [-1, 1].
     /// </summary>
-    Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double CosineScore, DateTimeOffset? UpdatedAt)>> VectorSearchAsync(
+    Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double CosineScore)>> VectorSearchAsync(
         Guid projectId, float[] queryEmbedding, CancellationToken ct);
 }

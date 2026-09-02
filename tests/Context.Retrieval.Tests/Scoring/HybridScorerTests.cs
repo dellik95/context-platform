@@ -30,6 +30,19 @@ public class HybridScorerTests
     }
 
     [Fact]
+    public void DefaultRecencyWeight_IsZero_BecauseUpdatedAtMeansLastIndexedNotLastChanged()
+    {
+        // BACKLOG-13 follow-up: File.UpdatedAt was tried as a per-candidate recency signal and
+        // measured against RetrievalQualityHarnessTests (hit-rate@5 0.619 -> 0.524, MRR
+        // 0.644 -> 0.551 -- a regression). Root cause: UpdatedAt is stamped at index-processing
+        // time, not source-content-change time (it already means "last indexed" elsewhere -- see
+        // ContextEngine.ProjectInfoAsync's LastIndexedAt), so it degenerates to indexing-order
+        // noise on a full reindex. Reverted to honestly zero, same treatment as memory above,
+        // rather than leave it half-wired.
+        HybridScorer.DefaultRecencyWeight.Should().Be(0.0);
+    }
+
+    [Fact]
     public void Combine_DefaultOptions_MemorySignalHasNoEffectOnScore()
     {
         var scorer = new HybridScorer();
@@ -38,6 +51,17 @@ public class HybridScorerTests
         var highMemory = scorer.Combine(new NormalizedSignals(0.5, 0.5, 0.5, 0.5, Memory01: 1.0));
 
         highMemory.Should().Be(lowMemory, "DefaultMemoryWeight is 0, so varying Memory01 must never change the combined score");
+    }
+
+    [Fact]
+    public void Combine_DefaultOptions_RecencySignalHasNoEffectOnScore()
+    {
+        var scorer = new HybridScorer();
+
+        var lowRecency = scorer.Combine(new NormalizedSignals(0.5, 0.5, 0.5, Recency01: 0.0, Memory01: 0.5));
+        var highRecency = scorer.Combine(new NormalizedSignals(0.5, 0.5, 0.5, Recency01: 1.0, Memory01: 0.5));
+
+        highRecency.Should().Be(lowRecency, "DefaultRecencyWeight is 0, so varying Recency01 must never change the combined score");
     }
 
     [Fact]
