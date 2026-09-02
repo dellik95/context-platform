@@ -1,0 +1,188 @@
+using Context.Application.Indexing;
+using Context.Domain.Entities;
+using Context.Domain.Enums;
+using Context.Indexing.Abstractions;
+using Context.Infrastructure.Abstractions;
+using Context.Application.Jobs;
+using Microsoft.Extensions.AI;
+using FluentAssertions;
+using Moq;
+using DomainFile = Context.Domain.Entities.File;
+
+namespace Context.Application.Tests;
+
+/// <summary>
+/// BACKLOG-04: <see cref="IndexingPipeline.ReindexProjectAsync"/> must isolate a single file's
+/// failure -- log it, count it, and keep going -- rather than letting one bad file abort the whole
+/// pass (which would also skip the deleted-file cleanup and the final "Completed" progress signal
+/// for every other file too). Uses a real temp directory (IndexFileInternalAsync touches the real
+/// filesystem directly for File.Exists/ReadAllTextAsync) plus a fault-injecting fake
+/// <see cref="ILanguageParser"/> that throws while parsing one specific file's content, with every
+/// other collaborator a Moq mock -- following the same hand-rolled-mock construction pattern as
+/// <c>ContextEngineTests</c>.
+/// </summary>
+public sealed class IndexingPipelineTests : IDisposable
+{
+    private readonly string _root = Path.Combine(Path.GetTempPath(), $"context-pipeline-tests-{Guid.NewGuid():N}");
+
+    private readonly Mock<IProjectRepository> _projectRepository = new();
+    private readonly Mock<IFileRepository> _fileRepository = new();
+    private readonly Mock<ISymbolRepository> _symbolRepository = new();
+    private readonly Mock<IChunkRepository> _chunkRepository = new();
+    private readonly Mock<IEmbeddingRepository> _embeddingRepository = new();
+    private readonly Mock<IEmbeddingGenerator<string, Embedding<float>>> _embeddingGenerator = new();
+    private readonly Mock<IFileScanner> _fileScanner = new();
+    private readonly Mock<IContentHasher> _hasher = new();
+    private readonly Mock<IJobQueue> _jobQueue = new();
+    private readonly Mock<IIndexingProgressReporter> _progressReporter = new();
+    private readonly List<ReindexProgressDto> _reportedProgress = [];
+
+    public IndexingPipelineTests()
+    {
+        Directory.CreateDirectory(_root);
+
+        _fileRepository.Setup(f => f.UpsertAsync(It.IsAny<DomainFile>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DomainFile file, CancellationToken _) => file);
+        _fileRepository.Setup(f => f.MarkDeletedAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        _symbolRepository.Setup(s => s.ListByFileAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<Symbol>)[]);
+        _symbolRepository.Setup(s => s.ReplaceForFileAsync(It.IsAny<Guid>(), It.IsAny<IReadOnlyList<Symbol>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        _chunkRepository.Setup(c => c.ListByFileAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<Chunk>)[]);
+        _chunkRepository.Setup(c => c.ReplaceForFileAsync(It.IsAny<Guid>(), It.IsAny<IReadOnlyList<Chunk>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        // No missing embeddings -> EnqueueEmbedIfMissingAsync short-circuits, keeping this test
+        // focused on the per-file failure isolation rather than the embedding side-channel.
+        _embeddingRepository.Setup(e => e.GetMissingContentHashesAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<string>)[]);
+
+        _hasher.Setup(h => h.HashFile(It.IsAny<string>())).Returns((string path) => $"hash:{path}");
+        _hasher.Setup(h => h.HashText(It.IsAny<string>())).Returns((string text) => $"hash:{text.GetHashCode()}");
+
+        _jobQueue.Setup(q => q.EnqueueAsync(It.IsAny<JobType>(), It.IsAny<object>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Guid.NewGuid());
+
+        _progressReporter
+            .Setup(r => r.ReportAsync(It.IsAny<ReindexProgressDto>(), It.IsAny<CancellationToken>()))
+            .Callback<ReindexProgressDto, CancellationToken>((dto, _) => _reportedProgress.Add(dto))
+            .Returns(Task.CompletedTask);
+    }
+
+    [Fact]
+    public async Task ReindexProjectAsync_isolates_a_single_file_failure_indexes_the_rest_and_reports_the_failure_count()
+    {
+        var projectId = Guid.NewGuid();
+        var project = new Project { Id = projectId, Name = "Demo", RootPath = _root, CreatedAt = DateTimeOffset.UtcNow };
+
+        // "bad.fake"'s content is the fault-injecting fake parser's trigger to throw mid-parse,
+        // simulating malformed syntax / an unparsable file. "good.fake" has ordinary content and
+        // must still be fully indexed despite bad.fake's failure elsewhere in the same pass.
+        System.IO.File.WriteAllText(Path.Combine(_root, "good.fake"), "ordinary content");
+        System.IO.File.WriteAllText(Path.Combine(_root, "bad.fake"), "THROW");
+
+        // A previously-known file no longer present in this scan -- proves deleted-file cleanup
+        // still runs even though an earlier file in the same pass failed to index.
+        var removedFile = new DomainFile
+        {
+            Id = Guid.NewGuid(), ProjectId = projectId, RelativePath = "removed.fake",
+            ContentHash = "old-hash", IsDeleted = false, UpdatedAt = DateTimeOffset.UtcNow.AddDays(-1)
+        };
+
+        _projectRepository.Setup(p => p.GetByIdAsync(projectId, It.IsAny<CancellationToken>())).ReturnsAsync(project);
+
+        _fileRepository.Setup(f => f.GetByRelativePathAsync(projectId, It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DomainFile?)null); // every scanned file looks brand new
+        _fileRepository.Setup(f => f.GetByRelativePathAsync(projectId, "removed.fake", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(removedFile); // ...except the one HandleFileRemovedAsync looks up during cleanup
+        _fileRepository.Setup(f => f.ListByProjectAsync(projectId, false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<DomainFile>)[removedFile]);
+
+        var scanned = new List<ScannedFile>
+        {
+            new("good.fake", Path.Combine(_root, "good.fake"), 17),
+            new("bad.fake", Path.Combine(_root, "bad.fake"), 5)
+        };
+        _fileScanner
+            .Setup(s => s.ScanAsync(_root, It.IsAny<IIgnoreMatcher>(), It.IsAny<CancellationToken>()))
+            .Returns(ToAsyncEnumerable(scanned));
+
+        var pipeline = new IndexingPipeline(
+            _projectRepository.Object,
+            _fileRepository.Object,
+            _symbolRepository.Object,
+            _chunkRepository.Object,
+            _embeddingRepository.Object,
+            _embeddingGenerator.Object,
+            _fileScanner.Object,
+            ignoreFactory: _ => Mock.Of<IIgnoreMatcher>(),
+            parsers: [new ThrowingFakeParser()],
+            hasher: _hasher.Object,
+            jobQueue: _jobQueue.Object,
+            logger: null,
+            progressReporter: _progressReporter.Object,
+            fileSummarizer: null);
+
+        // Must not throw: bad.fake's parser failure is isolated, not propagated out of the pass.
+        await pipeline.ReindexProjectAsync(projectId, full: false, CancellationToken.None);
+
+        // good.fake was actually indexed: exactly one ReplaceForFileAsync call, carrying the one
+        // symbol the fake parser extracts. bad.fake never gets this far (it throws before this
+        // point in IndexParsedFileAsync), so this must fire exactly once, not twice.
+        _symbolRepository.Verify(
+            s => s.ReplaceForFileAsync(It.IsAny<Guid>(), It.Is<IReadOnlyList<Symbol>>(l => l.Count == 1), It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        // Deleted-file cleanup still ran despite bad.fake's earlier failure in the same pass.
+        _fileRepository.Verify(f => f.MarkDeletedAsync(removedFile.Id, It.IsAny<CancellationToken>()), Times.Once);
+
+        // The final "Completed" progress signal still went out, with both files counted as
+        // processed and exactly one counted as failed.
+        _reportedProgress.Should().NotBeEmpty();
+        var final = _reportedProgress[^1];
+        final.Completed.Should().BeTrue();
+        final.FilesTotal.Should().Be(2);
+        final.FilesProcessed.Should().Be(2);
+        final.FilesFailed.Should().Be(1);
+    }
+
+    private static async IAsyncEnumerable<ScannedFile> ToAsyncEnumerable(IEnumerable<ScannedFile> items)
+    {
+        foreach (var item in items)
+        {
+            yield return item;
+        }
+
+        await Task.CompletedTask;
+    }
+
+    /// <summary>Throws mid-parse for any source text equal to the literal "THROW" -- the
+    /// fault-injection trigger used by <c>bad.fake</c> above -- and otherwise extracts one
+    /// trivial symbol so a successfully-parsed file still exercises the normal indexing path.</summary>
+    private sealed class ThrowingFakeParser : ILanguageParser
+    {
+        public IReadOnlySet<string> SupportedExtensions { get; } = new HashSet<string> { ".fake" };
+
+        public ParsedAst Parse(string sourceText, ParsedAst? previousTree = null) =>
+            sourceText == "THROW"
+                ? throw new InvalidOperationException("Simulated parser failure for BACKLOG-04's fault-injection test.")
+                : new ParsedAst(new object(), sourceText);
+
+        public IReadOnlyList<SymbolDraft> ExtractSymbols(ParsedAst ast) =>
+            [new SymbolDraft("Foo", "Foo", SymbolKind.Function, 1, 1, "Foo()", "return;", DocComment: null, ParentQualifiedName: null)];
+
+        public IReadOnlyList<RelationDraft> ExtractRelations(ParsedAst ast, IReadOnlySet<string>? projectSymbolNames = null) => [];
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_root))
+        {
+            Directory.Delete(_root, recursive: true);
+        }
+    }
+}

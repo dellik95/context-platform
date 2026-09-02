@@ -42,8 +42,10 @@ public class ContextDbContext : DbContext
 
     /// <summary>
     /// Applies the pragmas required for correct concurrent SQLite access as soon as a
-    /// connection is physically opened: WAL journaling (readers don't block writers) and
-    /// foreign-key constraint enforcement (off by default per-connection in SQLite).
+    /// connection is physically opened: WAL journaling (readers don't block writers),
+    /// foreign-key constraint enforcement (off by default per-connection in SQLite), and a
+    /// 10-second busy_timeout so a writer blocked behind another connection's transaction
+    /// retries instead of failing immediately with SQLITE_BUSY (BACKLOG-07).
     /// Registered at <see cref="DbContextOptionsBuilder"/> configuration time (see
     /// <c>ServiceCollectionExtensions.AddContextInfrastructure</c>) rather than via an
     /// <c>OnConfiguring</c> override, because EF Core forbids mutating options in
@@ -61,10 +63,12 @@ public class ContextDbContext : DbContext
             await ApplyPragmasAsync(connection, cancellationToken).ConfigureAwait(false);
         }
 
+        internal const string PragmaCommandText = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=10000;";
+
         private static void ApplyPragmas(System.Data.Common.DbConnection connection)
         {
             using var command = connection.CreateCommand();
-            command.CommandText = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;";
+            command.CommandText = PragmaCommandText;
             command.ExecuteNonQuery();
         }
 
@@ -72,7 +76,7 @@ public class ContextDbContext : DbContext
         {
             var command = connection.CreateCommand();
             await using var _ = command.ConfigureAwait(false);
-            command.CommandText = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;";
+            command.CommandText = PragmaCommandText;
             await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
     }

@@ -376,4 +376,70 @@ public sealed class ContextEngineTests
         result[0].Should().BeSameAs(highConfidence);
         result[1].Should().BeSameAs(lowConfidence);
     }
+
+    // ---- 6. ProjectInfoAsync uses ISymbolRepository.CountByProjectAsync (BACKLOG-06) instead of an O(files) ListByFileAsync loop ----
+
+    [Fact]
+    public async Task ProjectInfoAsync_uses_CountByProjectAsync_for_symbol_count_and_reports_correct_stats()
+    {
+        var projectId = Guid.NewGuid();
+        var project = new Project { Id = projectId, Name = "Demo", RootPath = "/repo", CreatedAt = DateTimeOffset.UtcNow };
+
+        var olderUpdatedAt = DateTimeOffset.UtcNow.AddDays(-2);
+        var newerUpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var files = new List<DomainFile>
+        {
+            new() { Id = Guid.NewGuid(), ProjectId = projectId, RelativePath = "a.cs", ContentHash = "h1", UpdatedAt = olderUpdatedAt },
+            new() { Id = Guid.NewGuid(), ProjectId = projectId, RelativePath = "b.cs", ContentHash = "h2", UpdatedAt = newerUpdatedAt }
+        };
+
+        _projectRepository.Setup(r => r.GetByIdAsync(projectId, It.IsAny<CancellationToken>())).ReturnsAsync(project);
+        _fileRepository.Setup(r => r.ListByProjectAsync(projectId, false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<DomainFile>)files);
+        _symbolRepository.Setup(r => r.CountByProjectAsync(projectId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(42);
+
+        var result = await _sut.ProjectInfoAsync(projectId, CancellationToken.None);
+
+        var info = result.Should().BeOfType<ProjectInfo>().Subject;
+        info.SymbolsIndexed.Should().Be(42);
+        info.FilesIndexed.Should().Be(2);
+        info.LastIndexedAt.Should().Be(newerUpdatedAt);
+
+        _symbolRepository.Verify(r => r.CountByProjectAsync(projectId, It.IsAny<CancellationToken>()), Times.Once);
+        // The N+1 loop this replaces (BACKLOG-06) called ListByFileAsync once per file -- assert it
+        // is never called at all from ProjectInfoAsync any more.
+        _symbolRepository.Verify(r => r.ListByFileAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ProjectInfoAsync_reports_null_LastIndexedAt_when_project_has_no_files()
+    {
+        var projectId = Guid.NewGuid();
+        var project = new Project { Id = projectId, Name = "Empty", RootPath = "/repo", CreatedAt = DateTimeOffset.UtcNow };
+
+        _projectRepository.Setup(r => r.GetByIdAsync(projectId, It.IsAny<CancellationToken>())).ReturnsAsync(project);
+        _fileRepository.Setup(r => r.ListByProjectAsync(projectId, false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<DomainFile>)[]);
+        _symbolRepository.Setup(r => r.CountByProjectAsync(projectId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        var result = await _sut.ProjectInfoAsync(projectId, CancellationToken.None);
+
+        var info = result.Should().BeOfType<ProjectInfo>().Subject;
+        info.FilesIndexed.Should().Be(0);
+        info.SymbolsIndexed.Should().Be(0);
+        info.LastIndexedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ProjectInfoAsync_throws_when_project_does_not_exist()
+    {
+        var projectId = Guid.NewGuid();
+        _projectRepository.Setup(r => r.GetByIdAsync(projectId, It.IsAny<CancellationToken>())).ReturnsAsync((Project?)null);
+
+        var act = () => _sut.ProjectInfoAsync(projectId, CancellationToken.None);
+
+        await act.Should().ThrowAsync<KeyNotFoundException>();
+    }
 }

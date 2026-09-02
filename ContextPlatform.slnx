@@ -23,6 +23,7 @@
     <Project Path="tests/Context.Domain.Tests/Context.Domain.Tests.csproj" />
     <Project Path="tests/Context.Graph.Tests/Context.Graph.Tests.csproj" />
     <Project Path="tests/Context.Indexing.Tests/Context.Indexing.Tests.csproj" />
+    <Project Path="tests/Context.Infrastructure.Tests/Context.Infrastructure.Tests.csproj" />
     <Project Path="tests/Context.IntegrationTests/Context.IntegrationTests.csproj" />
     <Project Path="tests/Context.Memory.Tests/Context.Memory.Tests.csproj" />
     <Project Path="tests/Context.Retrieval.Tests/Context.Retrieval.Tests.csproj" />
