@@ -99,7 +99,7 @@ public sealed class GoldenPathE2ETests : IAsyncLifetime
 
         // ---------------------------------------------------------------------------------------
         // Compose the real DI container, matching Context.Cli/Program.cs's InitializeAsync exactly
-        // (AddContextProviders with no options => every provider defaults to noop/local-onnx, so
+        // (AddContextProviders with no options => every provider defaults to noop/lexical-overlap, so
         // no API key and no network access is ever required).
         // ---------------------------------------------------------------------------------------
         var services = new ServiceCollection();

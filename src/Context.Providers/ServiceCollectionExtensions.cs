@@ -82,9 +82,9 @@ public static class ServiceCollectionExtensions
             case "noop":
                 services.AddSingleton<IRerankerProvider, NoOpReranker>();
                 break;
-            case "local-onnx":
+            case "lexical-overlap":
             default:
-                services.AddSingleton<IRerankerProvider, LocalOnnxReranker>();
+                services.AddSingleton<IRerankerProvider, LexicalOverlapReranker>();
                 break;
         }
 

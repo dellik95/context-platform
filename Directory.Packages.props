@@ -43,7 +43,6 @@
     <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.9.0" />
     <PackageVersion Include="OllamaSharp" Version="5.4.30" />
     <PackageVersion Include="Anthropic.SDK" Version="5.10.0" />
-    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.20.1" />
     <!-- Context.Application: real ANN vector search (sqlite-vec) for chunk embeddings, replacing
          SqliteSearchIndex's old brute-force cosine scan. 10.1.0, not the newer 10.9.0 default:
          Microsoft.SemanticKernel.Connectors.SqliteVec 1.74.0-preview was compiled against 10.1.0's

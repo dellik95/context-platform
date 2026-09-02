@@ -18,8 +18,8 @@ public sealed record ContextProvidersOptions
     /// <summary>"noop" (default), "openai", or "ollama".</summary>
     public string EmbeddingProvider { get; init; } = "noop";
 
-    /// <summary>"local-onnx" (default, heuristic fallback) or "noop".</summary>
-    public string RerankerProvider { get; init; } = "local-onnx";
+    /// <summary>"lexical-overlap" (default, lexical token-overlap heuristic -- not ML-based) or "noop".</summary>
+    public string RerankerProvider { get; init; } = "lexical-overlap";
 
     /// <summary>"noop" (default), "anthropic", or "ollama".</summary>
     public string LlmProvider { get; init; } = "noop";
