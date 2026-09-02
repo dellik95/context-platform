@@ -87,19 +87,42 @@ public sealed class IndexingPipeline(
 
         var filesTotal = scannedFiles.Count;
         var filesProcessed = 0;
+        var filesFailed = 0;
 
         foreach (var scanned in scannedFiles)
         {
             scannedPaths.Add(NormalizePath(scanned.RelativePath));
-            await IndexFileInternalAsync(projectId, scanned.RelativePath, forceReprocess: full, ct).ConfigureAwait(false);
+
+            // A single file that throws during parsing/indexing (malformed syntax, an
+            // unreadable file, ...) must not abort the whole pass -- it would otherwise take
+            // down the deleted-file cleanup and the completion signal below for every OTHER
+            // file too. Log it, count it, and move on; the file self-heals on the next
+            // scheduled pass (its ContentHash never advanced, so it's retried from scratch).
+            try
+            {
+                await IndexFileInternalAsync(projectId, scanned.RelativePath, forceReprocess: full, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                filesFailed++;
+                _logger.LogError(
+                    ex, "Failed to index {RelativePath} in project {ProjectId} during reindex; skipping it for this pass.",
+                    scanned.RelativePath, projectId);
+            }
 
             filesProcessed++;
-            await ReportProgressAsync(new ReindexProgressDto(projectId, filesProcessed, filesTotal, Completed: false), ct)
+            await ReportProgressAsync(new ReindexProgressDto(projectId, filesProcessed, filesTotal, Completed: false, filesFailed), ct)
                 .ConfigureAwait(false);
         }
 
         // Anything still on record for this project but not found by this scan has been deleted
-        // (or moved out from under an ignore rule) since the last reindex.
+        // (or moved out from under an ignore rule) since the last reindex. This must still run
+        // even if some files above failed to index -- those files simply weren't touched, they
+        // were never removed from scannedPaths, so their deletion status is unaffected.
         var knownFiles = await files.ListByProjectAsync(projectId, includeDeleted: false, ct).ConfigureAwait(false);
         foreach (var known in knownFiles)
         {
@@ -110,7 +133,8 @@ public sealed class IndexingPipeline(
             }
         }
 
-        await ReportProgressAsync(new ReindexProgressDto(projectId, filesTotal, filesTotal, Completed: true), ct).ConfigureAwait(false);
+        await ReportProgressAsync(new ReindexProgressDto(projectId, filesTotal, filesTotal, Completed: true, filesFailed), ct)
+            .ConfigureAwait(false);
     }
 
     /// <summary>

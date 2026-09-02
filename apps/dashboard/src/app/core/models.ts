@@ -234,6 +234,7 @@ export interface ReindexProgressEvent {
   filesProcessed: number;
   filesTotal: number;
   completed: boolean;
+  filesFailed: number;
 }
 
 // Mirrors Context.Application.Settings.ProjectSettingsDto exactly (see CONTRACTS.md §12 and
