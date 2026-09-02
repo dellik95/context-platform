@@ -39,6 +39,14 @@ public class SymbolRepository(ContextDbContext db) : ISymbolRepository
         return names.ToHashSet(StringComparer.Ordinal);
     }
 
+    public Task<int> CountByProjectAsync(Guid projectId, CancellationToken ct) =>
+        (
+            from s in db.Symbols.AsNoTracking()
+            join f in db.Files.AsNoTracking() on s.FileId equals f.Id
+            where f.ProjectId == projectId && !f.IsDeleted
+            select s.Id
+        ).CountAsync(ct);
+
     public async Task ReplaceForFileAsync(Guid fileId, IReadOnlyList<Symbol> symbols, CancellationToken ct)
     {
         await using var tx = await db.Database.BeginTransactionAsync(ct);

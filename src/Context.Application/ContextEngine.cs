@@ -152,18 +152,10 @@ public sealed class ContextEngine(
 
         var files = await fileRepository.ListByProjectAsync(projectId, includeDeleted: false, ct).ConfigureAwait(false);
 
-        var symbolCount = 0;
-        DateTimeOffset? lastIndexedAt = null;
-        foreach (var file in files)
-        {
-            ct.ThrowIfCancellationRequested();
-            var symbols = await symbolRepository.ListByFileAsync(file.Id, ct).ConfigureAwait(false);
-            symbolCount += symbols.Count;
-            if (lastIndexedAt is null || file.UpdatedAt > lastIndexedAt)
-            {
-                lastIndexedAt = file.UpdatedAt;
-            }
-        }
+        // A single aggregate COUNT instead of an O(files) ListByFileAsync-per-file loop -- see
+        // ISymbolRepository.CountByProjectAsync.
+        var symbolCount = await symbolRepository.CountByProjectAsync(projectId, ct).ConfigureAwait(false);
+        DateTimeOffset? lastIndexedAt = files.Count > 0 ? files.Max(f => f.UpdatedAt) : null;
 
         var activeMemories = await memoryRepository.ListByProjectAsync(projectId, includeSuperseded: false, ct).ConfigureAwait(false);
 
