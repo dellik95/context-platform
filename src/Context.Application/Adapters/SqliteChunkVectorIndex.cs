@@ -46,7 +46,14 @@ namespace Context.Application.Adapters;
 public sealed class SqliteChunkVectorIndex(string dbPath, IDbContextFactory<ContextDbContext> dbContextFactory)
     : IChunkVectorIndex, IDisposable
 {
-    private readonly string _connectionString = $"Data Source={dbPath}";
+    // BACKLOG-07: this SqliteCollection owns its own Microsoft.Data.Sqlite connection, entirely
+    // outside ContextDbContext.SqlitePragmaConnectionInterceptor, so the same 10s busy-wait can't be
+    // applied as a literal `PRAGMA busy_timeout` (SqliteCollection gives us no hook to run one on its
+    // internally-managed connection). Microsoft.Data.Sqlite has no busy_timeout connection-string
+    // keyword either -- "Default Timeout" is its closest equivalent, driving the same managed
+    // busy-retry loop natively PRAGMA busy_timeout would (see SQLite/Microsoft.Data.Sqlite docs);
+    // 10 matches the interceptor's 10000ms so both connections back off for the same duration.
+    private readonly string _connectionString = $"Data Source={dbPath};Default Timeout=10";
     private readonly ConcurrentDictionary<string, Lazy<Task<SqliteCollection<Guid, ChunkVectorRecord>>>> _collections = new();
 
     public async Task UpsertAsync(Guid chunkId, Guid projectId, string provider, float[] vector, CancellationToken ct)

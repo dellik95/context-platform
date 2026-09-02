@@ -5,6 +5,13 @@
     <ProjectReference Include="..\Context.Shared\Context.Shared.csproj" />
   </ItemGroup>
 
+  <!-- BACKLOG-07: lets Context.Infrastructure.Tests construct DbContextOptions with the internal
+       SqlitePragmaConnectionInterceptor directly, the same way ServiceCollectionExtensions.
+       AddContextInfrastructure does, to assert the busy_timeout pragma is actually applied. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Context.Infrastructure.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
       <PrivateAssets>all</PrivateAssets>
