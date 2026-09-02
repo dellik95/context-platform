@@ -180,7 +180,21 @@ public sealed class HybridSearchEngine : ISearchEngine
         var vecNorm = HybridScorer.NormalizeMinMax([.. list.Select(c => c.VectorRaw)]);
         var graphRaw = list.Select(c => c.GraphHopDistance switch { 0 => 1.0, 1 => 0.5, _ => 0.0 }).ToList();
         var graphNorm = HybridScorer.NormalizeMinMax(graphRaw);
-        var recencyNorm = HybridScorer.NormalizeMinMax([.. list.Select(_ => 0.5)]);
+
+        // Recency: File.UpdatedAt was tried as a per-candidate signal here (BACKLOG-13) and measured
+        // against RetrievalQualityHarnessTests, but it regressed hit-rate@5/MRR: UpdatedAt is stamped
+        // at index-processing time, not source-content-change time (it already means "last indexed"
+        // elsewhere -- see ContextEngine.ProjectInfoAsync's LastIndexedAt), so a full reindex gives
+        // every candidate a near-identical "just indexed" timestamp that NormalizeMinMax then
+        // stretches into pure noise. Reverted to a constant placeholder, same honest-zero treatment
+        // as memory below, pending a genuinely separate source-last-modified signal.
+        var recencyNorm = HybridScorer.NormalizeMinMax([.. list.Select(_ => 0.0)]);
+
+        // Memory: no per-candidate memory-adjacency data source exists for code search today (see
+        // ARCHITECTURE_ASSESSMENT.md RAG-1/BACKLOG-13 -- Memory.FilesReadJson/FilesModifiedJson are
+        // write-only path lists with no FK to Chunk/File). This stays a constant placeholder, but
+        // HybridScoringOptions.MemoryWeight now defaults to 0.0 so it is honestly inert rather than
+        // silently contributing a non-zero constant via NormalizeMinMax's all-equal midpoint.
         var memoryNorm = HybridScorer.NormalizeMinMax([.. list.Select(_ => 0.0)]);
 
         for (var i = 0; i < list.Count; i++)
