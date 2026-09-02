@@ -10,11 +10,21 @@ namespace Context.Retrieval.Scoring;
 /// </summary>
 public sealed class HybridScorer : IHybridScorer
 {
-    public const double DefaultLexicalWeight = 0.20;
-    public const double DefaultVectorWeight = 0.45;
-    public const double DefaultGraphWeight = 0.20;
-    public const double DefaultRecencyWeight = 0.10;
-    public const double DefaultMemoryWeight = 0.05;
+    // BACKLOG-13 (see ARCHITECTURE_ASSESSMENT.md RAG-1): the original weights below (lex 0.20,
+    // vec 0.45, graph 0.20, rec 0.10, mem 0.05) were set when both recency and memory were
+    // constant placeholder signals -- NormalizeMinMax's all-equal fallback turned each into a
+    // silent, inert 0.5 contribution. Recency is now wired to a real per-candidate signal
+    // (HybridSearchEngine.ScoreAndRank sources it from the owning file's UpdatedAt), so its
+    // original weight is kept. Memory still has no per-candidate data source for code search
+    // (Memory.FilesReadJson/FilesModifiedJson are write-only path lists with no FK to Chunk/File),
+    // so rather than let it keep contributing a misleading non-zero constant, its weight is
+    // honestly zeroed and the remaining four weights are rescaled to sum back to 1.0
+    // (0.20/0.95, 0.45/0.95, 0.20/0.95, 0.10/0.95).
+    public const double DefaultLexicalWeight = 0.20 / 0.95;
+    public const double DefaultVectorWeight = 0.45 / 0.95;
+    public const double DefaultGraphWeight = 0.20 / 0.95;
+    public const double DefaultRecencyWeight = 0.10 / 0.95;
+    public const double DefaultMemoryWeight = 0.0;
 
     /// <summary>
     /// Codemem-inspired kind-based re-rank bonus (ROADMAP.md's "hybrid pack re-ranking

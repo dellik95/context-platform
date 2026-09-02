@@ -39,7 +39,7 @@ public sealed class SqliteSearchIndex(
     private static readonly SemaphoreSlim InitGate = new(1, 1);
     private static volatile bool _ftsInitialized;
 
-    public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double BM25Score)>> LexicalSearchAsync(
+    public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double BM25Score, DateTimeOffset? UpdatedAt)>> LexicalSearchAsync(
         Guid projectId, string text, CancellationToken ct)
     {
         var matchExpression = BuildMatchExpression(text);
@@ -59,7 +59,7 @@ public sealed class SqliteSearchIndex(
         // a higher value here always means "more relevant" — the convention HybridSearchEngine's
         // min-max normalization assumes for every raw signal it merges.
         command.CommandText = """
-            SELECT c."Id", c."FileId", c."SymbolId", substr(c."Text", 1, @snippetLength) AS Snippet, -bm25(chunks_fts) AS Score
+            SELECT c."Id", c."FileId", c."SymbolId", substr(c."Text", 1, @snippetLength) AS Snippet, -bm25(chunks_fts) AS Score, f."UpdatedAt"
             FROM chunks_fts
             JOIN "Chunks" c ON c."rowid" = chunks_fts."rowid"
             JOIN "Files" f ON f."Id" = c."FileId"
@@ -72,7 +72,7 @@ public sealed class SqliteSearchIndex(
         AddParameter(command, "@snippetLength", SnippetLength);
         AddParameter(command, "@limit", LexicalLimit);
 
-        var results = new List<(Guid, Guid?, Guid?, string, double)>();
+        var results = new List<(Guid, Guid?, Guid?, string, double, DateTimeOffset?)>();
 
         try
         {
@@ -84,7 +84,8 @@ public sealed class SqliteSearchIndex(
                     ReadNullableGuid(reader, 1),
                     ReadNullableGuid(reader, 2),
                     reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
-                    reader.GetDouble(4)));
+                    reader.GetDouble(4),
+                    ReadNullableDateTimeOffset(reader, 5)));
             }
         }
         catch (DbException)
@@ -98,7 +99,7 @@ public sealed class SqliteSearchIndex(
         return results;
     }
 
-    public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double CosineScore)>> VectorSearchAsync(
+    public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double CosineScore, DateTimeOffset? UpdatedAt)>> VectorSearchAsync(
         Guid projectId, float[] queryEmbedding, CancellationToken ct)
     {
         var hits = await vectorIndex.SearchAsync(projectId, embeddingGenerator.GetProviderName(), queryEmbedding, VectorLimit, ct)
@@ -121,14 +122,14 @@ public sealed class SqliteSearchIndex(
             from c in db.Chunks.AsNoTracking()
             join f in db.Files.AsNoTracking() on c.FileId equals f.Id
             where chunkIds.Contains(c.Id) && f.ProjectId == projectId && !f.IsDeleted
-            select new { c.Id, c.FileId, c.SymbolId, c.Text }
+            select new { c.Id, c.FileId, c.SymbolId, c.Text, f.UpdatedAt }
         ).ToListAsync(ct).ConfigureAwait(false);
 
         var scored = rows
             .Select(row =>
             {
                 var snippet = row.Text.Length > SnippetLength ? row.Text[..SnippetLength] : row.Text;
-                return (row.Id, (Guid?)row.FileId, row.SymbolId, snippet, scoreByChunkId[row.Id]);
+                return (row.Id, (Guid?)row.FileId, row.SymbolId, snippet, scoreByChunkId[row.Id], (DateTimeOffset?)row.UpdatedAt);
             })
             .OrderByDescending(r => r.Item5)
             .ToList();
@@ -263,4 +264,7 @@ public sealed class SqliteSearchIndex(
 
     private static Guid? ReadNullableGuid(DbDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : Guid.Parse(reader.GetString(ordinal));
+
+    private static DateTimeOffset? ReadNullableDateTimeOffset(DbDataReader reader, int ordinal) =>
+        reader.IsDBNull(ordinal) ? null : DateTimeOffset.Parse(reader.GetString(ordinal), System.Globalization.CultureInfo.InvariantCulture);
 }

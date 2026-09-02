@@ -83,15 +83,15 @@ public sealed class HybridSearchEngine : ISearchEngine
     }
 
     private static Dictionary<Guid, CandidateAccumulator> MergeCandidates(
-        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double BM25Score)> lexical,
-        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double CosineScore)> vector)
+        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double BM25Score, DateTimeOffset? UpdatedAt)> lexical,
+        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double CosineScore, DateTimeOffset? UpdatedAt)> vector)
     {
         var map = new Dictionary<Guid, CandidateAccumulator>();
 
         foreach (var r in lexical)
         {
             var key = r.SymbolId ?? r.FileId ?? r.ChunkId;
-            var c = GetOrAdd(map, key, r.ChunkId, r.FileId, r.SymbolId);
+            var c = GetOrAdd(map, key, r.ChunkId, r.FileId, r.SymbolId, r.UpdatedAt);
             c.LexicalRaw = Math.Max(c.LexicalRaw, r.BM25Score);
             c.Snippet ??= r.Snippet;
         }
@@ -99,7 +99,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         foreach (var r in vector)
         {
             var key = r.SymbolId ?? r.FileId ?? r.ChunkId;
-            var c = GetOrAdd(map, key, r.ChunkId, r.FileId, r.SymbolId);
+            var c = GetOrAdd(map, key, r.ChunkId, r.FileId, r.SymbolId, r.UpdatedAt);
             c.VectorRaw = Math.Max(c.VectorRaw, r.CosineScore);
             c.Snippet ??= r.Snippet;
         }
@@ -108,12 +108,16 @@ public sealed class HybridSearchEngine : ISearchEngine
     }
 
     private static CandidateAccumulator GetOrAdd(
-        Dictionary<Guid, CandidateAccumulator> map, Guid key, Guid chunkId, Guid? fileId, Guid? symbolId)
+        Dictionary<Guid, CandidateAccumulator> map, Guid key, Guid chunkId, Guid? fileId, Guid? symbolId, DateTimeOffset? updatedAt)
     {
         if (!map.TryGetValue(key, out var c))
         {
-            c = new CandidateAccumulator(key) { ChunkId = chunkId, FileId = fileId, SymbolId = symbolId };
+            c = new CandidateAccumulator(key) { ChunkId = chunkId, FileId = fileId, SymbolId = symbolId, UpdatedAt = updatedAt };
             map[key] = c;
+        }
+        else
+        {
+            c.UpdatedAt ??= updatedAt;
         }
 
         return c;
@@ -180,7 +184,21 @@ public sealed class HybridSearchEngine : ISearchEngine
         var vecNorm = HybridScorer.NormalizeMinMax([.. list.Select(c => c.VectorRaw)]);
         var graphRaw = list.Select(c => c.GraphHopDistance switch { 0 => 1.0, 1 => 0.5, _ => 0.0 }).ToList();
         var graphNorm = HybridScorer.NormalizeMinMax(graphRaw);
-        var recencyNorm = HybridScorer.NormalizeMinMax([.. list.Select(_ => 0.5)]);
+
+        // Recency: real per-candidate signal, sourced from the owning file's UpdatedAt (see
+        // ISearchIndex.LexicalSearchAsync/VectorSearchAsync). A candidate with no resolvable file
+        // (e.g. a graph-expansion-only neighbor that never came back from lexical/vector search)
+        // gets the oldest possible raw value so it never wins a recency comparison on missing data.
+        var recencyRaw = list
+            .Select(c => c.UpdatedAt.HasValue ? (double)c.UpdatedAt.Value.UtcTicks : (double)DateTimeOffset.MinValue.UtcTicks)
+            .ToList();
+        var recencyNorm = HybridScorer.NormalizeMinMax(recencyRaw);
+
+        // Memory: no per-candidate memory-adjacency data source exists for code search today (see
+        // ARCHITECTURE_ASSESSMENT.md RAG-1/BACKLOG-13 -- Memory.FilesReadJson/FilesModifiedJson are
+        // write-only path lists with no FK to Chunk/File). This stays a constant placeholder, but
+        // HybridScoringOptions.MemoryWeight now defaults to 0.0 so it is honestly inert rather than
+        // silently contributing a non-zero constant via NormalizeMinMax's all-equal midpoint.
         var memoryNorm = HybridScorer.NormalizeMinMax([.. list.Select(_ => 0.0)]);
 
         for (var i = 0; i < list.Count; i++)
@@ -246,6 +264,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         public double LexicalRaw { get; set; }
         public double VectorRaw { get; set; }
         public int? GraphHopDistance { get; set; }
+        public DateTimeOffset? UpdatedAt { get; set; }
         public double Score { get; set; }
 
         public SearchHit ToSearchHit()

@@ -19,6 +19,28 @@ public class HybridScorerTests
     }
 
     [Fact]
+    public void DefaultMemoryWeight_IsZero_BecauseNoPerCandidateSignalExistsForCodeSearch()
+    {
+        // BACKLOG-13 (ARCHITECTURE_ASSESSMENT.md RAG-1): memory-adjacency has no per-candidate
+        // data source in the code-search path (Memory.FilesReadJson/FilesModifiedJson are
+        // write-only path lists, never joined to Chunk/File). Rather than let a constant
+        // placeholder silently normalize to a non-zero 0.5 contribution via NormalizeMinMax's
+        // all-equal fallback, the weight is explicitly zero so it is honestly inert.
+        HybridScorer.DefaultMemoryWeight.Should().Be(0.0);
+    }
+
+    [Fact]
+    public void Combine_DefaultOptions_MemorySignalHasNoEffectOnScore()
+    {
+        var scorer = new HybridScorer();
+
+        var lowMemory = scorer.Combine(new NormalizedSignals(0.5, 0.5, 0.5, 0.5, Memory01: 0.0));
+        var highMemory = scorer.Combine(new NormalizedSignals(0.5, 0.5, 0.5, 0.5, Memory01: 1.0));
+
+        highMemory.Should().Be(lowMemory, "DefaultMemoryWeight is 0, so varying Memory01 must never change the combined score");
+    }
+
+    [Fact]
     public void Combine_AllZeroSignals_ReturnsZero()
     {
         var scorer = new HybridScorer();
