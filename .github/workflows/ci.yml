@@ -1,0 +1,94 @@
+name: CI
+
+# First CI pass for this repo (no hosting platform was previously configured for it —
+# see docs/architecture/ARCHITECTURE_ASSESSMENT.md, BACKLOG-17 / IDX-1). Keep this minimal:
+# build + test only. No deploy, no image publishing — that is separate future work.
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DASHBOARD_DIR: apps/dashboard
+
+jobs:
+  dotnet:
+    name: .NET build & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Context.Host.csproj embeds the Angular dashboard into wwwroot/ as part of its own
+      # `dotnet build` (see apps/host/Context.Host/Context.Host.csproj, target "BuildDashboard"),
+      # shelling out to `npm ci` / `npx ng build` in apps/dashboard. Node must be available and
+      # dependencies installed before the .NET build runs, or that MSBuild target fails.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ${{ env.DASHBOARD_DIR }}/package-lock.json
+
+      - name: Install dashboard dependencies
+        working-directory: ${{ env.DASHBOARD_DIR }}
+        run: npm ci
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: |
+            **/*.csproj
+            Directory.Packages.props
+
+      - name: Restore
+        run: dotnet restore ContextPlatform.slnx
+
+      - name: Build
+        run: dotnet build ContextPlatform.slnx --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test ContextPlatform.slnx --no-build --configuration Release --logger "trx;LogFileName=test-results.trx" --results-directory TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-test-results
+          path: TestResults
+          retention-days: 7
+
+  dashboard:
+    name: Dashboard build & test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/dashboard
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/dashboard/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # No ESLint (or other lint) configuration exists in apps/dashboard yet, so there is
+      # nothing to wire up here. Add a "lint" script + lint step once a linter is adopted.
+      - name: Test
+        run: npm test -- --watch=false
