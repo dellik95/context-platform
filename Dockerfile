@@ -38,6 +38,13 @@ RUN dotnet publish apps/host/Context.Host/Context.Host.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
+# curl for HEALTHCHECK below — not present in the base aspnet image (unlike useradd/groupadd,
+# which come from the `passwd` package and are part of every Debian base, even slim). One small,
+# well-cached apt layer; not worth avoiding for a single health probe.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY --from=build /app/host ./host
 COPY --from=build /app/cli ./cli
 COPY --from=dashboard-build /dashboard/dist/dashboard/browser ./host/wwwroot
@@ -55,8 +62,36 @@ RUN printf '#!/bin/sh\nexec dotnet /app/cli/Context.Cli.dll "$@"\n' > /usr/local
 # container's port bound to the *host's* 127.0.0.1 instead (see docker-compose.yml).
 ENV CONTEXT_PLATFORM_ROOT=/workspace
 ENV CONTEXT_PLATFORM_PORT=47923
+
+# Dedicated non-root user — the app has no business running as root inside the container, and
+# /workspace is (per docker-compose.yml) a read-only bind mount of the real source tree being
+# indexed, so root privileges would buy nothing there either.
+#
+# ContextHostOptions hardcodes ProjectDataDir to {ProjectRoot}/.context (db/logs/backups all live
+# there — see Program.cs and BackupDbJobHandler), and ProjectRoot is CONTEXT_PLATFORM_ROOT above,
+# i.e. /workspace itself. That's the one directory this process must be able to write even though
+# the rest of /workspace is read-only, so docker-compose.yml mounts a *separate* writable named
+# volume at exactly /workspace/.context, nested inside the read-only workspace bind mount — Linux
+# mount flags are per-mountpoint, so a rw mount nested under a ro one is unaffected by the parent.
+# Pre-creating it here, owned by the app user, means Docker's normal "populate a freshly-created
+# named volume from the image's own content at that path" behaviour gives the volume the right
+# ownership on first run, with no extra chown step needed at container start.
+RUN groupadd -r contextplatform \
+ && useradd -r -g contextplatform -d /workspace -s /usr/sbin/nologin contextplatform \
+ && mkdir -p /workspace/.context \
+ && chown -R contextplatform:contextplatform /workspace/.context
+
 WORKDIR /workspace
 VOLUME ["/workspace"]
 EXPOSE 47923
+
+USER contextplatform
+
+# curl (installed above) hits the same /health route Context.Host itself exposes (see
+# HealthEndpoints.MapHealthEndpoints) — aggregates DB reachability and job-dispatcher liveness.
+# start-period gives EF Core's startup migration (Program.cs, Database.MigrateAsync) room to finish
+# before failures count against retries.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${CONTEXT_PLATFORM_PORT}/health" || exit 1
 
 ENTRYPOINT ["dotnet", "/app/host/Context.Host.dll"]

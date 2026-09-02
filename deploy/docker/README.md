@@ -25,16 +25,33 @@ Then drive it exactly like the bare-metal CLI, via the `context` wrapper baked i
 
 ```bash
 docker compose exec context-platform context project create --name self --path /workspace
-docker compose exec context-platform context claude install --project <id-from-above>
 docker compose exec context-platform context index --project <id> --full
 docker compose exec context-platform context search "job dispatcher" --project <id>
 docker compose exec context-platform context doctor --project <id>
 ```
 
-(`context claude install` writes `.mcp.json`/`.claude/` into the *mounted* `/workspace`, i.e. back
-onto your host repo — the same file Claude Code on your host machine reads, which is exactly what
-lets you point Claude Code at a Context Platform instance running in a container instead of a
-bare-metal `dotnet run`.)
+`context claude install` is **not** part of this quick start — see "Read-only workspace mount"
+below for why, and what to do if you want it.
+
+## Read-only workspace mount
+
+`/workspace` is bind-mounted `:ro` and the container runs as a non-root user (see `Dockerfile`):
+indexing/search/embedding only ever needs to *read* the source tree, so nothing in this container
+can modify the real repo it's indexing — a bug or a compromised dependency here can't corrupt your
+working copy.
+
+One consequence: `context claude install` (and the dashboard's "write settings locally" option)
+write `.mcp.json`/`.claude/context-platform.local.json` *into the project root* — that's how a
+host-side Claude Code picks them up — and that write now fails against the read-only mount. If you
+want that integration:
+
+- run `context claude install` from a bare-metal `dotnet run`/`context` instead (same `.context/`
+  database format, so switching between bare-metal and container is safe), or
+- temporarily drop the `:ro` in `docker-compose.yml`'s workspace volume line, run `context claude
+  install` once, then put it back.
+
+The app's own data (`.context/` — see below) is unaffected either way: it lives on its own
+writable volume, not under this read-only mount.
 
 ## Point it at a different repo
 
@@ -76,15 +93,27 @@ docker compose up -d --build
 
 ## Logs and data
 
-- Logs: `docker compose logs -f context-platform`, or directly under `<mounted-repo>/.context/logs/`
-  since `.context/` lives inside the mounted volume exactly like the bare-metal deployment.
-- Database/backups: `<mounted-repo>/.context/context.db` and `.../backups/` — same as bare-metal,
-  nothing container-specific; stopping/removing the container never loses data as long as the bind
-  mount stays the same path.
+Unlike the bare-metal deployment, `.context/` (database, logs, backups) is **not** part of the
+mounted repo — it can't be, since `/workspace` above is read-only. `docker-compose.yml` instead
+mounts a separate named volume (`context-data`) at exactly `/workspace/.context`, nested inside the
+read-only bind mount, so the app still finds it at the path it always expects while the rest of
+`/workspace` stays untouched.
+
+- Logs: `docker compose logs -f context-platform`, or `docker compose exec context-platform tail -f
+  /workspace/.context/logs/context-<date>.log`.
+- Database/backups: `docker compose exec context-platform ls /workspace/.context` /
+  `.../backups/`. To copy the database out to the host, e.g. for inspection:
+  `docker compose cp context-platform:/workspace/.context/context.db ./context.db`.
+- The `context-data` volume persists across `docker compose down`/`up` and container
+  recreation — it's a normal Docker named volume, so `docker volume inspect context-data` (and, on
+  plain Linux Docker Engine, its `Mountpoint`) works the usual way; on Docker Desktop/Rancher
+  Desktop that path is inside the Desktop VM, not directly on the Windows/macOS host, so prefer
+  `docker compose exec`/`docker compose cp` above.
 
 ## Tearing down
 
 ```bash
-docker compose down          # stop and remove the container, keep the image and mounted data
+docker compose down          # stop and remove the container, keep the image, mounted repo, and context-data volume
+docker compose down -v       # also remove the context-data volume (drops the index/db/logs)
 docker compose down --rmi local  # also remove the built image
 ```
