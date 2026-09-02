@@ -1,4 +1,5 @@
 using Context.Application.Settings;
+using Context.Host.Security;
 
 namespace Context.Host.Api;
 
@@ -10,7 +11,7 @@ public static class SettingsEndpoints
 {
     public static void MapSettingsEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/projects/{id:guid}/settings");
+        var group = app.MapGroup("/api/projects/{id:guid}/settings").RequireBearerToken();
 
         group.MapGet("/", GetAsync);
         group.MapPut("/", UpdateAsync);

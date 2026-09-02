@@ -1,4 +1,5 @@
 using Context.Claude.Installation;
+using Context.Host.Security;
 using Context.Infrastructure.Abstractions;
 
 namespace Context.Host.Api;
@@ -11,7 +12,7 @@ public static class ClaudeEndpoints
 {
     public static void MapClaudeEndpoints(this WebApplication app)
     {
-        app.MapPost("/api/projects/{id:guid}/claude/install", InstallAsync);
+        app.MapPost("/api/projects/{id:guid}/claude/install", InstallAsync).RequireBearerToken();
     }
 
     private static async Task<IResult> InstallAsync(

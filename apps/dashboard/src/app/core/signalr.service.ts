@@ -1,7 +1,8 @@
-import { Injectable, OnDestroy } from '@angular/core';
+import { Injectable, OnDestroy, inject } from '@angular/core';
 import * as signalR from '@microsoft/signalr';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
+import { AuthTokenService } from './auth-token.service';
 import { ProjectActivityEvent, ProjectStatusChangedEvent, ReindexProgressEvent } from './models';
 
 /**
@@ -11,6 +12,8 @@ import { ProjectActivityEvent, ProjectStatusChangedEvent, ReindexProgressEvent }
  */
 @Injectable({ providedIn: 'root' })
 export class SignalrService implements OnDestroy {
+  private readonly authTokenService = inject(AuthTokenService);
+
   private connection: signalR.HubConnection | null = null;
   private startPromise: Promise<void> | null = null;
   private readonly joinedProjects = new Set<string>();
@@ -25,7 +28,14 @@ export class SignalrService implements OnDestroy {
     }
 
     this.connection = new signalR.HubConnectionBuilder()
-      .withUrl(`${environment.apiBaseUrl}/hubs/indexing`)
+      // Browsers can't set custom headers on a WebSocket upgrade, so accessTokenFactory is
+      // SignalR's own mechanism for this: its JS client sends the resolved value as an
+      // ?access_token= query-string parameter on the negotiate/connect requests instead (see
+      // Context.Host.Security.BearerTokenAuth, which accepts the token from either place for
+      // exactly this reason).
+      .withUrl(`${environment.apiBaseUrl}/hubs/indexing`, {
+        accessTokenFactory: async () => (await this.authTokenService.getToken()) ?? '',
+      })
       .withAutomaticReconnect()
       .build();
 

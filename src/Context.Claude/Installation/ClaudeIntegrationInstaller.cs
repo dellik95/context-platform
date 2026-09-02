@@ -82,12 +82,19 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         SettingsJsonMerger.MergeHooks(settings, HookDefinition.All, targetIsWindows);
         await WriteJsonAsync(settingsPath, settings, ct).ConfigureAwait(false);
 
+        // Resolved up front (reusing an existing token so re-installing doesn't invalidate a
+        // Context.Host that already has it cached/authorized) because step 3 below now needs it
+        // too — /mcp requires the same bearer token as every other REST endpoint (BACKLOG-02).
+        var localConfigPath = Path.Combine(claudeDir, LocalConfigFileName);
+        var existingToken = await TryReadExistingTokenAsync(localConfigPath, ct).ConfigureAwait(false);
+        var bearerToken = existingToken ?? GenerateBearerToken();
+
         // 3) .mcp.json — merge the Context.Host MCP server entry.
         var mcpPath = Path.Combine(projectRoot, ".mcp.json");
         BackupIfExists(mcpPath, projectRoot, backupRoot);
         var mcpConfig = await ReadOrCreateJsonObjectAsync(mcpPath, ct).ConfigureAwait(false);
         var mcpUrl = $"http://127.0.0.1:{_options.HostPort}{_options.McpPath}";
-        SettingsJsonMerger.MergeMcpServer(mcpConfig, mcpUrl);
+        SettingsJsonMerger.MergeMcpServer(mcpConfig, mcpUrl, bearerToken);
         await WriteJsonAsync(mcpPath, mcpConfig, ct).ConfigureAwait(false);
 
         // 4) .claude-plugin/plugin.json manifest.
@@ -95,16 +102,13 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         BackupIfExists(pluginPath, projectRoot, backupRoot);
         await WriteJsonAsync(pluginPath, BuildPluginManifest(), ct).ConfigureAwait(false);
 
-        // 5) Bearer token + local config (reuse an existing token so re-installing doesn't
-        //    invalidate a Context.Host that already has it cached/authorized).
-        var localConfigPath = Path.Combine(claudeDir, LocalConfigFileName);
-        var existingToken = await TryReadExistingTokenAsync(localConfigPath, ct).ConfigureAwait(false);
+        // 5) Bearer token + local config.
         BackupIfExists(localConfigPath, projectRoot, backupRoot);
         var localConfig = new JsonObject
         {
             ["projectId"] = projectId.ToString(),
             ["port"] = _options.HostPort,
-            ["bearerToken"] = existingToken ?? GenerateBearerToken(),
+            ["bearerToken"] = bearerToken,
             ["generatedAt"] = DateTimeOffset.UtcNow.ToString("O"),
         };
         await WriteJsonAsync(localConfigPath, localConfig, ct).ConfigureAwait(false);

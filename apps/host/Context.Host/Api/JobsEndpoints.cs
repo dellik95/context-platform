@@ -1,6 +1,7 @@
 using Context.Application.Jobs;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
+using Context.Host.Security;
 using Context.Infrastructure.Abstractions;
 
 namespace Context.Host.Api;
@@ -20,9 +21,10 @@ public static class JobsEndpoints
 
     public static void MapJobsEndpoints(this WebApplication app)
     {
-        app.MapGet("/api/jobs", ListAsync);
-        app.MapPost("/api/jobs/{id:guid}/retry", RetryAsync);
-        app.MapGet("/api/logs/tail", TailLogAsync);
+        var group = app.MapGroup("").RequireBearerToken();
+        group.MapGet("/api/jobs", ListAsync);
+        group.MapPost("/api/jobs/{id:guid}/retry", RetryAsync);
+        group.MapGet("/api/logs/tail", TailLogAsync);
     }
 
     private static async Task<IResult> ListAsync(

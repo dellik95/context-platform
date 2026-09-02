@@ -1,4 +1,5 @@
 using Context.Application;
+using Context.Host.Security;
 using Context.Retrieval.Abstractions;
 
 namespace Context.Host.Api;
@@ -10,7 +11,7 @@ public static class SearchEndpoints
 
     public static void MapSearchEndpoints(this WebApplication app)
     {
-        app.MapGet("/api/search", SearchAsync);
+        app.MapGet("/api/search", SearchAsync).RequireBearerToken();
     }
 
     private static async Task<IResult> SearchAsync(

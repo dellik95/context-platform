@@ -1,3 +1,4 @@
+using Context.Host.Security;
 using Context.Infrastructure.Abstractions;
 
 namespace Context.Host.Api;
@@ -32,7 +33,7 @@ public static class SessionEndpoints
 
     public static void MapSessionEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/sessions");
+        var group = app.MapGroup("/api/sessions").RequireBearerToken();
 
         group.MapGet("/", ListAsync);
         group.MapGet("/{id:guid}", GetAsync);

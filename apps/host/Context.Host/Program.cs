@@ -7,6 +7,7 @@ using Context.Host.Api;
 using Context.Host.BackgroundServices;
 using Context.Host.Hooks;
 using Context.Host.Hubs;
+using Context.Host.Security;
 using Context.Indexing;
 using Context.Infrastructure;
 using Context.Memory;
@@ -96,12 +97,25 @@ try
     builder.Services.AddSingleton<Context.Application.Indexing.IIndexingProgressReporter, Context.Host.Hubs.SignalRIndexingProgressReporter>();
     builder.Services.AddSingleton<Context.Application.Notifications.IProjectActivityNotifier, Context.Host.Hubs.SignalRProjectActivityNotifier>();
 
+    // Dev-only, explicit allow-list — see BACKLOG-01 in docs/architecture/ARCHITECTURE_ASSESSMENT.md.
+    // The previous SetIsOriginAllowed(_ => true).AllowCredentials() combination let ANY local
+    // browser tab silently call this API/hub/MCP endpoint with the user's own cookies/credentials
+    // implied — wildcard-origin + credentials is exactly the pattern browsers otherwise forbid for
+    // good reason. Production registers no CORS policy at all: the production Dashboard is served
+    // same-origin from this host's own wwwroot (see the static-file block below), so it never needs
+    // one, and omitting the policy entirely (rather than an empty allow-list) means UseCors is never
+    // even called in Production - no Access-Control-Allow-Origin header can be emitted for any
+    // request, from any origin, no matter what.
     const string DashboardCorsPolicy = "Dashboard";
-    builder.Services.AddCors(o => o.AddPolicy(DashboardCorsPolicy, p => p
-        .SetIsOriginAllowed(_ => true)
-        .AllowAnyHeader()
-        .AllowAnyMethod()
-        .AllowCredentials()));
+    string[] devCorsOrigins = ["http://localhost:4200", "https://localhost:4200"];
+    if (builder.Environment.IsDevelopment())
+    {
+        builder.Services.AddCors(o => o.AddPolicy(DashboardCorsPolicy, p => p
+            .WithOrigins(devCorsOrigins)
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials()));
+    }
 
     builder.Services.AddMcpServer()
         .WithHttpTransport()
@@ -122,8 +136,18 @@ try
         app.MapOpenApi();
     }
 
-    app.UseCors(DashboardCorsPolicy);
+    if (app.Environment.IsDevelopment())
+    {
+        app.UseCors(DashboardCorsPolicy);
+    }
 
+    // Gates /hubs/indexing before routing selects an endpoint — see that method's remarks for why
+    // this is middleware rather than an endpoint filter like every REST route below uses.
+    app.UseHubBearerTokenAuth("/hubs/indexing");
+
+    // Every group below applies BearerTokenAuth.RequireBearerTokenFilter to its own routes
+    // internally (see each file's MapXxxEndpoints) — MapHealthEndpoints and MapBootstrapEndpoints
+    // are the deliberate exceptions.
     app.MapHookEndpoints();
     app.MapProjectEndpoints();
     app.MapSearchEndpoints();
@@ -131,6 +155,7 @@ try
     app.MapGraphEndpoints();
     app.MapSessionEndpoints();
     app.MapHealthEndpoints();
+    app.MapBootstrapEndpoints();
     app.MapSettingsEndpoints();
     app.MapClaudeEndpoints();
     app.MapSystemEndpoints();
@@ -140,7 +165,7 @@ try
 
     // ClaudeIntegrationInstaller writes .mcp.json as {"type":"http","url":"http://127.0.0.1:{port}/mcp"},
     // matching this route — no separate stdio process is spawned.
-    app.MapMcp("/mcp");
+    app.MapMcp("/mcp").RequireBearerToken();
 
     // The Angular Dashboard's production build (apps/dashboard, published into wwwroot by the
     // Dockerfile's dashboard-build stage) is served from this same origin so its environment.ts

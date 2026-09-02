@@ -1,6 +1,7 @@
 using Context.Application;
 using Context.Application.Abstractions;
 using Context.Domain.Entities;
+using Context.Host.Security;
 using Context.Infrastructure.Abstractions;
 
 namespace Context.Host.Api;
@@ -15,7 +16,7 @@ public static class ProjectEndpoints
 {
     public static void MapProjectEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/projects");
+        var group = app.MapGroup("/api/projects").RequireBearerToken();
 
         group.MapPost("/", CreateAsync);
         group.MapGet("/", ListAsync);
