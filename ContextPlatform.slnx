@@ -26,6 +26,7 @@
     <Project Path="tests/Context.Infrastructure.Tests/Context.Infrastructure.Tests.csproj" />
     <Project Path="tests/Context.IntegrationTests/Context.IntegrationTests.csproj" />
     <Project Path="tests/Context.Memory.Tests/Context.Memory.Tests.csproj" />
+    <Project Path="tests/Context.Providers.Tests/Context.Providers.Tests.csproj" />
     <Project Path="tests/Context.Retrieval.Tests/Context.Retrieval.Tests.csproj" />
     <Project Path="tests/Context.Shared.Tests/Context.Shared.Tests.csproj" />
   </Folder>
