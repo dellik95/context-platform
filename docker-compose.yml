@@ -55,4 +55,29 @@ services:
     volumes:
       # Defaults to this repo itself — dogfooding Context Platform on its own codebase. Point
       # HOST_PROJECT_PATH (env var or a .env file) at any other repo to index that one instead.
-      - "${HOST_PROJECT_PATH:-.}:/workspace"
+      #
+      # :ro — the container (running as a non-root user, see Dockerfile) only ever needs to READ
+      # the source tree to index it: FileSystemScanner opens files FileAccess.Read-only, and
+      # nothing in the indexing/graph/embedding pipeline writes back into the project root. This
+      # keeps a bug or a compromised dependency in this container from being able to modify the
+      # real source tree it's indexing.
+      #
+      # Known, accepted consequence: two OPT-IN features do write into the project root — "install
+      # Claude integration" (POST /api/projects/{id}/claude/install → .claude/context-platform.
+      # local.json, .mcp.json, hook scripts) and the "write settings locally" option in project
+      # settings (ProjectSettingsWriteTarget.Local/.Both → same .claude/ file). Both will fail
+      # against this read-only mount. Use them from a bare-metal run of the host instead, or
+      # temporarily drop the :ro flag here for that one operation.
+      - "${HOST_PROJECT_PATH:-.}:/workspace:ro"
+      # The app's own data — {ProjectRoot}/.context: context.db (+ EF Core migrations run at
+      # startup), Serilog files under logs/, and VACUUM INTO backups under backups/ (see
+      # ContextHostOptions, Program.cs, BackupDbJobHandler) — needs to stay writable even though
+      # the rest of /workspace above is now read-only. A named volume mounted at this exact nested
+      # path does that: Linux mount read-only/read-write flags are per-mountpoint, so this
+      # overrides the parent's :ro for just this one subdirectory. Persists across
+      # `docker compose down`/`up` (not just container recreation) — use `docker compose down -v`
+      # to drop it along with the index.
+      - "context-data:/workspace/.context"
+
+volumes:
+  context-data:
