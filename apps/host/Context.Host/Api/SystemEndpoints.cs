@@ -1,4 +1,5 @@
 using Context.Domain.Enums;
+using Context.Host.Security;
 using Context.Infrastructure;
 using Context.Providers;
 using Microsoft.EntityFrameworkCore;
@@ -15,7 +16,7 @@ public static class SystemEndpoints
 {
     public static void MapSystemEndpoints(this WebApplication app)
     {
-        app.MapGet("/api/system/status", StatusAsync);
+        app.MapGet("/api/system/status", StatusAsync).RequireBearerToken();
     }
 
     private static async Task<IResult> StatusAsync(

@@ -1,4 +1,5 @@
 using Context.Application;
+using Context.Host.Security;
 using Context.Infrastructure.Abstractions;
 
 namespace Context.Host.Api;
@@ -9,8 +10,9 @@ public static class MemoryEndpoints
 {
     public static void MapMemoryEndpoints(this WebApplication app)
     {
-        app.MapGet("/api/memories", SearchAsync);
-        app.MapDelete("/api/memories/{id:guid}", DeleteAsync);
+        var group = app.MapGroup("").RequireBearerToken();
+        group.MapGet("/api/memories", SearchAsync);
+        group.MapDelete("/api/memories/{id:guid}", DeleteAsync);
     }
 
     private static async Task<IResult> SearchAsync(

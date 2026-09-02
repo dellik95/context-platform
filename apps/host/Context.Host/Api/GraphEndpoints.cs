@@ -1,6 +1,7 @@
 using Context.Application;
 using Context.Domain.Enums;
 using Context.Graph.Abstractions;
+using Context.Host.Security;
 using Context.Infrastructure.Abstractions;
 
 namespace Context.Host.Api;
@@ -26,10 +27,11 @@ public static class GraphEndpoints
 
     public static void MapGraphEndpoints(this WebApplication app)
     {
-        app.MapGet("/api/graph/impact", ImpactAsync);
-        app.MapGet("/api/graph/neighborhood", NeighborhoodAsync);
-        app.MapGet("/api/graph/full", FullGraphAsync);
-        app.MapGet("/api/symbols", SearchSymbolsAsync);
+        var group = app.MapGroup("").RequireBearerToken();
+        group.MapGet("/api/graph/impact", ImpactAsync);
+        group.MapGet("/api/graph/neighborhood", NeighborhoodAsync);
+        group.MapGet("/api/graph/full", FullGraphAsync);
+        group.MapGet("/api/symbols", SearchSymbolsAsync);
     }
 
     private static async Task<IResult> ImpactAsync(Guid symbolId, int? maxHops, IContextEngine engine, CancellationToken ct)

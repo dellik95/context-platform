@@ -10,8 +10,10 @@ using Context.Host.Hooks;
 using Context.Infrastructure;
 using Context.Retrieval.Abstractions;
 using FluentAssertions;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Hosting;
 
 namespace Context.IntegrationTests;
 
@@ -19,13 +21,25 @@ namespace Context.IntegrationTests;
 /// Real HTTP-level end-to-end coverage for <c>Context.Host</c>: boots the actual ASP.NET Core app
 /// (Kestrel swapped for <c>TestServer</c> by <see cref="WebApplicationFactory{TEntryPoint}"/>, but
 /// everything else — DI composition across every layer, EF Core/SQLite, the <c>JobDispatcher</c>
-/// hosted service, <c>FileWatcherHostedService</c>, and hook bearer-token auth — wired exactly as
-/// production does) and drives it purely through its public HTTP surface. This is deliberately
-/// separate from <c>GoldenPathE2ETests</c> (same project), which exercises the engine via direct DI
-/// composition with no HTTP involved at all.
+/// hosted service, <c>FileWatcherHostedService</c>, and hook/REST/MCP bearer-token auth — wired
+/// exactly as production does) and drives it purely through its public HTTP surface. This is
+/// deliberately separate from <c>GoldenPathE2ETests</c> (same project), which exercises the engine
+/// via direct DI composition with no HTTP involved at all.
 /// </summary>
+[Collection(CollectionName)]
 public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWebApplicationFactory>
 {
+    /// <summary>
+    /// Shared with <see cref="HostHttpProductionCorsTests"/> so xunit never runs that class's
+    /// Program instance concurrently with this one's — both boot the real <c>Context.Host</c>
+    /// <see cref="Program"/> via <see cref="WebApplicationFactory{TEntryPoint}"/>, and only one may
+    /// ever be live at a time (see <see cref="HostHttpWebApplicationFactory"/>'s remarks: Program.cs
+    /// sets the global static Serilog.Log.Logger). xunit runs test classes within one collection
+    /// strictly sequentially — one class's IClassFixture fully constructed, run, and disposed
+    /// before the next class in the collection starts — which is exactly the guarantee needed here.
+    /// </summary>
+    public const string CollectionName = "Context.Host HTTP (sequential — one live Program at a time)";
+
     private static readonly JsonSerializerOptions ResponseJsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly HostHttpWebApplicationFactory _factory;
@@ -46,7 +60,9 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         using var client = _factory.CreateClient();
 
         await AssertHealthEndpointAsync(client);
+        await AssertCorsAllowListAsync(client);
         var project = await AssertProjectCreateAndRoundTripAsync(client);
+        await AssertProtectedEndpointRequiresBearerTokenAsync(client);
         await AssertHookAuthAsync(client);
         await AssertSearchSmokeAsync(client, project.Id);
     }
@@ -67,6 +83,23 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         health.LlmProvider.Should().NotBeNullOrWhiteSpace();
     }
 
+    /// <summary>
+    /// Builds a request carrying the correct bearer token — every REST route but /health and
+    /// /api/auth/token now requires one (BACKLOG-02), and the shared <c>client</c> deliberately has
+    /// no default Authorization header so each call site's auth is explicit and visible.
+    /// </summary>
+    private HttpRequestMessage CreateAuthorizedRequest(HttpMethod method, string url, object? jsonBody = null)
+    {
+        var request = new HttpRequestMessage(method, url);
+        if (jsonBody is not null)
+        {
+            request.Content = JsonContent.Create(jsonBody);
+        }
+
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _factory.BearerToken);
+        return request;
+    }
+
     /// <summary>POST /api/projects then GET /api/projects/{id}: the created project round-trips through the real repository/DB.</summary>
     private async Task<ProjectDto> AssertProjectCreateAndRoundTripAsync(HttpClient client)
     {
@@ -74,7 +107,8 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         var expectedRootPath = Path.GetFullPath(rootPath);
         var createRequest = new CreateProjectRequest("Widget Service", rootPath);
 
-        var createResponse = await client.PostAsJsonAsync("/api/projects", createRequest);
+        using var createHttpRequest = CreateAuthorizedRequest(HttpMethod.Post, "/api/projects", createRequest);
+        var createResponse = await client.SendAsync(createHttpRequest);
         createResponse.StatusCode.Should().Be(HttpStatusCode.Created);
         createResponse.Headers.Location.Should().NotBeNull();
 
@@ -84,7 +118,8 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         created.RootPath.Should().Be(expectedRootPath);
         createResponse.Headers.Location!.ToString().Should().Contain(created.Id.ToString());
 
-        var getResponse = await client.GetAsync($"/api/projects/{created.Id}");
+        using var getHttpRequest = CreateAuthorizedRequest(HttpMethod.Get, $"/api/projects/{created.Id}");
+        var getResponse = await client.SendAsync(getHttpRequest);
         getResponse.IsSuccessStatusCode.Should().BeTrue();
 
         var status = await getResponse.Content.ReadFromJsonAsync<ProjectStatusDto>(ResponseJsonOptions);
@@ -122,9 +157,10 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
     }
 
     /// <summary>GET /api/search against a project with nothing indexed: a well-formed, empty pack — not an error — proving the whole search DI chain is wired.</summary>
-    private static async Task AssertSearchSmokeAsync(HttpClient client, Guid projectId)
+    private async Task AssertSearchSmokeAsync(HttpClient client, Guid projectId)
     {
-        var response = await client.GetAsync($"/api/search?projectId={projectId}&q=hello%20world");
+        using var request = CreateAuthorizedRequest(HttpMethod.Get, $"/api/search?projectId={projectId}&q=hello%20world");
+        var response = await client.SendAsync(request);
         response.IsSuccessStatusCode.Should().BeTrue("search over an unindexed project must degrade to an empty pack, never an error");
 
         var pack = await response.Content.ReadFromJsonAsync<ContextPack>(ResponseJsonOptions);
@@ -133,6 +169,39 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         pack.HistoricalNotes.Should().NotBeNull().And.BeEmpty();
         pack.OpenIssues.Should().NotBeNull().And.BeEmpty();
         pack.Truncated.Should().BeFalse();
+    }
+
+    /// <summary>GET /api/projects: 401 with no Authorization header, 200 with the correct bearer token — spot-checks that <c>BearerTokenAuth.RequireBearerTokenFilter</c> is really wired onto a REST group (ProjectEndpoints), not just onto /hooks (BACKLOG-02).</summary>
+    private async Task AssertProtectedEndpointRequiresBearerTokenAsync(HttpClient client)
+    {
+        var unauthorizedResponse = await client.GetAsync("/api/projects");
+        unauthorizedResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized, "no Authorization header was sent");
+
+        using var authorizedRequest = CreateAuthorizedRequest(HttpMethod.Get, "/api/projects");
+        var authorizedResponse = await client.SendAsync(authorizedRequest);
+        authorizedResponse.IsSuccessStatusCode.Should().BeTrue("the correct bearer token was sent");
+    }
+
+    /// <summary>
+    /// With CORS restricted to an explicit dev allow-list (BACKLOG-01), a request from an allowed
+    /// dev origin gets that exact origin echoed back in Access-Control-Allow-Origin; a request from
+    /// an origin NOT on the list gets no such header at all — never a wildcard, never silently
+    /// allowed. Uses /health (unauthenticated) so this isolates the CORS behavior from bearer auth.
+    /// </summary>
+    private static async Task AssertCorsAllowListAsync(HttpClient client)
+    {
+        using var allowedRequest = new HttpRequestMessage(HttpMethod.Get, "/health");
+        allowedRequest.Headers.Add("Origin", "http://localhost:4200");
+        var allowedResponse = await client.SendAsync(allowedRequest);
+        allowedResponse.Headers.TryGetValues("Access-Control-Allow-Origin", out var allowedValues)
+            .Should().BeTrue("http://localhost:4200 is on the dev CORS allow-list");
+        allowedValues!.Should().ContainSingle().Which.Should().Be("http://localhost:4200");
+
+        using var disallowedRequest = new HttpRequestMessage(HttpMethod.Get, "/health");
+        disallowedRequest.Headers.Add("Origin", "https://evil.example.com");
+        var disallowedResponse = await client.SendAsync(disallowedRequest);
+        disallowedResponse.Headers.TryGetValues("Access-Control-Allow-Origin", out _)
+            .Should().BeFalse("an origin outside the explicit allow-list must never see this header, wildcard or otherwise");
     }
 
     /// <summary>
@@ -195,6 +264,19 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
             // Must land before this factory's first lazy host build (the test method's first
             // CreateClient() call) — see the type-level remarks above.
             Environment.SetEnvironmentVariable("CONTEXT_PLATFORM_ROOT", TempRoot);
+        }
+
+        /// <summary>
+        /// Pinned explicitly rather than relying on WebApplicationFactory's ambient/default
+        /// environment resolution, so <see cref="AssertCorsAllowListAsync"/>'s "dev CORS policy is
+        /// active" assertion is deterministic regardless of how the test runner's own
+        /// ASPNETCORE_ENVIRONMENT happens to be set. Contrast with
+        /// <see cref="HostHttpProductionCorsTests.ProductionWebApplicationFactory"/>, pinned to
+        /// Production instead.
+        /// </summary>
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseEnvironment(Environments.Development);
         }
 
         protected override void Dispose(bool disposing)

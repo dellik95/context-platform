@@ -1,8 +1,8 @@
-using System.Security.Cryptography;
 using System.Text;
 using Context.Application;
 using Context.Claude.Hooks;
 using Context.Domain.Enums;
+using Context.Host.Security;
 using Context.Retrieval.Abstractions;
 
 namespace Context.Host.Hooks;
@@ -10,8 +10,10 @@ namespace Context.Host.Hooks;
 /// <summary>
 /// Local-only Claude Code lifecycle hook endpoints (CONTRACTS.md §8's <c>Context.Claude.Hooks</c>
 /// DTOs, wired here per the Context.Host task brief §5). Every route is guarded by
-/// <see cref="RequireBearerToken"/>, comparing the request's <c>Authorization: Bearer</c> header
-/// against <see cref="HostProjectContext.BearerToken"/> (loaded once at startup from
+/// <see cref="BearerTokenAuth.RequireBearerTokenFilter"/> (originally implemented here, now
+/// shared with every other REST endpoint, <c>/mcp</c>, and the SignalR hub — see that type's
+/// remarks) comparing the request's <c>Authorization: Bearer</c> header against
+/// <see cref="HostProjectContext.BearerToken"/> (loaded once at startup from
 /// <c>.claude/context-platform.local.json</c> — see <c>Program.cs</c>) with a fixed-time comparison.
 /// Every handler fails open on its own internal errors where the generated hook scripts expect it
 /// (additional-context building never lets an exception escape) — but never on the auth check
@@ -27,49 +29,12 @@ public static class HookEndpoints
 
     public static void MapHookEndpoints(this WebApplication app)
     {
-        var hooks = app.MapGroup("/hooks").AddEndpointFilter(RequireBearerToken);
+        var hooks = app.MapGroup("/hooks").RequireBearerToken();
 
         hooks.MapPost("/session-start", SessionStartAsync);
         hooks.MapPost("/user-prompt-submit", UserPromptSubmitAsync);
         hooks.MapPost("/post-tool-use", PostToolUseAsync);
         hooks.MapPost("/session-end", SessionEndAsync);
-    }
-
-    private static async ValueTask<object?> RequireBearerToken(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)
-    {
-        var project = ctx.HttpContext.RequestServices.GetRequiredService<HostProjectContext>();
-        if (!IsAuthorized(ctx.HttpContext, project))
-        {
-            return Results.Unauthorized();
-        }
-
-        return await next(ctx).ConfigureAwait(false);
-    }
-
-    private static bool IsAuthorized(HttpContext http, HostProjectContext project)
-    {
-        // No local config was ever installed (or it couldn't be parsed) for this project - no
-        // token can ever legitimately match, so every hook call is rejected.
-        if (string.IsNullOrEmpty(project.BearerToken))
-        {
-            return false;
-        }
-
-        const string prefix = "Bearer ";
-        var header = http.Request.Headers.Authorization.ToString();
-        if (!header.StartsWith(prefix, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        var expected = Encoding.UTF8.GetBytes(project.BearerToken);
-        var presented = Encoding.UTF8.GetBytes(header[prefix.Length..]);
-
-        // CryptographicOperations.FixedTimeEquals requires equal-length spans; a length mismatch
-        // is itself decided in the same fixed time as any other same-length comparison would take
-        // (this is the standard shape for a fixed-time bearer-token check with a variable-length
-        // secret - see e.g. ASP.NET Core's own API key auth samples).
-        return expected.Length == presented.Length && CryptographicOperations.FixedTimeEquals(expected, presented);
     }
 
     private static async Task<IResult> SessionStartAsync(

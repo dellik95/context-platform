@@ -1,16 +1,19 @@
+using Context.Host.Security;
+
 namespace Context.Host.Api;
 
 /// <summary>
 /// <c>/api/fs/browse</c> — lets the Dashboard's "create project" folder picker navigate the local
 /// filesystem instead of requiring the user to type an absolute path by hand. Loopback-only host
-/// (see docker-compose.yml/ContextHostOptions remarks on the security boundary), so exposing local
-/// directory listing here carries no more risk than the CLI already has by running on this machine.
+/// (see docker-compose.yml/ContextHostOptions remarks on the security boundary), plus bearer-token
+/// auth like every other REST endpoint — the loopback bind alone doesn't stop another local
+/// browser tab from calling this without CORS/auth, which is exactly BACKLOG-01/02's finding.
 /// </summary>
 public static class FileSystemEndpoints
 {
     public static void MapFileSystemEndpoints(this WebApplication app)
     {
-        app.MapGet("/api/fs/browse", Browse);
+        app.MapGet("/api/fs/browse", Browse).RequireBearerToken();
     }
 
     private static IResult Browse(string? path)

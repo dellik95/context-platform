@@ -67,8 +67,13 @@ internal static class SettingsJsonMerger
     /// Adds/overwrites the "context-platform" entry under <c>mcpConfig["mcpServers"]</c> as an
     /// HTTP-type server pointing at Context.Host's own MCP endpoint (see
     /// <see cref="ClaudeIntegrationOptions.McpPath"/>) — there is no separate process to spawn.
+    /// <paramref name="bearerToken"/>, when non-null, is emitted as a static <c>headers</c> entry
+    /// (<c>{"headers":{"Authorization":"Bearer &lt;token&gt;"}}</c> — the schema Claude Code's own
+    /// HTTP MCP transport expects for a static, non-OAuth credential) so the MCP client
+    /// authenticates against <c>/mcp</c> the same way the hook scripts and Dashboard do, now that
+    /// endpoint requires a bearer token like the rest of the REST surface (BACKLOG-02).
     /// </summary>
-    public static void MergeMcpServer(JsonObject mcpConfig, string url)
+    public static void MergeMcpServer(JsonObject mcpConfig, string url, string? bearerToken)
     {
         if (mcpConfig["mcpServers"] is not JsonObject servers)
         {
@@ -76,11 +81,21 @@ internal static class SettingsJsonMerger
             mcpConfig["mcpServers"] = servers;
         }
 
-        servers["context-platform"] = new JsonObject
+        var entry = new JsonObject
         {
             ["type"] = "http",
             ["url"] = url,
         };
+
+        if (!string.IsNullOrEmpty(bearerToken))
+        {
+            entry["headers"] = new JsonObject
+            {
+                ["Authorization"] = $"Bearer {bearerToken}",
+            };
+        }
+
+        servers["context-platform"] = entry;
     }
 
     private static string BuildHookCommand(HookDefinition hook, bool targetIsWindows) => targetIsWindows
