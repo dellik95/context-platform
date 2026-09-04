@@ -1,4 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { Router } from '@angular/router';
+import { MatDialog } from '@angular/material/dialog';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { ApiService } from '../../core/api.service';
 import { ProjectSettingsDto } from '../../core/models';
@@ -46,8 +48,10 @@ describe('SettingsPanelComponent cloud provider disclosure', () => {
       imports: [SettingsPanelComponent],
       providers: [
         { provide: ApiService, useValue: apiServiceStub },
-        { provide: ProjectContextService, useValue: { projectId: () => 'test-project' } },
+        { provide: ProjectContextService, useValue: { projectId: () => 'test-project', projectName: () => 'Test Project' } },
         { provide: MatSnackBar, useValue: { open: () => undefined } },
+        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: MatDialog, useValue: { open: () => ({ afterClosed: () => ({ subscribe: () => undefined }) }) } },
       ],
     }).compileComponents();
 

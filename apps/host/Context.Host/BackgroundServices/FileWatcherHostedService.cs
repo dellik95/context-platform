@@ -154,12 +154,18 @@ public sealed class FileWatcherHostedService(
         });
     }
 
-    public override void Dispose()
+    /// <summary>
+    /// Stops watching this host's bound project root without disposing the service itself --
+    /// used when that project is deleted from Context Platform's own database (see
+    /// <c>Context.Host.Api.ProjectEndpoints</c>'s <c>DELETE /api/projects/{id}</c>), which must not
+    /// tear down the still-running <see cref="BackgroundService"/>. Idempotent: safe to call more
+    /// than once, or when watching was never started (root didn't exist at startup).
+    /// </summary>
+    public void StopWatching()
     {
         if (_watcher is not null)
         {
             _watcher.EnableRaisingEvents = false;
-            _watcher.Dispose();
         }
 
         foreach (var timer in _debounceTimers.Values)
@@ -167,6 +173,13 @@ public sealed class FileWatcherHostedService(
             timer.Dispose();
         }
 
+        _debounceTimers.Clear();
+    }
+
+    public override void Dispose()
+    {
+        StopWatching();
+        _watcher?.Dispose();
         base.Dispose();
     }
 }

@@ -56,6 +56,16 @@ export class ApiService {
     return this.http.post<IndexTriggerResponse>(`${this.base}/api/projects/${id}/index?full=${full}`, {});
   }
 
+  /** Backend responds 404 when nothing is currently running for this project. */
+  cancelIndex(id: string): Observable<void> {
+    return this.http.post<void>(`${this.base}/api/projects/${id}/index/cancel`, {});
+  }
+
+  /** Permanently removes the project (and its cascaded data) from Context Platform. */
+  deleteProject(id: string): Observable<void> {
+    return this.http.delete<void>(`${this.base}/api/projects/${id}`);
+  }
+
   search(projectId: string, query: string, budget?: number, sessionId?: string): Observable<ContextPack> {
     const params = new URLSearchParams({ projectId, q: query });
     if (budget) params.set('budget', String(budget));

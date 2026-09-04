@@ -86,6 +86,75 @@ public sealed class SqliteChunkVectorIndex(string dbPath, IDbContextFactory<Cont
         return results;
     }
 
+    /// <summary>
+    /// Deletes every record for <paramref name="projectId"/> from every <c>chunk_vectors_*</c>
+    /// table that exists in this database -- discovered from <c>sqlite_master</c> rather than
+    /// limited to whatever this process has already lazily opened via <see cref="_collections"/>,
+    /// so a provider's collection created by an earlier process run still gets cleaned up. The
+    /// dimension count passed to <see cref="BuildCollection"/> here is a placeholder: a table that
+    /// already exists is never re-created (<see cref="SqliteCollection{TKey,TRecord}.EnsureCollectionExistsAsync"/>
+    /// is <c>CREATE ... IF NOT EXISTS</c>), and reading back just the key via a non-vector
+    /// <see cref="VectorStoreCollection{TKey,TRecord}.GetAsync(System.Linq.Expressions.Expression{Func{TRecord,bool}},int,Microsoft.Extensions.VectorData.FilteredRecordRetrievalOptions{TRecord}?,CancellationToken)"/>
+    /// filter never touches the vector column's declared dimensionality.
+    /// </summary>
+    public async Task DeleteByProjectAsync(Guid projectId, CancellationToken ct)
+    {
+        var tableNames = await ListChunkVectorTableNamesAsync(ct).ConfigureAwait(false);
+
+        foreach (var tableName in tableNames)
+        {
+            // SqliteCollection implements IDisposable only (not IAsyncDisposable) -- confirmed by
+            // inspecting Microsoft.SemanticKernel.Connectors.SqliteVec 1.74.0-preview directly.
+            using var collection = new SqliteCollection<Guid, ChunkVectorRecord>(
+                _connectionString, tableName, new SqliteCollectionOptions { Definition = BuildDeleteOnlyDefinition() });
+            await collection.EnsureCollectionExistsAsync(ct).ConfigureAwait(false);
+
+            var chunkIds = new List<Guid>();
+            await foreach (var record in collection.GetAsync(r => r.ProjectId == projectId, int.MaxValue, options: null, ct)
+                .ConfigureAwait(false))
+            {
+                chunkIds.Add(record.ChunkId);
+            }
+
+            if (chunkIds.Count > 0)
+            {
+                await collection.DeleteAsync(chunkIds, ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task<IReadOnlyList<string>> ListChunkVectorTableNamesAsync(CancellationToken ct)
+    {
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct).ConfigureAwait(false);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'chunk\\_vectors\\_%' ESCAPE '\\';";
+
+        var names = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            names.Add(reader.GetString(0));
+        }
+
+        return names;
+    }
+
+    /// <summary>Same record shape as <see cref="BuildCollection"/>, with a placeholder dimension -- see <see cref="DeleteByProjectAsync"/>'s remarks on why that's safe here.</summary>
+    private static VectorStoreCollectionDefinition BuildDeleteOnlyDefinition() => new()
+    {
+        Properties =
+        {
+            new VectorStoreKeyProperty(nameof(ChunkVectorRecord.ChunkId), typeof(Guid)),
+            new VectorStoreDataProperty(nameof(ChunkVectorRecord.ProjectId), typeof(Guid)) { IsIndexed = true },
+            new VectorStoreVectorProperty(nameof(ChunkVectorRecord.Vector), typeof(ReadOnlyMemory<float>), 1)
+            {
+                DistanceFunction = DistanceFunction.CosineDistance,
+            },
+        },
+    };
+
     public void Dispose()
     {
         foreach (var lazy in _collections.Values)

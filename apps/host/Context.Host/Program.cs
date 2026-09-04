@@ -83,7 +83,12 @@ try
     builder.Services.AddContextClaude(o => o.HostPort = hostOptions.Port);
     builder.Services.AddContextApplication(hostOptions.ProjectRoot, hostOptions.ProjectDataDir);
 
-    builder.Services.AddHostedService<FileWatcherHostedService>();
+    // Registered as its own singleton (not just AddHostedService<T>, which only exposes it as
+    // IHostedService) so ProjectEndpoints can resolve the concrete instance directly to call
+    // StopWatching() on project delete -- same dual-registration pattern AddJobDispatcher uses for
+    // JobDispatcher.
+    builder.Services.AddSingleton<FileWatcherHostedService>();
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<FileWatcherHostedService>());
 
     builder.Services.AddOpenApi();
 

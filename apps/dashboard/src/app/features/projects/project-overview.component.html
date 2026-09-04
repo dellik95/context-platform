@@ -52,6 +52,10 @@
             <span>Reindex started…</span>
             <mat-progress-bar mode="indeterminate" />
           }
+          <button mat-button color="warn" (click)="cancelIndex()">
+            <mat-icon>stop_circle</mat-icon>
+            Stop indexing
+          </button>
         </div>
       }
     </mat-card>

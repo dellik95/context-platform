@@ -42,6 +42,10 @@
   color: var(--mat-sys-on-surface-variant);
 }
 
+.danger-zone {
+  border: 1px solid var(--mat-sys-error);
+}
+
 .settings-form {
   display: flex;
   flex-direction: column;

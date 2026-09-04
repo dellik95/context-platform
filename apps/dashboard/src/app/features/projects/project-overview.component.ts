@@ -18,4 +18,8 @@ export class ProjectOverviewComponent {
   protected reindex(full: boolean): void {
     this.ctx.triggerIndex(full);
   }
+
+  protected cancelIndex(): void {
+    this.ctx.cancelIndex();
+  }
 }

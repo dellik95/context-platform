@@ -158,6 +158,10 @@ public static class ServiceCollectionExtensions
     private static void AddIndexingPipeline(IServiceCollection services)
     {
         services.AddScoped<IIndexingPipeline, IndexingPipeline>();
+
+        // Singleton: shared between the request that starts a reindex (ProjectEndpoints.TriggerIndex)
+        // and the request that later cancels it (ProjectEndpoints.CancelIndex) — see its own remarks.
+        services.AddSingleton<ReindexCancellationRegistry>();
     }
 
     private static void AddContextEngine(IServiceCollection services)
