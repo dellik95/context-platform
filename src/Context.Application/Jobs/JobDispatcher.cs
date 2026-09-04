@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Threading.Channels;
+using Context.Application.Notifications;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
 using Context.Infrastructure.Abstractions;
@@ -51,6 +52,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<JobDispatcher> _logger;
+    private readonly IJobCountsNotifier _jobCountsNotifier;
     private readonly Channel<Guid> _channel = Channel.CreateUnbounded<Guid>(
         new UnboundedChannelOptions { SingleReader = false, SingleWriter = false });
 
@@ -66,10 +68,37 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     private int _stopped;
     private int _disposed;
 
-    public JobDispatcher(IServiceScopeFactory scopeFactory, ILogger<JobDispatcher>? logger = null)
+    public JobDispatcher(
+        IServiceScopeFactory scopeFactory,
+        ILogger<JobDispatcher>? logger = null,
+        IJobCountsNotifier? jobCountsNotifier = null)
     {
         _scopeFactory = scopeFactory;
         _logger = logger ?? NullLogger<JobDispatcher>.Instance;
+        _jobCountsNotifier = jobCountsNotifier ?? NullJobCountsNotifier.Instance;
+    }
+
+    /// <summary>
+    /// Re-queries the current (Pending, Running, Failed, Done) breakdown and pushes it via
+    /// <see cref="IJobCountsNotifier"/> — called after every point in this file where a job's
+    /// <see cref="JobStatus"/> actually changes, so the Dashboard's System tab can update its stat
+    /// tiles live instead of polling. A notifier failure (e.g. a transient SignalR hub error) must
+    /// never take job processing down with it, so every exception here is swallowed.
+    /// </summary>
+    private async Task PublishJobCountsAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
+            var counts = await jobRepository.CountByStatusAsync(ct).ConfigureAwait(false);
+            await _jobCountsNotifier.NotifyAsync(
+                new JobCounts(counts.Pending, counts.Running, counts.Failed, counts.Done), ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to publish job counts after a status change.");
+        }
     }
 
     public async Task<Guid> EnqueueAsync(JobType type, object payload, int priority = 0, CancellationToken ct = default)
@@ -92,6 +121,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         }
 
         await _channel.Writer.WriteAsync(job.Id, ct).ConfigureAwait(false);
+        await PublishJobCountsAsync(ct).ConfigureAwait(false);
         return job.Id;
     }
 
@@ -129,6 +159,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         _logger.LogInformation("Job {JobId} ({JobType}) manually requeued after permanent failure.", job.Id, job.Type);
 
         await ScheduleOrEnqueueAsync(job.Id, job.NextRetryAt, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+        await PublishJobCountsAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -252,6 +283,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
             job.FinishedAt = DateTimeOffset.UtcNow;
             await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
             _logger.LogError("No handler registered for job type {JobType} (job {JobId}); marking Failed.", job.Type, job.Id);
+            await PublishJobCountsAsync(ct).ConfigureAwait(false);
             return;
         }
 
@@ -264,6 +296,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
             job.LastError = null;
             job.NextRetryAt = null;
             await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
+            await PublishJobCountsAsync(ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -272,11 +305,12 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
             // attempt. Deliberately CancellationToken.None here - ct is already cancelled at this
             // point, and this compensating write must still land (otherwise the job is merely left
             // Running, which HydrateOnStartupAsync would still recover on the next start, just less
-            // cleanly - see remarks).
+            // cleanly - see remarks). Same reasoning applies to the counts push right after it.
             job.Status = JobStatus.Pending;
             job.Attempts = Math.Max(0, job.Attempts - 1);
             job.StartedAt = null;
             await jobRepository.UpdateAsync(job, CancellationToken.None).ConfigureAwait(false);
+            await PublishJobCountsAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -300,6 +334,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
             _logger.LogError(ex,
                 "Job {JobId} ({JobType}) failed permanently after {Attempts}/{MaxAttempts} attempts.",
                 job.Id, job.Type, job.Attempts, maxAttempts);
+            await PublishJobCountsAsync(ct).ConfigureAwait(false);
             return;
         }
 
@@ -314,6 +349,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
             "Job {JobId} ({JobType}) failed (attempt {Attempts}/{MaxAttempts}); retrying at {NextRetryAt:O}.",
             job.Id, job.Type, job.Attempts, maxAttempts, job.NextRetryAt);
 
+        await PublishJobCountsAsync(ct).ConfigureAwait(false);
         ScheduleRetry(job.Id, backoff);
     }
 

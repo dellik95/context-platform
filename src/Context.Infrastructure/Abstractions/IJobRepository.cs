@@ -14,4 +14,12 @@ public interface IJobRepository
     Task<Job?> DequeueNextAsync(CancellationToken ct);
 
     Task<IReadOnlyList<Job>> ListByStatusAsync(JobStatus status, CancellationToken ct);
+
+    /// <summary>Host-wide (not project-scoped -- jobs aren't queried per project anywhere else
+    /// either) breakdown of how many jobs currently sit in each <see cref="JobStatus"/>. Backs
+    /// both <c>GET /api/system/status</c>'s four jobsXxx fields and <c>JobDispatcher</c>'s
+    /// SignalR push of the same figures, so both stay computed exactly one way.</summary>
+    Task<JobStatusCounts> CountByStatusAsync(CancellationToken ct);
 }
+
+public sealed record JobStatusCounts(int Pending, int Running, int Failed, int Done);

@@ -96,6 +96,7 @@ try
 
     builder.Services.AddSingleton<Context.Application.Indexing.IIndexingProgressReporter, Context.Host.Hubs.SignalRIndexingProgressReporter>();
     builder.Services.AddSingleton<Context.Application.Notifications.IProjectActivityNotifier, Context.Host.Hubs.SignalRProjectActivityNotifier>();
+    builder.Services.AddSingleton<Context.Application.Notifications.IJobCountsNotifier, Context.Host.Hubs.SignalRJobCountsNotifier>();
 
     // Dev-only, explicit allow-list — see BACKLOG-01 in docs/architecture/ARCHITECTURE_ASSESSMENT.md.
     // The previous SetIsOriginAllowed(_ => true).AllowCredentials() combination let ANY local

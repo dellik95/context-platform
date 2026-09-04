@@ -49,6 +49,10 @@ export class MemoriesPanelComponent {
   private readonly resource = this.api.memoriesResource(this.committedQuery);
   protected readonly memories = computed(() => (this.resource.hasValue() ? this.resource.value() : []));
   protected readonly loading = this.resource.isLoading;
+  // Gates the whole list being replaced by a spinner -- true only on the very first load for the
+  // current query. The SignalR-triggered reload below (a memory just got extracted) keeps the
+  // existing results visible while it refetches instead of blanking the panel.
+  protected readonly initialLoading = computed(() => this.loading() && !this.resource.hasValue());
   protected readonly deletingId = signal<string | null>(null);
 
   private lastSearchedProjectId = '';

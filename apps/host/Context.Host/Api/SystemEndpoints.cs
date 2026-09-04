@@ -1,6 +1,6 @@
-using Context.Domain.Enums;
 using Context.Host.Security;
 using Context.Infrastructure;
+using Context.Infrastructure.Abstractions;
 using Context.Providers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
@@ -21,6 +21,7 @@ public static class SystemEndpoints
 
     private static async Task<IResult> StatusAsync(
         IDbContextFactory<ContextDbContext> dbFactory,
+        IJobRepository jobs,
         IEmbeddingGenerator<string, Embedding<float>> embeddingGenerator,
         IChatClient chatClient,
         HostStartTime startTime,
@@ -36,14 +37,10 @@ public static class SystemEndpoints
         // if this handler is executing, the MCP transport is necessarily reachable too.
         const bool mcpAlive = true;
 
-        await using var db = await dbFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
-        var counts = await db.Jobs
-            .GroupBy(j => j.Status)
-            .Select(g => new { g.Key, Count = g.Count() })
-            .ToListAsync(ct)
-            .ConfigureAwait(false);
-
-        int CountFor(JobStatus status) => counts.Find(c => c.Key == status)?.Count ?? 0;
+        // Shared with JobDispatcher's own SignalR "JobCountsChanged" push (see
+        // IJobRepository.CountByStatusAsync) so the REST snapshot and the live push are always
+        // computed exactly the same way.
+        var counts = await jobs.CountByStatusAsync(ct).ConfigureAwait(false);
 
         var uptimeSeconds = (DateTimeOffset.UtcNow - startTime.Value).TotalSeconds;
 
@@ -53,10 +50,10 @@ public static class SystemEndpoints
             mcpAlive,
             embeddingGenerator.GetProviderName(),
             chatClient.GetProviderName(),
-            CountFor(JobStatus.Pending),
-            CountFor(JobStatus.Running),
-            CountFor(JobStatus.Failed),
-            CountFor(JobStatus.Done),
+            counts.Pending,
+            counts.Running,
+            counts.Failed,
+            counts.Done,
             uptimeSeconds));
     }
 }
