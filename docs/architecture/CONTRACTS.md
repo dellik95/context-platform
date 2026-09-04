@@ -352,16 +352,17 @@ public record ImpactSet(IReadOnlyList<ImpactNode> Callers, IReadOnlyList<ImpactN
 
 ## 5. Context.Providers (`Context.Providers`)
 
+Since the Microsoft.Extensions.AI provider migration (see ROADMAP.md's "✅ Done" section),
+embedding and LLM provider selection is expressed directly in terms of
+Microsoft.Extensions.AI's own abstractions — there is no bespoke `IEmbeddingProvider`/
+`ILlmProvider` interface in this project any more; `AddContextProviders` registers an
+`IEmbeddingGenerator<string, Embedding<float>>` and an `IChatClient` (both
+`Microsoft.Extensions.AI` types) via that library's own `AddEmbeddingGenerator`/
+`AddChatClient` DI helpers. `IRerankerProvider` is the one provider-category interface
+still local to this project (nothing in `Microsoft.Extensions.AI` covers reranking):
+
 ```csharp
 namespace Context.Providers.Abstractions;
-
-public interface IEmbeddingProvider
-{
-    string Name { get; }
-    int Dimensions { get; }
-    Task<float[]> EmbedAsync(string text, CancellationToken ct);
-    Task<float[][]> EmbedBatchAsync(IReadOnlyList<string> texts, CancellationToken ct);
-}
 
 public interface IRerankerProvider
 {
@@ -369,19 +370,19 @@ public interface IRerankerProvider
     Task<IReadOnlyList<int>> RerankAsync(string query, IReadOnlyList<string> candidates, CancellationToken ct);
     // returns candidate indices best-first
 }
-
-public interface ILlmProvider
-{
-    string Name { get; }
-    Task<string> CompleteAsync(string systemPrompt, string userPrompt, CancellationToken ct);
-}
 ```
 
-Built-ins: `NoOpEmbeddingProvider` (deterministic hash-based pseudo-embedding, for
-running the pipeline with zero external dependencies / offline tests),
-`OpenAiEmbeddingProvider`, `OllamaEmbeddingProvider`; `LocalOnnxReranker` (default)
-and `NoOpReranker` (identity order, fallback); `AnthropicLlmProvider`, `NoOpLlmProvider`
-(template-based summary, no LLM call — used when no LLM provider configured).
+Built-ins, selected by `ContextProvidersOptions.EmbeddingProvider`/`RerankerProvider`/`LlmProvider`
+(see `ServiceCollectionExtensions.AddContextProviders`): `NoOpEmbeddingGenerator` (deterministic
+hash-based pseudo-embedding, for running the pipeline with zero external dependencies / offline
+tests) and `NoOpChatClient` (deterministic templated response, no network call); real embedding/chat
+providers wrap the official OpenAI SDK, OllamaSharp and Anthropic.SDK clients as
+`IEmbeddingGenerator`/`IChatClient` (`OllamaEmbeddingGeneratorDecorator`/`OllamaChatClientDecorator`
+add Ollama-specific error framing, `SecretRedactingEmbeddingGeneratorDecorator`/
+`SecretRedactingChatClientDecorator` scan content leaving the machine for external providers —
+see BACKLOG-08/SEC-4); `LexicalOverlapReranker` (default, lexical token-overlap heuristic — not
+ML-based; see the commit that renamed it from `LocalOnnxReranker` and dropped the unused ONNX
+scaffold) and `NoOpReranker` (identity order, fallback).
 
 ---
 
