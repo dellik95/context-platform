@@ -34,10 +34,11 @@ namespace Context.Application.Indexing;
 /// alone — currently write-only, not read back by anything), not text <see cref="SymbolDiffer.Diff"/>
 /// could re-hash for comparison. This pipeline instead recovers a usable proxy for a symbol's
 /// previous diff-text from its corresponding <see cref="Chunk.Text"/> (which is
-/// <see cref="SymbolDiffer.CombinedText"/> of the symbol's signature and body — see
-/// <see cref="IndexParsedFileAsync"/> — so re-diffing on it via an empty reconstructed
-/// SignatureText, per <see cref="SymbolDiffer.CombinedText"/>'s own null/empty handling, reproduces
-/// the same value). The one edge case this can't recover from is a symbol indexed
+/// <see cref="SymbolDiffer.CombinedText"/> of the symbol's signature and body, without its doc
+/// comment — see <see cref="IndexParsedFileAsync"/> — so re-diffing on it via an empty
+/// reconstructed SignatureText and the symbol's current <see cref="Symbol.DocComment"/>, per
+/// <see cref="SymbolDiffer.CombinedText"/>'s own null/empty handling, reproduces the same value).
+/// The one edge case this can't recover from is a symbol indexed
 /// before this pairing existed (or whose chunk was otherwise lost): its proxy body text is empty,
 /// which <see cref="SymbolDiffer"/> then reports as "Changed" even if the symbol didn't actually
 /// change — a harmless one-time false positive that self-heals on the very next reindex.
@@ -314,8 +315,12 @@ public sealed class IndexingPipeline(
             // then represented by their signature, which for those cases IS the whole declaration)
             // and is a genuine quality improvement even when a body exists — a chunk that reads
             // "public int Add(int a, int b) { return a + b; }" embeds/matches better than "return
-            // a + b;" alone.
-            var chunkText = Cap(SymbolDiffer.CombinedText(draft.SignatureText, draft.BodyText), MaxChunkChars);
+            // a + b;" alone. Leading further with DocComment (see SymbolDiffer.CombinedText's
+            // remarks) is what actually makes a natural-language query match at all: identifiers
+            // like "ComputeOrderTotal" tokenize as one lexeme for FTS5, so a prose query's separate
+            // words ("compute", "total") never match the signature/body text alone -- only the doc
+            // comment spells the symbol's purpose out in the separate words a query is phrased in.
+            var chunkText = Cap(SymbolDiffer.CombinedText(draft.DocComment, draft.SignatureText, draft.BodyText), MaxChunkChars);
             newChunkRows.Add(new Chunk
             {
                 Id = Guid.NewGuid(),
