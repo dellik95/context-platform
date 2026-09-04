@@ -339,6 +339,12 @@ public interface IGraphTraversal
 {
     Task<IReadOnlyList<Context.Domain.Entities.GraphNode>> NeighborsAsync(
         Guid nodeId, Context.Domain.Enums.GraphEdgeKind[]? kinds, int hops, CancellationToken ct);
+    // Node+edge neighborhood around one node, for the Graph tab's visualization (vs. NeighborsAsync's flat node list).
+    Task<GraphNeighborhood> NeighborhoodAsync(
+        Guid nodeId, Context.Domain.Enums.GraphEdgeKind[]? kinds, int hops, CancellationToken ct);
+    // Whole-project graph (an Obsidian-style "whole vault" view); warms that project's cache itself.
+    Task<GraphNeighborhood> FullGraphAsync(
+        Guid projectId, Context.Domain.Enums.GraphEdgeKind[]? kinds, CancellationToken ct);
     Task<IReadOnlyList<Context.Domain.Entities.GraphNode>?> ShortestPathAsync(
         Guid fromId, Guid toId, CancellationToken ct);
     Task<ImpactSet> BlastRadiusAsync(Guid symbolNodeId, int maxHops, CancellationToken ct);
@@ -346,6 +352,8 @@ public interface IGraphTraversal
 
 public record ImpactNode(Context.Domain.Entities.GraphNode Node, int Hops, string Path);
 public record ImpactSet(IReadOnlyList<ImpactNode> Callers, IReadOnlyList<ImpactNode> Implementers, IReadOnlyList<ImpactNode> CoveringTests);
+public record GraphNeighborhood(IReadOnlyList<Context.Domain.Entities.GraphNode> Nodes, IReadOnlyList<GraphEdgeDto> Edges);
+public record GraphEdgeDto(Guid SourceId, Guid TargetId, Context.Domain.Enums.GraphEdgeKind Kind);
 ```
 
 ---
@@ -484,6 +492,10 @@ namespace Context.Application.Jobs;
 public interface IJobQueue
 {
     Task<Guid> EnqueueAsync(Context.Domain.Enums.JobType type, object payload, int priority = 0, CancellationToken ct = default);
+
+    // Manually re-triggers a job that has exhausted its automatic retries and is permanently
+    // Failed (the System tab's "retry" button); throws JobNotFoundException / JobNotRetryableException.
+    Task RequeueAsync(Guid jobId, CancellationToken ct = default);
 }
 
 namespace Context.Application;
