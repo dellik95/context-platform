@@ -4,7 +4,7 @@ This is the fastest path to a working instance, and — per the plan going forwa
 way this project verifies itself in "production": indexing and searching its own codebase inside
 the same container image that would run against any other repo.
 
-The image (built from the `Dockerfile` at the repo root) bundles both `Context.Host` (the always-on
+The image (built from the `Dockerfile` at the repo root) bundles both `Context.Dashboard.Server` (the always-on
 API/MCP/worker process) and `Context.Cli`, published for `linux-x64`, on top of the official
 `mcr.microsoft.com/dotnet/aspnet:10.0` runtime image. It needs no external services — SQLite and
 the tree-sitter native grammars are both self-contained inside the .NET packages the app already
@@ -16,7 +16,7 @@ depends on, and every AI provider defaults to its offline/no-op implementation.
 docker compose up -d --build
 ```
 
-This builds the image, starts `Context.Host` bound to `127.0.0.1:47923` on your machine (see
+This builds the image, starts `Context.Dashboard.Server` bound to `127.0.0.1:47923` on your machine (see
 "Network exposure" below), and mounts the repo root (`.`) at `/workspace` inside the container —
 `docker-compose.yml`'s `HOST_PROJECT_PATH` defaults to `.`, so out of the box it's set up to index
 Context Platform's own source tree.
@@ -33,6 +33,11 @@ docker compose exec context-platform context doctor --project <id>
 `context claude install` is **not** part of this quick start — see "Read-only workspace mount"
 below for why, and what to do if you want it.
 
+Project creation above needs an admin token: `docker-compose.yml` requires
+`CONTEXT_PLATFORM_ADMIN_TOKEN` to be set (`POST /api/projects` is gated by it — see
+`AdminTokenAuth`), and `docker compose exec` inherits it from the container's own environment, so
+`context project create` above picks it up with no extra flags.
+
 ## Read-only workspace mount
 
 `/workspace` is bind-mounted `:ro` and the container runs as a non-root user (see `Dockerfile`):
@@ -45,12 +50,12 @@ write `.mcp.json`/`.claude/context-platform.local.json` *into the project root* 
 host-side Claude Code picks them up — and that write now fails against the read-only mount. If you
 want that integration:
 
-- run `context claude install` from a bare-metal `dotnet run`/`context` instead (same `.context/`
+- run `context claude install` from a bare-metal `dotnet run`/`context` instead (same shared
   database format, so switching between bare-metal and container is safe), or
 - temporarily drop the `:ro` in `docker-compose.yml`'s workspace volume line, run `context claude
   install` once, then put it back.
 
-The app's own data (`.context/` — see below) is unaffected either way: it lives on its own
+The app's own data (see "Logs and data" below) is unaffected either way: it lives on its own
 writable volume, not under this read-only mount.
 
 ## Point it at a different repo
@@ -93,17 +98,16 @@ docker compose up -d --build
 
 ## Logs and data
 
-Unlike the bare-metal deployment, `.context/` (database, logs, backups) is **not** part of the
-mounted repo — it can't be, since `/workspace` above is read-only. `docker-compose.yml` instead
-mounts a separate named volume (`context-data`) at exactly `/workspace/.context`, nested inside the
-read-only bind mount, so the app still finds it at the path it always expects while the rest of
-`/workspace` stays untouched.
+The database (`context.db`), Serilog logs, and VACUUM INTO backups live under
+`CONTEXT_PLATFORM_DATA_DIR=/data/context-platform` (set in the `Dockerfile` — see
+`SharedDataLocation`), a plain top-level path outside `/workspace`, not part of the mounted repo.
+`docker-compose.yml` mounts a named volume (`context-data`) directly at that path.
 
 - Logs: `docker compose logs -f context-platform`, or `docker compose exec context-platform tail -f
-  /workspace/.context/logs/context-<date>.log`.
-- Database/backups: `docker compose exec context-platform ls /workspace/.context` /
+  /data/context-platform/logs/context-<date>.log`.
+- Database/backups: `docker compose exec context-platform ls /data/context-platform` /
   `.../backups/`. To copy the database out to the host, e.g. for inspection:
-  `docker compose cp context-platform:/workspace/.context/context.db ./context.db`.
+  `docker compose cp context-platform:/data/context-platform/context.db ./context.db`.
 - The `context-data` volume persists across `docker compose down`/`up` and container
   recreation — it's a normal Docker named volume, so `docker volume inspect context-data` (and, on
   plain Linux Docker Engine, its `Mountpoint`) works the usual way; on Docker Desktop/Rancher

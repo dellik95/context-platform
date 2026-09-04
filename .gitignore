@@ -23,4 +23,5 @@ apps/host/Context.Host/wwwroot/
 
 # Context Platform (added by context-platform installer)
 .claude/context-platform.local.json
+.claude/hooks.log
 refs/

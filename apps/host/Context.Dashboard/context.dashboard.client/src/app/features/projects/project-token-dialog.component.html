@@ -1,0 +1,22 @@
+<h2 mat-dialog-title>Save this link now</h2>
+
+<mat-dialog-content>
+  <p>
+    <strong>{{ data.projectName }}</strong> is ready. This link is the only way in — it carries
+    the project's access token, which can't be shown again once you close this dialog.
+  </p>
+
+  <mat-form-field appearance="outline" class="link-field">
+    <mat-label>Access link</mat-label>
+    <input matInput [value]="data.link" readonly (click)="$any($event.target).select()" />
+    <button mat-icon-button matSuffix (click)="copyLink()" aria-label="Copy link" type="button">
+      <mat-icon>content_copy</mat-icon>
+    </button>
+  </mat-form-field>
+
+  <p class="hint">Bookmark it, or share it with anyone else who needs access to this project.</p>
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  <button mat-flat-button color="primary" (click)="done()">Done</button>
+</mat-dialog-actions>

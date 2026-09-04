@@ -11,6 +11,10 @@ services:
       - "127.0.0.1:${CONTEXT_PLATFORM_PORT:-47923}:47923"
     environment:
       CONTEXT_PLATFORM_PORT: "47923"
+      # Required to create/list projects (POST/GET /api/projects — see AdminTokenAuth, which fails
+      # closed if this is unset). Generate one with `openssl rand -base64 32` and set it via a
+      # `.env` file next to this compose file (never commit one) or your shell environment.
+      CONTEXT_PLATFORM_ADMIN_TOKEN: ${CONTEXT_PLATFORM_ADMIN_TOKEN:?set an admin token, e.g. via openssl rand -base64 32}
       # Uncomment to point at a local Ollama install on the HOST (not this container) —
       # host.docker.internal is the Docker Desktop/Rancher Desktop DNS name that reaches it from
       # inside a container ("localhost" here would mean the container itself). Verified working
@@ -55,6 +59,9 @@ services:
     volumes:
       # Defaults to this repo itself — dogfooding Context Platform on its own codebase. Point
       # HOST_PROJECT_PATH (env var or a .env file) at any other repo to index that one instead.
+      # Mounting the path alone no longer registers it: a Project DB row + bearer token now has to
+      # exist too, via `POST /api/projects` (CONTEXT_PLATFORM_ADMIN_TOKEN above) or `context claude
+      # install` run against this container.
       #
       # :ro — the container (running as a non-root user, see Dockerfile) only ever needs to READ
       # the source tree to index it: FileSystemScanner opens files FileAccess.Read-only, and
@@ -69,15 +76,15 @@ services:
       # against this read-only mount. Use them from a bare-metal run of the host instead, or
       # temporarily drop the :ro flag here for that one operation.
       - "${HOST_PROJECT_PATH:-.}:/workspace:ro"
-      # The app's own data — {ProjectRoot}/.context: context.db (+ EF Core migrations run at
-      # startup), Serilog files under logs/, and VACUUM INTO backups under backups/ (see
-      # ContextHostOptions, Program.cs, BackupDbJobHandler) — needs to stay writable even though
-      # the rest of /workspace above is now read-only. A named volume mounted at this exact nested
-      # path does that: Linux mount read-only/read-write flags are per-mountpoint, so this
-      # overrides the parent's :ro for just this one subdirectory. Persists across
+      # The app's own data — CONTEXT_PLATFORM_DATA_DIR=/data/context-platform (set in the
+      # Dockerfile): context.db (+ EF Core migrations run at startup), Serilog files under logs/,
+      # and VACUUM INTO backups under backups/ (see SharedDataLocation, ContextHostOptions,
+      # BackupDbJobHandler). Now a plain top-level path outside /workspace, so — unlike the old
+      # {ProjectRoot}/.context layout — it no longer needs to be nested inside the read-only
+      # workspace mount above; a normal named volume at this path is enough. Persists across
       # `docker compose down`/`up` (not just container recreation) — use `docker compose down -v`
       # to drop it along with the index.
-      - "context-data:/workspace/.context"
+      - "context-data:/data/context-platform"
 
 volumes:
   context-data:

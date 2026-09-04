@@ -1,0 +1,232 @@
+using Context.Application;
+using Context.Application.Providers;
+using Context.Claude;
+using Context.Graph;
+using Context.Dashboard.Server;
+using Context.Dashboard.Server.Api;
+using Context.Dashboard.Server.BackgroundServices;
+using Context.Dashboard.Server.Hooks;
+using Context.Dashboard.Server.Hubs;
+using Context.Dashboard.Server.Security;
+using Context.Indexing;
+using Context.Infrastructure;
+using Context.Infrastructure.Abstractions;
+using Context.Memory;
+using Context.Providers;
+using Context.Retrieval;
+using Context.Retrieval.Scoring;
+using Context.Shared;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using Serilog;
+
+var startupConfiguration = new ConfigurationBuilder()
+    .SetBasePath(Directory.GetCurrentDirectory())
+    .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+    .AddJsonFile($"appsettings.{Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production"}.json", optional: true, reloadOnChange: true)
+    .AddEnvironmentVariables()
+    .Build();
+
+var hostOptions = ContextHostOptions.FromEnvironment(startupConfiguration);
+Directory.CreateDirectory(hostOptions.ProjectDataDir);
+var logsDir = Path.Combine(hostOptions.ProjectDataDir, "logs");
+Directory.CreateDirectory(logsDir);
+
+// One-time carry-forward: a repo previously run against an older build may still have a database
+// at the old {ProjectRoot}/.context/context.db location — copy it into the new shared data dir
+// (never move: the old file is left in place as a safety net) so it doesn't appear to vanish.
+var migratedFromLegacyPath = SharedDataLocation.EnsureMigratedFromLegacyLocation(hostOptions.DbPath, hostOptions.ProjectRoot);
+
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .WriteTo.File(
+        Path.Combine(logsDir, "context-.log"),
+        rollingInterval: RollingInterval.Day,
+        retainedFileCountLimit: 14)
+    .CreateLogger();
+
+try
+{
+    Log.Information(
+        "Starting Context.Dashboard.Server — project root {ProjectRoot}, data dir {ProjectDataDir}, bind {BindHost}:{Port}",
+        hostOptions.ProjectRoot, hostOptions.ProjectDataDir, hostOptions.BindHost, hostOptions.Port);
+
+    if (migratedFromLegacyPath is not null)
+    {
+        Log.Information(
+            "Copied existing database from legacy location {LegacyDbPath} to {DbPath}",
+            migratedFromLegacyPath, hostOptions.DbPath);
+    }
+
+    var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+    {
+        Args = args,
+        ContentRootPath = AppContext.BaseDirectory,
+    });
+
+    builder.Services.AddSingleton(typeof(HostStartTime), new HostStartTime(DateTimeOffset.UtcNow));
+
+    builder.WebHost.UseUrls($"http://{hostOptions.BindHost}:{hostOptions.Port}");
+
+    builder.Host.UseSerilog();
+
+    builder.Host.UseWindowsService(o => o.ServiceName = "ContextPlatformHost");
+    builder.Host.UseSystemd();
+
+    builder.Services.AddSingleton(hostOptions);
+    builder.Services.AddSingleton<ClaudeSessionMap>();
+    builder.Services.AddSingleton<AdminTokenProvider>();
+
+    // CurrentProjectAccessor reads the Project that BearerTokenAuth/HubBearerTokenAuthMiddleware
+    // stashed into HttpContext.Items for this request — needs IHttpContextAccessor to get at that
+    // HttpContext from anywhere else in the DI graph.
+    builder.Services.AddHttpContextAccessor();
+    builder.Services.AddScoped<CurrentProjectAccessor>();
+
+    builder.Services.AddContextInfrastructure(hostOptions.DbPath);
+    builder.Services.AddContextIndexing();
+    builder.Services.AddContextGraph();
+
+    builder.Services.Configure<HybridScoringOptions>(builder.Configuration.GetSection("ContextPlatform:Retrieval:Scoring"));
+    builder.Services.Configure<HybridSearchOptions>(builder.Configuration.GetSection("ContextPlatform:Retrieval:Search"));
+    builder.Services.Configure<ContextPackOptions>(builder.Configuration.GetSection("ContextPlatform:Retrieval:ContextPack"));
+    builder.Services.AddContextRetrieval();
+
+    builder.Services.AddContextMemory();
+
+    var providersOptions = ContextProvidersOptionsResolver.Resolve(builder.Configuration, hostOptions.ProjectRoot);
+    builder.Services.AddContextProviders(providersOptions);
+    builder.Services.AddSingleton(Options.Create(providersOptions));
+
+    builder.Services.AddContextClaude(o => o.HostPort = hostOptions.Port);
+    builder.Services.AddContextApplication(hostOptions.ProjectRoot, hostOptions.ProjectDataDir);
+
+    // ProjectFileWatcherManager owns one FileSystemWatcher per registered Project (see its own
+    // remarks) — registered as both the singleton ProjectEndpoints resolves to start watching a
+    // brand-new project immediately, and the IHostedService that watches every already-registered
+    // project from host startup and disposes them all on shutdown. Same dual-role pattern
+    // JobDispatcher uses for itself (Context.Application.ServiceCollectionExtensions.AddJobDispatcher).
+    builder.Services.AddSingleton<ProjectFileWatcherManager>();
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<ProjectFileWatcherManager>());
+
+    builder.Services.AddOpenApi();
+
+    builder.Services.ConfigureHttpJsonOptions(o =>
+        o.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
+
+    builder.Services.AddSignalR()
+        .AddJsonProtocol(o => o.PayloadSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
+    builder.Services.AddSingleton<IndexingHubNotifier>();
+
+    builder.Services.AddSingleton<Context.Application.Indexing.IIndexingProgressReporter, Context.Dashboard.Server.Hubs.SignalRIndexingProgressReporter>();
+    builder.Services.AddSingleton<Context.Application.Notifications.IProjectActivityNotifier, Context.Dashboard.Server.Hubs.SignalRProjectActivityNotifier>();
+
+    // Dev-only, explicit allow-list — see BACKLOG-01 in docs/architecture/ARCHITECTURE_ASSESSMENT.md.
+    // The previous SetIsOriginAllowed(_ => true).AllowCredentials() combination let ANY local
+    // browser tab silently call this API/hub/MCP endpoint with the user's own cookies/credentials
+    // implied — wildcard-origin + credentials is exactly the pattern browsers otherwise forbid for
+    // good reason. Production registers no CORS policy at all: the production Dashboard is served
+    // same-origin from this host's own wwwroot (see the static-file block below), so it never needs
+    // one, and omitting the policy entirely (rather than an empty allow-list) means UseCors is never
+    // even called in Production - no Access-Control-Allow-Origin header can be emitted for any
+    // request, from any origin, no matter what.
+    const string DashboardCorsPolicy = "Dashboard";
+    string[] devCorsOrigins = ["http://localhost:4200", "https://localhost:4200"];
+    if (builder.Environment.IsDevelopment())
+    {
+        builder.Services.AddCors(o => o.AddPolicy(DashboardCorsPolicy, p => p
+            .WithOrigins(devCorsOrigins)
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials()));
+    }
+
+    builder.Services.AddMcpServer()
+        .WithHttpTransport()
+        .WithToolsFromAssembly();
+
+    var app = builder.Build();
+
+    await using (var migrationScope = app.Services.CreateAsyncScope())
+    {
+        var db = migrationScope.ServiceProvider.GetRequiredService<ContextDbContext>();
+        await db.Database.MigrateAsync().ConfigureAwait(false);
+
+        // One-time reconciliation for projects installed before Phase 3's shared-host bearer-token
+        // model: backfills Project.BearerTokenHash from whatever token is already sitting in each
+        // project's own .claude/context-platform.local.json, so an existing install keeps
+        // authenticating without needing a re-install. See ProjectTokenBackfill's own remarks for
+        // why this runs once here rather than lazily inside BearerTokenAuth's lookup path.
+        var projectsForBackfill = migrationScope.ServiceProvider.GetRequiredService<IProjectRepository>();
+        await ProjectTokenBackfill.ReconcileAsync(projectsForBackfill, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    if (app.Environment.IsDevelopment())
+    {
+        app.MapOpenApi();
+    }
+
+    if (app.Environment.IsDevelopment())
+    {
+        app.UseCors(DashboardCorsPolicy);
+    }
+
+    // Gates /hubs/indexing before routing selects an endpoint — see that method's remarks for why
+    // this is middleware rather than an endpoint filter like every REST route below uses.
+    app.UseHubBearerTokenAuth("/hubs/indexing");
+
+    // Every group below applies BearerTokenAuth.RequireBearerTokenFilter (or, for project
+    // creation/listing/fs-browse, AdminTokenAuth) to its own routes internally (see each file's
+    // MapXxxEndpoints) — MapHealthEndpoints and MapAdminTokenBootstrapEndpoints are the deliberate
+    // exceptions (the latter is loopback-gated in its own handler instead).
+    app.MapAdminTokenBootstrapEndpoints();
+    app.MapHookEndpoints();
+    app.MapProjectEndpoints();
+    app.MapSearchEndpoints();
+    app.MapMemoryEndpoints();
+    app.MapGraphEndpoints();
+    app.MapSessionEndpoints();
+    app.MapHealthEndpoints();
+    app.MapSettingsEndpoints();
+    app.MapClaudeEndpoints();
+    app.MapSystemEndpoints();
+    app.MapJobsEndpoints();
+    app.MapUsageEndpoints();
+    app.MapFileSystemEndpoints();
+    app.MapHub<IndexingHub>("/hubs/indexing");
+
+    // ClaudeIntegrationInstaller writes .mcp.json as {"type":"http","url":"http://127.0.0.1:{port}/mcp"},
+    // matching this route — no separate stdio process is spawned.
+    app.MapMcp("/mcp").RequireBearerToken();
+
+    // The Angular Dashboard's production build (apps/host/Context.Dashboard/context.dashboard.client,
+    // published into wwwroot by the Dockerfile's dashboard-build stage) is served from this same
+    // origin so its environment.ts apiBaseUrl:'' (same-origin) resolves correctly with zero extra
+    // configuration. A bare-metal `dotnet run` without that wwwroot present just serves nothing at
+    // "/" — use `ng serve` separately for local Dashboard development instead (see
+    // context.dashboard.client's own dev setup).
+    if (Directory.Exists(Path.Combine(app.Environment.ContentRootPath, "wwwroot")))
+    {
+        app.UseDefaultFiles();
+        app.UseStaticFiles();
+        app.MapFallbackToFile("index.html");
+    }
+
+    await app.RunAsync().ConfigureAwait(false);
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Context.Dashboard.Server terminated unexpectedly.");
+}
+finally
+{
+    await Log.CloseAndFlushAsync();
+}
+
+// Exposes the top-level-statement Program to WebApplicationFactory<Program> in Context.IntegrationTests.
+public partial class Program;
+
+// Captured once at startup so /api/system/status can report process uptime (CONTRACTS.md §12).
+public readonly record struct HostStartTime(DateTimeOffset Value);

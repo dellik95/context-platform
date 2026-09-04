@@ -1,6 +1,6 @@
 // Context.Cli — thin System.CommandLine adapter over Context.Application/Context.Infrastructure/
 // Context.Claude. Every command below builds a small, self-contained composition root (the same
-// AddContextX methods Context.Host is expected to call — see CONTRACTS.md §11 and each project's
+// AddContextX methods Context.Dashboard.Server is expected to call — see CONTRACTS.md §11 and each project's
 // own ServiceCollectionExtensions), pointed at the resolved project root, and talks to the rest of
 // the platform exclusively through IContextEngine / IIndexingPipeline / IClaudeIntegrationInstaller
 // and the Context.Infrastructure repositories — never anything lower-level than that facade.
@@ -9,6 +9,9 @@
 
 using System.CommandLine;
 using System.CommandLine.Invocation;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Context.Application;
 using Context.Application.Abstractions;
@@ -26,6 +29,7 @@ using Context.Memory;
 using Context.Providers;
 using Context.Retrieval;
 using Context.Retrieval.Abstractions;
+using Context.Shared;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -36,8 +40,8 @@ using Microsoft.Extensions.DependencyInjection;
 var rootOption = new Option<string>(
     "--root",
     () => Directory.GetCurrentDirectory(),
-    "Project root directory (defaults to the current directory). The Context Platform database " +
-    "lives at <root>/.context/context.db.");
+    "Project root directory (defaults to the current directory). The Context Platform database is " +
+    "shared across projects — see CONTEXT_PLATFORM_DATA_DIR / SharedDataLocation for where it lives.");
 
 var rootCommand = new RootCommand(
     "Context Platform CLI — persistent project memory, code graph and semantic search for Claude Code.");
@@ -265,19 +269,143 @@ async Task HandleClaudeInstallAsync(InvocationContext context, Option<string?> p
         var root = ResolveRoot(context.ParseResult.GetValueForOption(rootOption));
         var projectIdText = context.ParseResult.GetValueForOption(projectOption);
 
+        // Preferred path: resolve/create the project against a shared, already-running
+        // Context.Dashboard.Server over its admin-gated HTTP API instead of this process's own direct-DB
+        // find-or-create — keeps the project's identity and bearer token consistent for every
+        // machine/CLI invocation pointed at the same shared host. Only attempted for the default
+        // "resolve by root" flow (no explicit --project id, which already names a specific,
+        // presumably locally-known project); returns null — falling back to today's unchanged
+        // direct-DB behavior below — whenever no admin token is configured, the host doesn't
+        // answer, or project creation itself fails, matching Context.Dashboard.Server's zero-configuration
+        // startup goal (see ContextHostOptions' own remarks).
+        var hostResolution = string.IsNullOrWhiteSpace(projectIdText)
+            ? await TryResolveProjectViaHostAsync(root, ct).ConfigureAwait(false)
+            : null;
+
         await RunWithProviderAsync(root, migrate: true, ct, async provider =>
         {
             using var scope = provider.CreateScope();
-            var projects = scope.ServiceProvider.GetRequiredService<IProjectRepository>();
-            var project = await ResolveProjectAsync(projects, root, projectIdText, ct).ConfigureAwait(false);
+
+            Project project;
+            string? mintedToken = null;
+            if (hostResolution is { } resolved)
+            {
+                (project, mintedToken, var hostBaseUrl) = resolved;
+                Console.WriteLine($"Resolved project '{project.Name}' via Context.Dashboard.Server at {hostBaseUrl}.");
+            }
+            else
+            {
+                var projects = scope.ServiceProvider.GetRequiredService<IProjectRepository>();
+                project = await ResolveProjectAsync(projects, root, projectIdText, ct).ConfigureAwait(false);
+            }
 
             var installer = scope.ServiceProvider.GetRequiredService<IClaudeIntegrationInstaller>();
-            await installer.InstallAsync(project.Id, project.RootPath, ct).ConfigureAwait(false);
+            await installer.InstallAsync(project.Id, project.RootPath, ct, mintedToken).ConfigureAwait(false);
 
             Console.WriteLine($"Installed Claude Code integration for '{project.Name}' at {project.RootPath}.");
             Console.WriteLine("Wrote: .claude/hooks/*, .claude/settings.json, .mcp.json, .claude-plugin/plugin.json, .claude/context-platform.local.json");
         }).ConfigureAwait(false);
     }).ConfigureAwait(false);
+}
+
+/// <summary>
+/// Tries the preferred, shared-host project-resolution path for <c>context claude install</c>:
+/// admin-token-authenticated <c>POST /api/projects</c> against a Context.Dashboard.Server process that is
+/// already up and reachable. <c>POST /api/projects</c> is itself a find-or-create (201 for a
+/// brand-new project with its one-and-only raw token in the response body; 409, with no token —
+/// the raw value is never recoverable once minted — for one that already exists at this root), so
+/// no separate "does it already exist" call is needed here.
+/// <para/>
+/// Returns <c>null</c> — meaning "fall back to the existing direct local-DB path" — whenever:
+/// <c>CONTEXT_PLATFORM_ADMIN_TOKEN</c> isn't set; a quick <c>GET /health</c> against the host
+/// doesn't get a response at all (connection refused/timeout — nothing here requires <c>/health</c>
+/// to report itself <i>healthy</i>, only reachable); or the create call itself fails or is
+/// rejected. This is what keeps a first-ever, fully offline <c>context claude install</c> working
+/// with zero configuration, matching <c>ContextHostOptions</c>' own stated design goal.
+/// </summary>
+static async Task<(Project Project, string? Token, string HostBaseUrl)?> TryResolveProjectViaHostAsync(string root, CancellationToken ct)
+{
+    const string AdminTokenEnvVar = "CONTEXT_PLATFORM_ADMIN_TOKEN";
+    var adminToken = Environment.GetEnvironmentVariable(AdminTokenEnvVar);
+    if (string.IsNullOrWhiteSpace(adminToken))
+    {
+        return null;
+    }
+
+    // Same CONTEXT_PLATFORM_PORT env var / 47923 default ContextHostOptions.FromEnvironment and
+    // ClaudeIntegrationOptions.HostPort already agree on — see the latter's own remarks. Context.Cli
+    // deliberately doesn't reference Context.Dashboard.Server (that would drag its ASP.NET Core dependencies
+    // into a CLI that must also run with no host present at all), so the port is re-resolved here
+    // from the same env var by name rather than shared code.
+    var port = Environment.GetEnvironmentVariable("CONTEXT_PLATFORM_PORT") is { Length: > 0 } portText
+        && int.TryParse(portText, out var parsedPort)
+        ? parsedPort
+        : new ClaudeIntegrationOptions().HostPort;
+    var baseUrl = $"http://127.0.0.1:{port}";
+    var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+    using var http = new HttpClient { BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromSeconds(3) };
+    http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+
+    try
+    {
+        // Any response at all (2xx or Health's own 503-when-unhealthy) proves the process is up;
+        // an exception here means nothing is listening, which is the only case this function needs
+        // to distinguish from "reachable".
+        using var healthResponse = await http.GetAsync("/health", ct).ConfigureAwait(false);
+    }
+    catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+    {
+        return null;
+    }
+
+    var name = Path.GetFileName(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+    if (string.IsNullOrWhiteSpace(name))
+    {
+        name = root;
+    }
+
+    try
+    {
+        using var createResponse = await http
+            .PostAsJsonAsync("/api/projects", new HostCreateProjectRequest(name, root), jsonOptions, ct)
+            .ConfigureAwait(false);
+
+        if (createResponse.StatusCode is not (HttpStatusCode.Created or HttpStatusCode.Conflict))
+        {
+            Console.Error.WriteLine(
+                $"Warning: Context.Dashboard.Server at {baseUrl} rejected project registration " +
+                $"({(int)createResponse.StatusCode} {createResponse.StatusCode}); falling back to direct local database access.");
+            return null;
+        }
+
+        var dto = await createResponse.Content.ReadFromJsonAsync<HostProjectDto>(jsonOptions, ct).ConfigureAwait(false);
+        if (dto is null)
+        {
+            return null;
+        }
+
+        var project = new Project
+        {
+            Id = dto.Id,
+            Name = dto.Name,
+            RootPath = dto.RootPath,
+            VcsRemote = dto.VcsRemote,
+            CreatedAt = dto.CreatedAt
+        };
+
+        // Non-null only when this POST itself just minted the project (201) — see this method's
+        // own remarks; null on 409 (already existed) is exactly what lets ClaudeIntegrationInstaller
+        // fall through to reusing whatever token this machine already has on disk for it.
+        return (project, dto.Token, baseUrl);
+    }
+    catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+    {
+        Console.Error.WriteLine(
+            $"Warning: could not register the project with Context.Dashboard.Server at {baseUrl} ({ex.Message}); " +
+            "falling back to direct local database access.");
+        return null;
+    }
 }
 
 async Task HandleIndexAsync(InvocationContext context)
@@ -528,7 +656,7 @@ async Task HandleDoctorAsync(InvocationContext context)
 static string ResolveRoot(string? root) => Path.GetFullPath(root ?? Directory.GetCurrentDirectory());
 
 /// <summary>
-/// Builds the same DI graph Context.Host is expected to build (CONTRACTS.md §11): every layer's own
+/// Builds the same DI graph Context.Dashboard.Server is expected to build (CONTRACTS.md §11): every layer's own
 /// <c>AddContextX</c> first, then <c>AddContextApplication</c> last so its seam adapters can see
 /// everything they wire together. All of Context.Indexing/Graph/Retrieval/Memory/Providers are
 /// reachable here purely through Context.Cli's existing project references to Context.Application
@@ -537,9 +665,23 @@ static string ResolveRoot(string? root) => Path.GetFullPath(root ?? Directory.Ge
 /// </summary>
 static async Task<ServiceProvider> InitializeAsync(string root, bool migrate, CancellationToken ct)
 {
-    var dataDir = Path.Combine(root, ".context");
+    // Same resolver Context.Dashboard.Server's ContextHostOptions.FromEnvironment uses, so a bare-metal CLI run
+    // and the host process always agree on exactly one database file — see SharedDataLocation's own
+    // remarks. The CLI never builds an IConfiguration, so this reads CONTEXT_PLATFORM_DATA_DIR
+    // straight from the environment (SharedDataLocation.ResolveDataDir's fallback for exactly that).
+    var dataDir = SharedDataLocation.ResolveDataDir();
     Directory.CreateDirectory(dataDir);
-    var dbPath = Path.Combine(dataDir, "context.db");
+    var dbPath = SharedDataLocation.ResolveDbPath();
+
+    // One-time carry-forward: a repo previously run against an older build may still have a
+    // database at the old <root>/.context/context.db location — copy it into the new shared data
+    // dir (never move: the old file is left in place as a safety net) so it doesn't appear to
+    // vanish. Idempotent (no-ops once dbPath exists), so safe to call on every command.
+    var migratedFromLegacyPath = SharedDataLocation.EnsureMigratedFromLegacyLocation(dbPath, root);
+    if (migratedFromLegacyPath is not null)
+    {
+        Console.WriteLine($"Copied existing database from legacy location {migratedFromLegacyPath} to {dbPath}.");
+    }
 
     var services = new ServiceCollection();
     services.AddContextInfrastructure(dbPath);
@@ -656,8 +798,8 @@ static async Task WaitForJobsToDrainAsync(ServiceProvider provider, TimeSpan tim
     {
         using var scope = provider.CreateScope();
         var jobs = scope.ServiceProvider.GetRequiredService<IJobRepository>();
-        var pending = await jobs.ListByStatusAsync(JobStatus.Pending, ct).ConfigureAwait(false);
-        var running = await jobs.ListByStatusAsync(JobStatus.Running, ct).ConfigureAwait(false);
+        var pending = await jobs.ListByStatusAsync(JobStatus.Pending, null, ct).ConfigureAwait(false);
+        var running = await jobs.ListByStatusAsync(JobStatus.Running, null, ct).ConfigureAwait(false);
         if (pending.Count == 0 && running.Count == 0)
         {
             return;
@@ -754,3 +896,13 @@ static string Truncate(string? text, int maxChars) =>
 
 /// <summary>Thrown for expected, user-actionable failures — maps to exit code 1 (see <see cref="RunAsync"/>).</summary>
 internal sealed class CliUserErrorException(string message) : Exception(message);
+
+/// <summary>
+/// Wire-format mirror of Context.Dashboard.Server's own <c>CreateProjectRequest</c>/<c>ProjectDto</c>
+/// (Api/Dtos.cs) — kept private and minimal here rather than referencing Context.Dashboard.Server itself,
+/// which would pull the whole ASP.NET Core host into a CLI that must also run with no host
+/// present at all (see <see cref="TryResolveProjectViaHostAsync"/>'s own remarks).
+/// </summary>
+internal sealed record HostCreateProjectRequest(string Name, string RootPath);
+
+internal sealed record HostProjectDto(Guid Id, string Name, string RootPath, string? VcsRemote, DateTimeOffset CreatedAt, string? Token);

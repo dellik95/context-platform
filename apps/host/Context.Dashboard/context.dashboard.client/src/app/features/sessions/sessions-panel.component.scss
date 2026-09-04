@@ -1,0 +1,282 @@
+.sessions-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.sessions-list-col {
+  flex: 0 0 420px;
+  padding: 0;
+  // The page itself no longer scrolls this column away (project-detail's header/tabs are sticky
+  // now) — a long session history should scroll inside its own card instead of growing the page
+  // indefinitely next to a much shorter detail pane.
+  max-height: calc(100vh - 220px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.sessions-scroll {
+  overflow-y: auto;
+}
+
+.session-group-label {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 16px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--mat-sys-on-surface-variant);
+  background: var(--mat-sys-surface-container-low, #f6f7fa);
+  border-bottom: 1px solid var(--mat-sys-outline-variant);
+}
+
+.sessions-detail-col {
+  flex: 1;
+  min-width: 0;
+  padding: 20px;
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+}
+
+// <button mat-list-item> keeps the browser's native button chrome (background/border/font)
+// unless explicitly reset — that's what was rendering as a hard rectangular border around every
+// row. A thin bottom divider replaces it so rows still read as a list, not a stack of boxes.
+.session-item {
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--mat-sys-outline-variant);
+  border-radius: 0;
+  font: inherit;
+  color: inherit;
+  transition: background-color 0.1s ease;
+
+  &:hover {
+    background: var(--mat-sys-surface-variant);
+  }
+
+  &--selected {
+    background: var(--mat-sys-secondary-container);
+  }
+}
+
+mat-list mat-list-item:last-child .session-item,
+mat-list .session-item:last-of-type {
+  border-bottom: none;
+}
+
+.session-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.session-line--time {
+  font-size: 0.78rem;
+}
+
+.claude-id {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.78rem;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--mat-sys-surface-variant);
+  color: var(--mat-sys-on-surface-variant);
+
+  &.active {
+    background: rgba(46, 125, 50, 0.1);
+    color: #1b5e20;
+  }
+}
+
+.detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+
+  h2 {
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: 600;
+  }
+}
+
+.detail-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.detail-subtitle {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.event-count {
+  color: var(--mat-sys-on-surface-variant);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.detail-section {
+  margin-bottom: 16px;
+
+  h3 {
+    margin: 0 0 4px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--mat-sys-on-surface-variant);
+  }
+
+  p {
+    margin: 0;
+    white-space: pre-wrap;
+  }
+}
+
+.file-list {
+  margin: 0;
+  padding-left: 20px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.85rem;
+
+  li {
+    margin-bottom: 2px;
+  }
+}
+
+.raw-json {
+  margin: 0;
+  padding: 8px;
+  background: var(--mat-sys-surface-variant);
+  border-radius: 4px;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.muted {
+  color: var(--mat-sys-on-surface-variant);
+}
+
+// Overrides the global .empty-state (plain top-aligned text) for this column specifically —
+// the surrounding card is tall enough that top-aligned text left a lot of dead space below it.
+.sessions-detail-col .empty-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+// Rounds to match the rest of the app's surfaces (see styles.scss's global .mat-mdc-card
+// override) -- mat-expansion-panel defaults to hard corners otherwise.
+.history-panel {
+  margin-top: 16px;
+  border-radius: 14px !important;
+  overflow: hidden;
+}
+
+.panel-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  margin-left: 8px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--mat-sys-surface-variant);
+  color: var(--mat-sys-on-surface-variant);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.chunk-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chunk-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--mat-sys-outline-variant);
+
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.chunk-sequence {
+  flex: none;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.78rem;
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.chunk-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.chunk-title {
+  font-size: 0.9rem;
+}
+
+.chunk-range {
+  font-size: 0.75rem;
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.no-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 16px;
+  border-radius: 10px;
+  background: var(--mat-sys-surface-variant);
+  color: var(--mat-sys-on-surface-variant);
+
+  p {
+    margin: 0;
+  }
+
+  mat-icon {
+    flex: none;
+    font-size: 20px;
+    width: 20px;
+    height: 20px;
+  }
+}

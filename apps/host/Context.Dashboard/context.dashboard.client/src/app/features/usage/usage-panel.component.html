@@ -1,0 +1,87 @@
+<div class="page">
+  <header class="page-header">
+    <h1>Usage</h1>
+    <mat-button-toggle-group class="range-toggle" [value]="days()" (change)="setDays($event)">
+      <mat-button-toggle [value]="7">7d</mat-button-toggle>
+      <mat-button-toggle [value]="30">30d</mat-button-toggle>
+      <mat-button-toggle [value]="90">90d</mat-button-toggle>
+    </mat-button-toggle-group>
+  </header>
+
+  @if (loading() && !summary()) {
+    <mat-progress-bar mode="indeterminate" />
+  } @else if (error()) {
+    <mat-card class="empty-state">
+      <mat-icon>cloud_off</mat-icon>
+      <p>Could not load usage — is Context.Host running?</p>
+    </mat-card>
+  } @else if (summary(); as usage) {
+    @if (usage.totalCalls === 0) {
+      <mat-card class="empty-state">
+        <mat-icon>bar_chart</mat-icon>
+        <p>No LLM usage recorded in the last {{ days() }} days.</p>
+      </mat-card>
+    } @else {
+      <div class="stat-grid">
+        <mat-card class="stat-card">
+          <span class="stat-value">{{ usage.totalTokens | number }}</span>
+          <span class="stat-label">Total tokens</span>
+        </mat-card>
+        <mat-card class="stat-card">
+          <span class="stat-value">{{ usage.totalCalls | number }}</span>
+          <span class="stat-label">Total calls</span>
+        </mat-card>
+        <mat-card class="stat-card">
+          <span class="stat-value">{{ avgTokensPerCall() | number }}</span>
+          <span class="stat-label">Avg tokens / call</span>
+        </mat-card>
+      </div>
+
+      <mat-card class="chart-card">
+        <h2>Tokens by day</h2>
+        @if (chart(); as c) {
+          <svg class="usage-chart" [attr.viewBox]="'0 0 ' + c.width + ' ' + c.height" preserveAspectRatio="none">
+            @for (bar of c.bars; track bar.day) {
+              <rect class="usage-bar" [attr.x]="bar.x" [attr.y]="bar.y" [attr.width]="bar.width" [attr.height]="bar.height">
+                <title>{{ bar.label }}: {{ bar.tokens | number }} token{{ bar.tokens === 1 ? '' : 's' }}, {{ bar.calls | number }} call{{ bar.calls === 1 ? '' : 's' }}</title>
+              </rect>
+            }
+          </svg>
+          <div class="chart-labels">
+            @for (bar of c.bars; track bar.day; let i = $index) {
+              <span class="chart-label">{{ i % c.labelStride === 0 ? bar.label : '' }}</span>
+            }
+          </div>
+        } @else {
+          <div class="empty-state">
+            <p>No daily data.</p>
+          </div>
+        }
+      </mat-card>
+
+      <mat-card class="breakdown-card">
+        <h2>By purpose</h2>
+        <div class="purpose-table-wrap">
+          <table class="purpose-table">
+            <thead>
+              <tr>
+                <th>Purpose</th>
+                <th>Tokens</th>
+                <th>Calls</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (p of usage.byPurpose; track p.purpose) {
+                <tr>
+                  <td>{{ p.purpose }}</td>
+                  <td>{{ p.tokens | number }}</td>
+                  <td>{{ p.calls | number }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </mat-card>
+    }
+  }
+</div>

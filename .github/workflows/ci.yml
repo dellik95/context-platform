@@ -14,7 +14,7 @@ concurrency:
 env:
   DOTNET_NOLOGO: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
-  DASHBOARD_DIR: apps/dashboard
+  DASHBOARD_DIR: apps/host/Context.Dashboard/context.dashboard.client
 
 jobs:
   dotnet:
@@ -24,9 +24,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Context.Host.csproj embeds the Angular dashboard into wwwroot/ as part of its own
-      # `dotnet build` (see apps/host/Context.Host/Context.Host.csproj, target "BuildDashboard"),
-      # shelling out to `npm ci` / `npx ng build` in apps/dashboard. Node must be available and
+      # Context.Dashboard.Server.csproj embeds the Angular dashboard into wwwroot/ as part of its
+      # own `dotnet build` (see apps/host/Context.Dashboard/Context.Dashboard.Server/Context.Dashboard.Server.csproj,
+      # target "BuildDashboard"), shelling out to `npm ci` / `npx ng build` in
+      # apps/host/Context.Dashboard/context.dashboard.client. Node must be available and
       # dependencies installed before the .NET build runs, or that MSBuild target fails.
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -70,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: apps/dashboard
+        working-directory: apps/host/Context.Dashboard/context.dashboard.client
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -80,7 +81,7 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: apps/dashboard/package-lock.json
+          cache-dependency-path: apps/host/Context.Dashboard/context.dashboard.client/package-lock.json
 
       - name: Install dependencies
         run: npm ci

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Stops and removes a Context.Host Windows Service created by install-windows-service.ps1.
+  Stops and removes a Context.Dashboard.Server Windows Service created by install-windows-service.ps1.
 
 .EXAMPLE
   .\uninstall-windows-service.ps1 -ServiceName 'ContextPlatform-MyRepo'

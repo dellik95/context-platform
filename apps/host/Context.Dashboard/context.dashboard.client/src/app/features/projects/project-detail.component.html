@@ -1,0 +1,38 @@
+<div class="project-shell">
+  <header class="project-header">
+    <a routerLink="/projects" class="back-link">
+      <mat-icon>arrow_back</mat-icon>
+    </a>
+    <h1>{{ ctx.projectName() || 'Loading…' }}</h1>
+  </header>
+
+  <nav class="project-tabs" mat-tab-nav-bar [tabPanel]="panel">
+    <a mat-tab-link routerLink="overview" routerLinkActive #overview="routerLinkActive" [active]="overview.isActive">
+      Overview
+    </a>
+    <a mat-tab-link routerLink="search" routerLinkActive #search="routerLinkActive" [active]="search.isActive">
+      Search
+    </a>
+    <a mat-tab-link routerLink="memories" routerLinkActive #memories="routerLinkActive" [active]="memories.isActive">
+      Memories
+    </a>
+    <a mat-tab-link routerLink="sessions" routerLinkActive #sessions="routerLinkActive" [active]="sessions.isActive">
+      Sessions
+    </a>
+    <a mat-tab-link routerLink="graph" routerLinkActive #graph="routerLinkActive" [active]="graph.isActive">
+      Graph
+    </a>
+    <a mat-tab-link routerLink="settings" routerLinkActive #settings="routerLinkActive" [active]="settings.isActive">
+      Settings
+    </a>
+    <a mat-tab-link routerLink="system" routerLinkActive #system="routerLinkActive" [active]="system.isActive">
+      System
+    </a>
+    <a mat-tab-link routerLink="usage" routerLinkActive #usage="routerLinkActive" [active]="usage.isActive">
+      Usage
+    </a>
+  </nav>
+  <mat-tab-nav-panel #panel>
+    <router-outlet />
+  </mat-tab-nav-panel>
+</div>

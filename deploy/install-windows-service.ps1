@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-  Installs Context.Host as a Windows Service for one project.
+  Installs Context.Dashboard.Server as a Windows Service for one project.
 
 .DESCRIPTION
   Requires an elevated (Administrator) PowerShell session, and a published, self-contained
-  Context.Host.exe:
-    dotnet publish apps\host\Context.Host -c Release -r win-x64 --self-contained `
+  Context.Dashboard.Server.exe:
+    dotnet publish apps\host\Context.Dashboard\Context.Dashboard.Server -c Release -r win-x64 --self-contained `
       -p:PublishSingleFile=true -o C:\ContextPlatform
 
   Windows services don't take arbitrary per-process environment variables the way a systemd
@@ -26,7 +26,7 @@ param(
 
     [int]$Port = 47923,
 
-    [string]$ExePath = 'C:\ContextPlatform\Context.Host.exe'
+    [string]$ExePath = 'C:\ContextPlatform\Context.Dashboard.Server.exe'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,7 +36,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 }
 
 if (-not (Test-Path $ExePath)) {
-    throw "$ExePath not found. Publish it first: dotnet publish apps\host\Context.Host -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o $(Split-Path $ExePath -Parent)"
+    throw "$ExePath not found. Publish it first: dotnet publish apps\host\Context.Dashboard\Context.Dashboard.Server -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o $(Split-Path $ExePath -Parent)"
 }
 
 if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
@@ -58,5 +58,5 @@ Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName" -N
 Start-Service -Name $ServiceName
 
 Write-Host "Installed and started service '$ServiceName' for project '$ProjectRoot' on port $Port."
-Write-Host "Logs: $ProjectRoot\.context\logs\"
+Write-Host "Data dir (db/logs/backups): CONTEXT_PLATFORM_DATA_DIR if set, else this account's %LocalAppData%\ContextPlatform (LocalSystem by default: C:\Windows\System32\config\systemprofile\AppData\Local\ContextPlatform) — no longer under the project root."
 Write-Host "Manage it with: Get-Service $ServiceName | Stop-Service / Start-Service"

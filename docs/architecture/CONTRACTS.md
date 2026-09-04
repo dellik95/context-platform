@@ -155,6 +155,7 @@ public class SessionSummary
     public string? Completed { get; set; }
     public string? Discovered { get; set; }
     public string? Decisions { get; set; }
+    public string? FilesReadJson { get; set; }
     public string? ChangedFilesJson { get; set; }
     public string? OpenIssues { get; set; }
     public string? NextSteps { get; set; }
@@ -208,6 +209,7 @@ public class Job
 {
     public Guid Id { get; set; }
     public JobType Type { get; set; }
+    public Guid? ProjectId { get; set; }                 // null for host-wide maintenance jobs (DecayMemory, BackupDb)
     public required string PayloadJson { get; set; }
     public JobStatus Status { get; set; } = JobStatus.Pending;
     public int Priority { get; set; }
@@ -467,8 +469,12 @@ public interface IClaudeIntegrationInstaller
   (`PRAGMA journal_mode=WAL` on connection open), FK constraints on.
 - `ContextDbContextFactory : IDesignTimeDbContextFactory<ContextDbContext>` for
   `dotnet ef migrations` tooling.
-- Connection string: `Data Source={ProjectDataDir}/context.db` where
-  `ProjectDataDir` = `<repo-root>/.context/` (created + gitignored by installer).
+- Connection string: `Data Source={ProjectDataDir}/context.db` where `ProjectDataDir` is the
+  shared, machine-level data directory `SharedDataLocation.ResolveDataDir` resolves (Phase 2: no
+  longer per-project — `CONTEXT_PLATFORM_DATA_DIR` overrides it, else an OS-appropriate default such
+  as `%LocalAppData%\ContextPlatform` on Windows). Context.Dashboard.Server and Context.Cli both resolve through
+  the same helper so they agree on one database file; a database found at the old
+  `<repo-root>/.context/context.db` location is copied forward automatically on first run.
 - Repositories live here implementing interfaces declared in `Context.Application`
   (e.g. `IProjectRepository`, `IFileRepository`, `ISymbolRepository`, `IMemoryRepository`,
   `IJobRepository`) — Application depends only on the interfaces.
@@ -482,7 +488,7 @@ namespace Context.Application.Jobs;
 
 public interface IJobQueue
 {
-    Task<Guid> EnqueueAsync(Context.Domain.Enums.JobType type, object payload, int priority = 0, CancellationToken ct = default);
+    Task<Guid> EnqueueAsync(Context.Domain.Enums.JobType type, object payload, Guid? projectId = null, int priority = 0, CancellationToken ct = default);
 }
 
 namespace Context.Application;
@@ -496,13 +502,13 @@ public interface IContextEngine
     Task<IReadOnlyList<Context.Domain.Entities.Memory>> SearchMemoryAsync(Guid projectId, string query, bool includeSuperseded, CancellationToken ct);
     Task<Guid> StartSessionAsync(Guid projectId, string? claudeSessionId, CancellationToken ct);
     Task RecordEventAsync(Guid sessionId, Context.Domain.Enums.SessionEventType type, object payload, CancellationToken ct);
-    Task EndSessionAsync(Guid sessionId, CancellationToken ct); // enqueues SummarizeSession -> ExtractMemory
+    Task EndSessionAsync(Guid projectId, Guid sessionId, CancellationToken ct); // enqueues SummarizeSession -> ExtractMemory
     Task<object> ProjectInfoAsync(Guid projectId, CancellationToken ct);
 }
 ```
 
-MCP tools (Context.Mcp, hosted inside `Context.Host`), CLI commands (`Context.Cli`)
-and REST controllers (`Context.Host`) are thin adapters over `IContextEngine` only.
+MCP tools (Context.Mcp, hosted inside `Context.Dashboard.Server`), CLI commands (`Context.Cli`)
+and REST controllers (`Context.Dashboard.Server`) are thin adapters over `IContextEngine` only.
 
 ---
 
@@ -517,7 +523,7 @@ namespace Context.Application.Settings;
 // Persisted verbatim (as JSON) into Project.ConfigJson — the whole field is this DTO's
 // serialization, nothing else uses ConfigJson today. Provider fields are informational/
 // override-on-next-restart only: Context.Providers wires concrete IEmbeddingProvider/
-// ILlmProvider instances once at Context.Host startup via DI (see §5), there is no
+// ILlmProvider instances once at Context.Dashboard.Server startup via DI (see §5), there is no
 // per-request/per-project provider resolution, so changing these fields does NOT hot-swap
 // the running provider — the Settings UI must say so next to the provider fields.
 // ReindexEnabled/ReindexIntervalMinutes DO take effect live (ReindexSchedulerService polls
@@ -546,7 +552,7 @@ public interface IProjectSettingsService
 namespace Context.Application.Indexing;
 
 // Fire-and-forget progress channel from IndexingPipeline to whatever wants to observe a
-// reindex live (Context.Host wires a SignalR-backed implementation; default/fallback is a
+// reindex live (Context.Dashboard.Server wires a SignalR-backed implementation; default/fallback is a
 // no-op so Context.Application has zero hard dependency on SignalR).
 public sealed record ReindexProgressDto(Guid ProjectId, int FilesProcessed, int FilesTotal, bool Completed);
 
@@ -570,7 +576,7 @@ namespace Context.Application.Scheduling;
 // project's ProjectSettingsDto (IProjectSettingsService.GetAsync); if ReindexEnabled and
 // (LastReindexScheduledAt is null or DateTimeOffset.UtcNow - LastReindexScheduledAt.Value >=
 // TimeSpan.FromMinutes(ReindexIntervalMinutes)), triggers a non-full reindex by resolving
-// IIndexingPipeline in a fresh IServiceScope (same pattern as Context.Host's existing
+// IIndexingPipeline in a fresh IServiceScope (same pattern as Context.Dashboard.Server's existing
 // ProjectEndpoints.TriggerIndex background Task.Run — do not block the polling loop on it,
 // fire with `_ = Task.Run(...)` and swallow+log exceptions), then immediately calls
 // IProjectSettingsService.UpdateAsync with LastReindexScheduledAt = DateTimeOffset.UtcNow
@@ -595,14 +601,14 @@ public interface IClaudeIntegrationInstaller
 }
 ```
 
-REST surface added to `Context.Host` (thin wrappers, no new business logic beyond what's above):
+REST surface added to `Context.Dashboard.Server` (thin wrappers, no new business logic beyond what's above):
 
 ```
 GET  /api/projects/{id}/settings          -> ProjectSettingsDto   (IProjectSettingsService.GetAsync)
 PUT  /api/projects/{id}/settings          <- ProjectSettingsDto   (IProjectSettingsService.UpdateAsync), returns 204
 POST /api/projects/{id}/claude/install    -> { installed: true }  (looks up Project by id for RootPath,
                                               calls IClaudeIntegrationInstaller.InstallAsync then InstallSkillAsync)
-GET  /api/system/status                   -> SystemStatusDto (Context.Host.Api namespace):
+GET  /api/system/status                   -> SystemStatusDto (Context.Dashboard.Server.Api namespace):
   record SystemStatusDto(bool DatabaseReachable, bool JobDispatcherAlive, bool McpAlive,
                           string EmbeddingProvider, string LlmProvider,
                           int JobsPending, int JobsRunning, int JobsFailed, int JobsDone,
@@ -617,7 +623,7 @@ GET  /api/system/status                   -> SystemStatusDto (Context.Host.Api n
   // in Program.cs set once at startup, inject it, subtract from DateTimeOffset.UtcNow.
 ```
 
-SignalR (`Context.Host.Hubs.IndexingHubNotifier`, extend — do not break the existing method):
+SignalR (`Context.Dashboard.Server.Hubs.IndexingHubNotifier`, extend — do not break the existing method):
 
 ```csharp
 public sealed class IndexingHubNotifier(IHubContext<IndexingHub> hub)
@@ -628,7 +634,7 @@ public sealed class IndexingHubNotifier(IHubContext<IndexingHub> hub)
         hub.Clients.Group(IndexingHub.GroupName(projectId)).SendAsync("ReindexProgress", progress, ct);
 }
 ```
-Context.Host registers a small adapter `SignalRIndexingProgressReporter : IIndexingProgressReporter` (in `Context.Host/Hubs/`)
+Context.Dashboard.Server registers a small adapter `SignalRIndexingProgressReporter : IIndexingProgressReporter` (in `Context.Dashboard.Server/Hubs/`)
 that wraps `IndexingHubNotifier.ReindexProgressAsync`, registered AFTER `AddContextApplication` so it overrides
 the `NullIndexingProgressReporter` default registration (last registration for a given interface wins with
 `services.AddSingleton`, so order in `Program.cs` matters — see how `AddContextProviders` already overrides
@@ -644,4 +650,4 @@ Context.Application's own placeholder registrations for the same reason).
 - All async methods take a trailing `CancellationToken ct`.
 - No static mutable state. All cross-project wiring via `Microsoft.Extensions.DependencyInjection`
   `IServiceCollection` extension methods named `Add{ProjectShortName}` (e.g. `AddContextIndexing`),
-  defined in a `ServiceCollectionExtensions.cs` at the project root, called from `Context.Host/Program.cs`.
+  defined in a `ServiceCollectionExtensions.cs` at the project root, called from `Context.Dashboard.Server/Program.cs`.

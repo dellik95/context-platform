@@ -11,6 +11,9 @@
     <!-- ASP.NET / SignalR client (server libs come from the shared framework) -->
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.0" />
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.0" />
+    <!-- Context.Dashboard.Server: dev-only SpaProxy hosting-startup middleware, see its own
+         SpaRoot/SpaProxyServerUrl/SpaProxyLaunchCommand properties in the csproj. -->
+    <PackageVersion Include="Microsoft.AspNetCore.SpaProxy" Version="10.0.11" />
     <!-- CLI -->
     <PackageVersion Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     <!-- MCP -->
@@ -29,6 +32,9 @@
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+    <!-- Context.Shared: SharedDataLocation reads the same IConfiguration (env-var backed) the host
+         and CLI already build, so it resolves the CONTEXT_PLATFORM_DATA_DIR override consistently. -->
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.11" />
     <!-- Context.Application: JobDispatcher is a hosted-service-friendly IJobQueue (see JobDispatcher.cs) -->
     <!-- 10.0.3, not 10.0.0: Microsoft.Extensions.AI.OpenAI -> OpenAI -> System.ClientModel needs >= 10.0.3 -->
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.11" />
