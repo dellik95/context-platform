@@ -23,23 +23,42 @@ public static class SymbolDiffer
     /// <summary>
     /// The text a symbol is diffed AND chunked/embedded on — shared by
     /// <see cref="Diff"/> and <c>IndexingPipeline</c>'s chunk-text construction so the two always
-    /// agree on what "changed" means. A parser reports an empty <c>BodyText</c> for a bodyless
-    /// declaration (an interface member, an abstract method, an expression-bodied member folded
-    /// into <c>SignatureText</c> — see e.g. TreeSitterCSharpParser's own documented fallback for
-    /// that case); leading with the signature means those are diffed/chunked on their signature
-    /// instead of an empty string.
+    /// agree on what "changed" means. Leads with <paramref name="docComment"/>: it is the only
+    /// place a symbol's natural-language description lives, and both FTS5/BM25 lexical search and
+    /// vector embeddings match query text against this exact string, so a doc comment left out here
+    /// means a query phrased in prose ("restock a warehouse after a supplier delivery") has nothing
+    /// to lexically match against code that only ever spells that out as an identifier
+    /// (<c>RestockWarehouse</c> tokenizes as one word, not "restock" + "warehouse"). Falls back to
+    /// signature/body when there is no doc comment, same as before this parameter was added. A
+    /// parser reports an empty <c>BodyText</c> for a bodyless declaration (an interface member, an
+    /// abstract method, an expression-bodied member folded into <c>SignatureText</c> — see e.g.
+    /// TreeSitterCSharpParser's own documented fallback for that case); leading with the signature
+    /// (after the doc comment) means those are diffed/chunked on their signature instead of an
+    /// empty string.
     /// </summary>
-    public static string CombinedText(string? signatureText, string? bodyText)
+    public static string CombinedText(string? docComment, string? signatureText, string? bodyText)
     {
+        var doc = docComment?.Trim() ?? string.Empty;
         var signature = signatureText?.Trim() ?? string.Empty;
         var body = bodyText?.Trim() ?? string.Empty;
 
-        if (body.Length == 0)
+        var parts = new List<string>(3);
+        if (doc.Length > 0)
         {
-            return signature;
+            parts.Add(doc);
         }
 
-        return signature.Length == 0 ? body : $"{signature}\n{body}";
+        if (signature.Length > 0)
+        {
+            parts.Add(signature);
+        }
+
+        if (body.Length > 0)
+        {
+            parts.Add(body);
+        }
+
+        return string.Join('\n', parts);
     }
 
     public static SymbolDiffResult Diff(IReadOnlyList<SymbolDraft> previous, IReadOnlyList<SymbolDraft> current)
@@ -59,8 +78,8 @@ public static class SymbolDiffer
                 continue;
             }
 
-            var previousHash = Hashing.HashText(CombinedText(previousSymbol.SignatureText, previousSymbol.BodyText));
-            var currentHash = Hashing.HashText(CombinedText(currentSymbol.SignatureText, currentSymbol.BodyText));
+            var previousHash = Hashing.HashText(CombinedText(previousSymbol.DocComment, previousSymbol.SignatureText, previousSymbol.BodyText));
+            var currentHash = Hashing.HashText(CombinedText(currentSymbol.DocComment, currentSymbol.SignatureText, currentSymbol.BodyText));
             (previousHash == currentHash ? unchanged : changed).Add(currentSymbol);
         }
 
