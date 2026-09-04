@@ -341,6 +341,12 @@ public interface IGraphTraversal
 {
     Task<IReadOnlyList<Context.Domain.Entities.GraphNode>> NeighborsAsync(
         Guid nodeId, Context.Domain.Enums.GraphEdgeKind[]? kinds, int hops, CancellationToken ct);
+    // Node+edge neighborhood around one node, for the Graph tab's visualization (vs. NeighborsAsync's flat node list).
+    Task<GraphNeighborhood> NeighborhoodAsync(
+        Guid nodeId, Context.Domain.Enums.GraphEdgeKind[]? kinds, int hops, CancellationToken ct);
+    // Whole-project graph (an Obsidian-style "whole vault" view); warms that project's cache itself.
+    Task<GraphNeighborhood> FullGraphAsync(
+        Guid projectId, Context.Domain.Enums.GraphEdgeKind[]? kinds, CancellationToken ct);
     Task<IReadOnlyList<Context.Domain.Entities.GraphNode>?> ShortestPathAsync(
         Guid fromId, Guid toId, CancellationToken ct);
     Task<ImpactSet> BlastRadiusAsync(Guid symbolNodeId, int maxHops, CancellationToken ct);
@@ -348,22 +354,25 @@ public interface IGraphTraversal
 
 public record ImpactNode(Context.Domain.Entities.GraphNode Node, int Hops, string Path);
 public record ImpactSet(IReadOnlyList<ImpactNode> Callers, IReadOnlyList<ImpactNode> Implementers, IReadOnlyList<ImpactNode> CoveringTests);
+public record GraphNeighborhood(IReadOnlyList<Context.Domain.Entities.GraphNode> Nodes, IReadOnlyList<GraphEdgeDto> Edges);
+public record GraphEdgeDto(Guid SourceId, Guid TargetId, Context.Domain.Enums.GraphEdgeKind Kind);
 ```
 
 ---
 
 ## 5. Context.Providers (`Context.Providers`)
 
+Since the Microsoft.Extensions.AI provider migration (see ROADMAP.md's "✅ Done" section),
+embedding and LLM provider selection is expressed directly in terms of
+Microsoft.Extensions.AI's own abstractions — there is no bespoke `IEmbeddingProvider`/
+`ILlmProvider` interface in this project any more; `AddContextProviders` registers an
+`IEmbeddingGenerator<string, Embedding<float>>` and an `IChatClient` (both
+`Microsoft.Extensions.AI` types) via that library's own `AddEmbeddingGenerator`/
+`AddChatClient` DI helpers. `IRerankerProvider` is the one provider-category interface
+still local to this project (nothing in `Microsoft.Extensions.AI` covers reranking):
+
 ```csharp
 namespace Context.Providers.Abstractions;
-
-public interface IEmbeddingProvider
-{
-    string Name { get; }
-    int Dimensions { get; }
-    Task<float[]> EmbedAsync(string text, CancellationToken ct);
-    Task<float[][]> EmbedBatchAsync(IReadOnlyList<string> texts, CancellationToken ct);
-}
 
 public interface IRerankerProvider
 {
@@ -371,19 +380,19 @@ public interface IRerankerProvider
     Task<IReadOnlyList<int>> RerankAsync(string query, IReadOnlyList<string> candidates, CancellationToken ct);
     // returns candidate indices best-first
 }
-
-public interface ILlmProvider
-{
-    string Name { get; }
-    Task<string> CompleteAsync(string systemPrompt, string userPrompt, CancellationToken ct);
-}
 ```
 
-Built-ins: `NoOpEmbeddingProvider` (deterministic hash-based pseudo-embedding, for
-running the pipeline with zero external dependencies / offline tests),
-`OpenAiEmbeddingProvider`, `OllamaEmbeddingProvider`; `LocalOnnxReranker` (default)
-and `NoOpReranker` (identity order, fallback); `AnthropicLlmProvider`, `NoOpLlmProvider`
-(template-based summary, no LLM call — used when no LLM provider configured).
+Built-ins, selected by `ContextProvidersOptions.EmbeddingProvider`/`RerankerProvider`/`LlmProvider`
+(see `ServiceCollectionExtensions.AddContextProviders`): `NoOpEmbeddingGenerator` (deterministic
+hash-based pseudo-embedding, for running the pipeline with zero external dependencies / offline
+tests) and `NoOpChatClient` (deterministic templated response, no network call); real embedding/chat
+providers wrap the official OpenAI SDK, OllamaSharp and Anthropic.SDK clients as
+`IEmbeddingGenerator`/`IChatClient` (`OllamaEmbeddingGeneratorDecorator`/`OllamaChatClientDecorator`
+add Ollama-specific error framing, `SecretRedactingEmbeddingGeneratorDecorator`/
+`SecretRedactingChatClientDecorator` scan content leaving the machine for external providers —
+see BACKLOG-08/SEC-4); `LexicalOverlapReranker` (default, lexical token-overlap heuristic — not
+ML-based; see the commit that renamed it from `LocalOnnxReranker` and dropped the unused ONNX
+scaffold) and `NoOpReranker` (identity order, fallback).
 
 ---
 
@@ -489,6 +498,10 @@ namespace Context.Application.Jobs;
 public interface IJobQueue
 {
     Task<Guid> EnqueueAsync(Context.Domain.Enums.JobType type, object payload, Guid? projectId = null, int priority = 0, CancellationToken ct = default);
+
+    // Manually re-triggers a job that has exhausted its automatic retries and is permanently
+    // Failed (the System tab's "retry" button); throws JobNotFoundException / JobNotRetryableException.
+    Task RequeueAsync(Guid jobId, CancellationToken ct = default);
 }
 
 namespace Context.Application;
