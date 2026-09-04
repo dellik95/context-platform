@@ -67,4 +67,20 @@ public class JobRepository(ContextDbContext db) : IJobRepository
 
         return [.. jobs.OrderByDescending(j => j.Priority).ThenBy(j => j.CreatedAt)];
     }
+
+    public async Task<JobStatusCounts> CountByStatusAsync(CancellationToken ct)
+    {
+        var counts = await db.Jobs.AsNoTracking()
+            .GroupBy(j => j.Status)
+            .Select(g => new { g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+
+        int CountFor(JobStatus status) => counts.Find(c => c.Key == status)?.Count ?? 0;
+
+        return new JobStatusCounts(
+            CountFor(JobStatus.Pending),
+            CountFor(JobStatus.Running),
+            CountFor(JobStatus.Failed),
+            CountFor(JobStatus.Done));
+    }
 }

@@ -81,6 +81,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IIndexingProgressReporter>(NullIndexingProgressReporter.Instance);
         services.AddSingleton<Context.Application.Notifications.IProjectActivityNotifier>(
             Context.Application.Notifications.NullProjectActivityNotifier.Instance);
+        services.AddSingleton<Context.Application.Notifications.IJobCountsNotifier>(
+            Context.Application.Notifications.NullJobCountsNotifier.Instance);
         AddProjectSettings(services);
 
         return services;

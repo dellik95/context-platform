@@ -19,7 +19,7 @@
     </form>
   </mat-card>
 
-  @if (loading()) {
+  @if (initialLoading()) {
     <mat-progress-bar mode="indeterminate" />
   } @else if (memories().length === 0) {
     <mat-card class="empty-state">

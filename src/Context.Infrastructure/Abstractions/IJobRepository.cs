@@ -20,4 +20,12 @@ public interface IJobRepository
     /// <summary>When <paramref name="projectId"/> is null, returns jobs for every project (plus
     /// host-wide maintenance jobs) — the pre-filtering, host-wide behavior.</summary>
     Task<IReadOnlyList<Job>> ListByStatusAsync(JobStatus status, Guid? projectId, CancellationToken ct);
+
+    /// <summary>Host-wide (not project-scoped -- jobs aren't queried per project anywhere else
+    /// either) breakdown of how many jobs currently sit in each <see cref="JobStatus"/>. Backs
+    /// both <c>GET /api/system/status</c>'s four jobsXxx fields and <c>JobDispatcher</c>'s
+    /// SignalR push of the same figures, so both stay computed exactly one way.</summary>
+    Task<JobStatusCounts> CountByStatusAsync(CancellationToken ct);
 }
+
+public sealed record JobStatusCounts(int Pending, int Running, int Failed, int Done);

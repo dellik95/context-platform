@@ -318,3 +318,14 @@ export interface ProjectActivityEvent {
   projectId: string;
   kind: ProjectActivityKind;
 }
+
+// Pushed over the /hubs/indexing SignalR hub's "JobCountsChanged" event (Context.Host's
+// IndexingHub.JobCountsChangedAsync), broadcast to every connected client -- not scoped to a
+// project group, since the counts themselves are host-wide (same as SystemStatusDto's own
+// jobsXxx fields). Mirrors Context.Application.Notifications.JobCounts.
+export interface JobCountsChangedEvent {
+  pending: number;
+  running: number;
+  failed: number;
+  done: number;
+}

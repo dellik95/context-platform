@@ -101,10 +101,15 @@ export class SessionsPanelComponent {
   private readonly sessionsResource = this.api.sessionsResource(this.ctx.projectId);
   protected readonly sessions = computed(() => (this.sessionsResource.hasValue() ? this.sessionsResource.value() : []));
   protected readonly loading = this.sessionsResource.isLoading;
+  // Gates the whole list being replaced by a spinner -- true only on the very first load. The
+  // SignalR-triggered reload below (a new/updated session summary) keeps the existing list visible
+  // while it refetches instead of blanking the panel, since sessionsResource already has a value.
+  protected readonly initialLoading = computed(() => this.loading() && !this.sessionsResource.hasValue());
 
   private readonly detailResource = this.api.sessionDetailResource(this.selectedId);
   protected readonly detail = computed(() => (this.detailResource.hasValue() ? this.detailResource.value() : null));
   protected readonly detailLoading = this.detailResource.isLoading;
+  protected readonly initialDetailLoading = computed(() => this.detailLoading() && !this.detailResource.hasValue());
 
   // Chunk history ("History" expander below the flat summary) -- additive alongside detailResource
   // above, keyed off the same selectedId so it loads/reloads in lockstep with the session detail.

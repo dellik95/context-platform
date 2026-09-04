@@ -37,7 +37,7 @@
         <dt>LLM provider</dt>
         <dd>{{ status.llmProvider }}</dd>
         <dt>Uptime</dt>
-        <dd>{{ formatUptime(status.uptimeSeconds) }}</dd>
+        <dd>{{ formatUptime(displayUptimeSeconds() ?? status.uptimeSeconds) }}</dd>
       </dl>
     </mat-card>
 
@@ -79,9 +79,12 @@
         <mat-icon>refresh</mat-icon>
         Refresh
       </button>
+      @if (jobsLoading() && !initialJobsLoading()) {
+        <mat-progress-bar mode="indeterminate" class="inline-progress" />
+      }
     </div>
 
-    @if (jobsLoading()) {
+    @if (initialJobsLoading()) {
       <mat-progress-bar mode="indeterminate" />
     } @else if (jobsError()) {
       <div class="empty-state">
@@ -155,10 +158,13 @@
         @if (logFilePath()) {
           <span class="log-path">{{ logFilePath() }}</span>
         }
+        @if (logsLoading() && !initialLogsLoading()) {
+          <mat-progress-bar mode="indeterminate" class="inline-progress" />
+        }
       }
     </div>
 
-    @if (logsLoading()) {
+    @if (initialLogsLoading()) {
       <mat-progress-bar mode="indeterminate" />
     } @else if (logLines(); as lines) {
       @if (lines.length === 0) {
