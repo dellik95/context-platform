@@ -1,4 +1,5 @@
 using Context.Providers;
+using Context.Providers.Abstractions;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -6,12 +7,13 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Context.Application.Indexing;
 
 /// <summary>
-/// Default <see cref="IFileSummarizer"/>: asks the configured <see cref="IChatClient"/> for a
-/// short natural-language description of a file, given its path and top-level symbol names.
-/// Degrades to a no-op (returns null) when there's no signal to summarize from (no symbols) or
-/// the provider is offline, matching <c>LlmMemoryExtractor</c>'s own offline-provider convention.
+/// Default <see cref="IFileSummarizer"/>: asks the project's resolved <see cref="IChatClient"/>
+/// (via <see cref="IProviderResolver"/>) for a short natural-language description of a file, given
+/// its path and top-level symbol names. Degrades to a no-op (returns null) when there's no signal
+/// to summarize from (no symbols) or the provider is offline, matching <c>LlmMemoryExtractor</c>'s
+/// own offline-provider convention.
 /// </summary>
-public sealed class LlmFileSummarizer(IChatClient chatClient, ILogger<LlmFileSummarizer>? logger = null) : IFileSummarizer
+public sealed class LlmFileSummarizer(IProviderResolver providerResolver, ILogger<LlmFileSummarizer>? logger = null) : IFileSummarizer
 {
     private const string SystemPrompt =
         """
@@ -37,9 +39,15 @@ public sealed class LlmFileSummarizer(IChatClient chatClient, ILogger<LlmFileSum
 
     private readonly ILogger<LlmFileSummarizer> _logger = logger ?? NullLogger<LlmFileSummarizer>.Instance;
 
-    public async Task<string?> SummarizeAsync(string relativePath, IReadOnlyList<string> symbolNames, CancellationToken ct)
+    public async Task<string?> SummarizeAsync(Guid projectId, string relativePath, IReadOnlyList<string> symbolNames, CancellationToken ct)
     {
-        if (symbolNames.Count == 0 || chatClient.IsNoOp())
+        if (symbolNames.Count == 0)
+        {
+            return null;
+        }
+
+        var chatClient = await providerResolver.GetChatClientAsync(projectId, ct).ConfigureAwait(false);
+        if (chatClient.IsNoOp())
         {
             return null;
         }

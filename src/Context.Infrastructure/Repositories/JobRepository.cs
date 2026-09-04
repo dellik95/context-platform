@@ -7,8 +7,9 @@ namespace Context.Infrastructure.Repositories;
 
 public class JobRepository(ContextDbContext db) : IJobRepository
 {
-    public Task<Job?> GetByIdAsync(Guid id, CancellationToken ct) =>
-        db.Jobs.AsNoTracking().FirstOrDefaultAsync(j => j.Id == id, ct);
+    public Task<Job?> GetByIdAsync(Guid id, CancellationToken ct, Guid? projectId = null) =>
+        db.Jobs.AsNoTracking()
+            .FirstOrDefaultAsync(j => j.Id == id && (projectId == null || j.ProjectId == projectId || j.ProjectId == null), ct);
 
     public async Task<Job> EnqueueAsync(Job job, CancellationToken ct)
     {
@@ -58,10 +59,10 @@ public class JobRepository(ContextDbContext db) : IJobRepository
         return job;
     }
 
-    public async Task<IReadOnlyList<Job>> ListByStatusAsync(JobStatus status, CancellationToken ct)
+    public async Task<IReadOnlyList<Job>> ListByStatusAsync(JobStatus status, Guid? projectId, CancellationToken ct)
     {
         var jobs = await db.Jobs.AsNoTracking()
-            .Where(j => j.Status == status)
+            .Where(j => j.Status == status && (projectId == null || j.ProjectId == projectId))
             .ToListAsync(ct);
 
         return [.. jobs.OrderByDescending(j => j.Priority).ThenBy(j => j.CreatedAt)];

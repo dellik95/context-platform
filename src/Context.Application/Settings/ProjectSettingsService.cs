@@ -117,6 +117,9 @@ public sealed class ProjectSettingsService(
                 : 15,
             MaxMemoryNotesPerSection: int.TryParse(section?["MaxMemoryNotesPerSection"], out var maxMemoryNotesPerSection)
                 ? maxMemoryNotesPerSection
+                : 20,
+            MinEventsForMemoryExtraction: int.TryParse(section?["MinEventsForMemoryExtraction"], out var minEventsForMemoryExtraction)
+                ? minEventsForMemoryExtraction
                 : 20);
     }
 

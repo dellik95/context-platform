@@ -7,6 +7,7 @@ public class SessionSummary
     public string? Completed { get; set; }
     public string? Discovered { get; set; }
     public string? Decisions { get; set; }
+    public string? FilesReadJson { get; set; }
     public string? ChangedFilesJson { get; set; }
     public string? OpenIssues { get; set; }
     public string? NextSteps { get; set; }

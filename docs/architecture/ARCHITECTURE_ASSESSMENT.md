@@ -39,7 +39,7 @@ graph TB
         ClaudeCode["Claude Code CLI<br/>(external agent)"]
     end
 
-    subgraph "Context.Host (ASP.NET Core, loopback-bound)"
+    subgraph "Context.Dashboard.Server (ASP.NET Core, loopback-bound)"
         REST["/api/* REST endpoints"]
         MCP["/mcp (ModelContextProtocol,<br/>HTTP transport)"]
         Hooks["/hooks/* (bearer-token auth)"]
@@ -127,7 +127,7 @@ graph TB
 
 The investigation surfaced what looked like a conflict and is actually two complementary, real mechanisms:
 
-- **`FileWatcherHostedService`** (`apps/host/Context.Host/BackgroundServices/`) — a real `FileSystemWatcher` on `HostProjectContext.ProjectRoot`, 400ms debounce, skips `.context/` to avoid feedback loops, dispatches per-file reindex via `Task.Run`. This is the **immediate, event-driven** path.
+- **`FileWatcherHostedService`** (`apps/host/Context.Dashboard.Server/BackgroundServices/`) — a real `FileSystemWatcher` on `HostProjectContext.ProjectRoot`, 400ms debounce, skips `.context/` to avoid feedback loops, dispatches per-file reindex via `Task.Run`. This is the **immediate, event-driven** path.
 - **`ReindexSchedulerService`** (`Context.Application/Scheduling/`) — a 60-second poll doing a full-tree rescan, skipping unchanged files by content hash. This is the **scheduled, batch catch-up** path (covers cases the watcher misses: files changed while the host was down, external tools that bypass the watcher, etc.).
 
 Both are real and both matter. The actual gap (§C, `IDX-2`) is downstream of the watcher: the reactive single-file `JobType.IndexFile`/`ParseFile` job handlers exist and are fully implemented, but **nothing ever enqueues them** — the watcher's per-file `Task.Run` reindex path and the job-queue-based reactive path were never wired together.
@@ -171,7 +171,7 @@ Findings are grouped by severity. Each includes current implementation, problem,
 - **Root cause:** CORS was almost certainly added to support `ng serve` (localhost:4200) hitting the host (localhost:47923) during Dashboard development, and the wildcard was the path of least resistance. The **production** dashboard is actually served same-origin (`Program.cs:145-149` — `wwwroot` static files), so production doesn't need CORS at all.
 - **Recommended solution:** Two changes, both small: (1) restrict the CORS policy to an explicit allow-list of known dev origins (e.g., `https://localhost:4200`) rather than `_ => true`, only in `Development`; skip `UseCors` entirely in `Production` since the dashboard is same-origin there. (2) Extend the existing bearer-token pattern (`HookEndpoints`'s `RequireBearerToken`) to `/api/*`, `/mcp`, and the SignalR hub — reuse the same token already generated for hooks, or a second one, checked via a shared middleware/filter.
 - **Priority:** P0.
-- **Dependencies:** None — self-contained in `Context.Host`.
+- **Dependencies:** None — self-contained in `Context.Dashboard.Server`.
 - **Complexity:** S (CORS policy) + M (auth middleware applied broadly, plus updating the Dashboard's `ApiService`/SignalR client to send the token, plus `ClaudeIntegrationInstaller`'s `.mcp.json` to include it as a header).
 
 #### SEC-2 — Unauthenticated arbitrary directory listing
@@ -315,7 +315,7 @@ graph TB
         ClaudeCode["Claude Code CLI"]
     end
 
-    subgraph "Context.Host"
+    subgraph "Context.Dashboard.Server"
         AuthMw["NEW: shared bearer-auth middleware<br/>(applies to /api/*, /mcp, /hubs/*)"]
         REST["/api/* REST endpoints"]
         MCP["/mcp"]
@@ -518,7 +518,7 @@ Each item is independently actionable by Claude Code. IDs match §C/§K/§L.
 
 **BACKLOG-01 — Restrict CORS to explicit dev origins, dev-only**
 - **Description:** Replace `SetIsOriginAllowed(_ => true)` in `Program.cs:99-104` with an explicit allow-list (e.g., `http://localhost:4200`, `https://localhost:4200`) and only register/apply the CORS policy when `app.Environment.IsDevelopment()`. Production (same-origin `wwwroot` serving) needs no CORS policy at all.
-- **Files/projects affected:** `apps/host/Context.Host/Program.cs`.
+- **Files/projects affected:** `apps/host/Context.Dashboard.Server/Program.cs`.
 - **Dependencies:** None.
 - **Acceptance criteria:** In `Production`, no `Access-Control-Allow-Origin` header is returned for any origin. In `Development`, only the configured dev origin(s) receive CORS headers.
 - **Tests required:** New `HostHttpE2ETests` case asserting cross-origin request from an unlisted origin gets no CORS headers in both environments (or is rejected).
@@ -526,7 +526,7 @@ Each item is independently actionable by Claude Code. IDs match §C/§K/§L.
 
 **BACKLOG-02 — Apply bearer-token auth to `/api/*`, `/mcp`, `/hubs/indexing`**
 - **Description:** Extract `HookEndpoints`'s existing `RequireBearerToken`/`CryptographicOperations.FixedTimeEquals` logic into a shared middleware or endpoint filter; apply it to `MapProjectEndpoints`, `MapSearchEndpoints`, `MapMemoryEndpoints`, `MapGraphEndpoints`, `MapSessionEndpoints`, `MapSettingsEndpoints`, `MapClaudeEndpoints`, `MapSystemEndpoints`, `MapJobsEndpoints`, `MapFileSystemEndpoints`, `MapMcp`, and the SignalR hub connection. `MapHealthEndpoints` may stay open (health checks are low-sensitivity and useful unauthenticated for container orchestration).
-- **Files/projects affected:** `apps/host/Context.Host/Hooks/*` (extract shared auth), `apps/host/Context.Host/Api/*Endpoints.cs`, `apps/host/Context.Host/Program.cs`, `apps/host/Context.Host/Hubs/IndexingHub.cs`.
+- **Files/projects affected:** `apps/host/Context.Dashboard.Server/Hooks/*` (extract shared auth), `apps/host/Context.Dashboard.Server/Api/*Endpoints.cs`, `apps/host/Context.Dashboard.Server/Program.cs`, `apps/host/Context.Dashboard.Server/Hubs/IndexingHub.cs`.
 - **Dependencies:** None (can land alongside or after BACKLOG-01).
 - **Acceptance criteria:** Any request to a protected endpoint without a valid bearer token returns 401. Requests with the valid token behave exactly as before.
 - **Tests required:** `HostHttpE2ETests` cases per endpoint group asserting 401 without token, 200 with token.
@@ -550,7 +550,7 @@ Each item is independently actionable by Claude Code. IDs match §C/§K/§L.
 
 **BACKLOG-05 — Wire `FileWatcherHostedService` to the job queue (or remove dead job types)**
 - **Description:** Decide and implement one direction: (a) change `FileWatcherHostedService`'s per-file reindex trigger to `jobQueue.EnqueueAsync(JobType.IndexFile, ...)` instead of a direct `Task.Run` pipeline call, giving it retry/backoff/crash-recovery; or (b) if the direct-call path is intentionally preferred, delete `JobType.IndexFile`/`ParseFile` and their handlers as dead code.
-- **Files/projects affected:** `apps/host/Context.Host/BackgroundServices/FileWatcherHostedService.cs`, `src/Context.Application/Jobs/Handlers/*` (IndexFile/ParseFile handlers), `src/Context.Application/Jobs/IJobQueue.cs`/`JobType`.
+- **Files/projects affected:** `apps/host/Context.Dashboard.Server/BackgroundServices/FileWatcherHostedService.cs`, `src/Context.Application/Jobs/Handlers/*` (IndexFile/ParseFile handlers), `src/Context.Application/Jobs/IJobQueue.cs`/`JobType`.
 - **Dependencies:** None.
 - **Acceptance criteria:** Either single-file changes now flow through the job queue with observable job records, or the unused job types no longer exist in the codebase.
 - **Tests required:** If (a): new test asserting a file-watcher event enqueues a job and the job handler indexes the file. If (b): existing tests for the removed handlers deleted, no dangling references.
@@ -590,7 +590,7 @@ Each item is independently actionable by Claude Code. IDs match §C/§K/§L.
 
 **BACKLOG-10 — Delimit indexed content in hook-delivered context**
 - **Description:** In `HookEndpoints.FormatContextPack`, wrap delivered snippets/notes with explicit delimiters and a short instruction that the enclosed content is retrieved data, not instructions to follow.
-- **Files/projects affected:** `apps/host/Context.Host/Hooks/HookEndpoints.cs`.
+- **Files/projects affected:** `apps/host/Context.Dashboard.Server/Hooks/HookEndpoints.cs`.
 - **Dependencies:** None.
 - **Acceptance criteria:** Formatted output includes the delimiter/instruction wrapper around all retrieved content sections.
 - **Tests required:** Existing `HookEndpoints` formatting tests updated to assert the wrapper is present.

@@ -4,9 +4,11 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Context.Claude.Hooks;
-using Context.Host;
-using Context.Host.Api;
-using Context.Host.Hooks;
+using Context.Domain.Entities;
+using Context.Dashboard.Server;
+using Context.Dashboard.Server.Api;
+using Context.Dashboard.Server.Hooks;
+using Context.Dashboard.Server.Security;
 using Context.Infrastructure;
 using Context.Retrieval.Abstractions;
 using FluentAssertions;
@@ -18,10 +20,10 @@ using Microsoft.Extensions.Hosting;
 namespace Context.IntegrationTests;
 
 /// <summary>
-/// Real HTTP-level end-to-end coverage for <c>Context.Host</c>: boots the actual ASP.NET Core app
+/// Real HTTP-level end-to-end coverage for <c>Context.Dashboard.Server</c>: boots the actual ASP.NET Core app
 /// (Kestrel swapped for <c>TestServer</c> by <see cref="WebApplicationFactory{TEntryPoint}"/>, but
 /// everything else — DI composition across every layer, EF Core/SQLite, the <c>JobDispatcher</c>
-/// hosted service, <c>FileWatcherHostedService</c>, and hook/REST/MCP bearer-token auth — wired
+/// hosted service, <c>ProjectFileWatcherManager</c>, and hook/REST/MCP bearer-token auth — wired
 /// exactly as production does) and drives it purely through its public HTTP surface. This is
 /// deliberately separate from <c>GoldenPathE2ETests</c> (same project), which exercises the engine
 /// via direct DI composition with no HTTP involved at all.
@@ -31,14 +33,14 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
 {
     /// <summary>
     /// Shared with <see cref="HostHttpProductionCorsTests"/> so xunit never runs that class's
-    /// Program instance concurrently with this one's — both boot the real <c>Context.Host</c>
+    /// Program instance concurrently with this one's — both boot the real <c>Context.Dashboard.Server</c>
     /// <see cref="Program"/> via <see cref="WebApplicationFactory{TEntryPoint}"/>, and only one may
     /// ever be live at a time (see <see cref="HostHttpWebApplicationFactory"/>'s remarks: Program.cs
     /// sets the global static Serilog.Log.Logger). xunit runs test classes within one collection
     /// strictly sequentially — one class's IClassFixture fully constructed, run, and disposed
     /// before the next class in the collection starts — which is exactly the guarantee needed here.
     /// </summary>
-    public const string CollectionName = "Context.Host HTTP (sequential — one live Program at a time)";
+    public const string CollectionName = "Context.Dashboard.Server HTTP (sequential — one live Program at a time)";
 
     private static readonly JsonSerializerOptions ResponseJsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -64,7 +66,7 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         var project = await AssertProjectCreateAndRoundTripAsync(client);
         await AssertProtectedEndpointRequiresBearerTokenAsync(client);
         await AssertHookAuthAsync(client);
-        await AssertSearchSmokeAsync(client, project.Id);
+        await AssertSearchSmokeAsync(client, project);
     }
 
     /// <summary>GET /health: 2xx, and every status field <see cref="HealthEndpoints"/> aggregates reflects a healthy, freshly-migrated process.</summary>
@@ -84,11 +86,14 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
     }
 
     /// <summary>
-    /// Builds a request carrying the correct bearer token — every REST route but /health and
-    /// /api/auth/token now requires one (BACKLOG-02), and the shared <c>client</c> deliberately has
-    /// no default Authorization header so each call site's auth is explicit and visible.
+    /// Builds a request carrying the given bearer token — every REST route but /health now requires
+    /// one (BACKLOG-02), and the shared <c>client</c> deliberately has no default Authorization
+    /// header so each call site's auth is explicit and visible. <paramref name="bearerToken"/> is
+    /// explicit rather than defaulted to a single factory token because Phase 3 has three distinct
+    /// tokens in play here — the shared admin token, the pre-seeded "hook project"'s own token, and
+    /// whatever project-specific token an endpoint under test just minted.
     /// </summary>
-    private HttpRequestMessage CreateAuthorizedRequest(HttpMethod method, string url, object? jsonBody = null)
+    private static HttpRequestMessage CreateAuthorizedRequest(HttpMethod method, string url, string bearerToken, object? jsonBody = null)
     {
         var request = new HttpRequestMessage(method, url);
         if (jsonBody is not null)
@@ -96,18 +101,24 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
             request.Content = JsonContent.Create(jsonBody);
         }
 
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _factory.BearerToken);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
         return request;
     }
 
-    /// <summary>POST /api/projects then GET /api/projects/{id}: the created project round-trips through the real repository/DB.</summary>
+    /// <summary>
+    /// POST /api/projects (admin-token-gated — a brand-new project has no bearer token of its own
+    /// yet) then GET /api/projects/{id} using the project's OWN freshly-minted token (proving
+    /// <see cref="ProjectEndpoints"/>'s <c>RequireOwnProjectOrAdminAsync</c> filter's per-project
+    /// path, not just its admin fallback): the created project round-trips through the real
+    /// repository/DB.
+    /// </summary>
     private async Task<ProjectDto> AssertProjectCreateAndRoundTripAsync(HttpClient client)
     {
         var rootPath = Path.Combine(_factory.TempRoot, "widget-service");
         var expectedRootPath = Path.GetFullPath(rootPath);
         var createRequest = new CreateProjectRequest("Widget Service", rootPath);
 
-        using var createHttpRequest = CreateAuthorizedRequest(HttpMethod.Post, "/api/projects", createRequest);
+        using var createHttpRequest = CreateAuthorizedRequest(HttpMethod.Post, "/api/projects", _factory.AdminToken, createRequest);
         var createResponse = await client.SendAsync(createHttpRequest);
         createResponse.StatusCode.Should().Be(HttpStatusCode.Created);
         createResponse.Headers.Location.Should().NotBeNull();
@@ -116,9 +127,10 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         created.Should().NotBeNull();
         created!.Name.Should().Be("Widget Service");
         created.RootPath.Should().Be(expectedRootPath);
+        created.Token.Should().NotBeNullOrWhiteSpace("CreateAsync mints and returns the project's own bearer token exactly once");
         createResponse.Headers.Location!.ToString().Should().Contain(created.Id.ToString());
 
-        using var getHttpRequest = CreateAuthorizedRequest(HttpMethod.Get, $"/api/projects/{created.Id}");
+        using var getHttpRequest = CreateAuthorizedRequest(HttpMethod.Get, $"/api/projects/{created.Id}", created.Token!);
         var getResponse = await client.SendAsync(getHttpRequest);
         getResponse.IsSuccessStatusCode.Should().BeTrue();
 
@@ -156,10 +168,16 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         output!.Block.Should().BeFalse();
     }
 
-    /// <summary>GET /api/search against a project with nothing indexed: a well-formed, empty pack — not an error — proving the whole search DI chain is wired.</summary>
-    private async Task AssertSearchSmokeAsync(HttpClient client, Guid projectId)
+    /// <summary>
+    /// GET /api/search against the freshly-created project's own bearer token, with nothing
+    /// indexed: a well-formed, empty pack — not an error — proving the whole search DI chain is
+    /// wired. <see cref="SearchEndpoints"/> derives the project entirely from the resolved bearer
+    /// token (<c>CurrentProjectAccessor</c>), not from any client-supplied project id, so the
+    /// project's own <see cref="ProjectDto.Token"/> is what selects which project is searched.
+    /// </summary>
+    private async Task AssertSearchSmokeAsync(HttpClient client, ProjectDto project)
     {
-        using var request = CreateAuthorizedRequest(HttpMethod.Get, $"/api/search?projectId={projectId}&q=hello%20world");
+        using var request = CreateAuthorizedRequest(HttpMethod.Get, "/api/search?q=hello%20world", project.Token!);
         var response = await client.SendAsync(request);
         response.IsSuccessStatusCode.Should().BeTrue("search over an unindexed project must degrade to an empty pack, never an error");
 
@@ -171,13 +189,20 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         pack.Truncated.Should().BeFalse();
     }
 
-    /// <summary>GET /api/projects: 401 with no Authorization header, 200 with the correct bearer token — spot-checks that <c>BearerTokenAuth.RequireBearerTokenFilter</c> is really wired onto a REST group (ProjectEndpoints), not just onto /hooks (BACKLOG-02).</summary>
+    /// <summary>
+    /// GET /api/sessions: 401 with no Authorization header, 200 with the pre-seeded "hook
+    /// project"'s own bearer token — spot-checks that <c>BearerTokenAuth.RequireBearerTokenFilter</c>
+    /// is really wired onto a plain per-project REST group (<see cref="SessionEndpoints"/>), not
+    /// just onto /hooks (BACKLOG-02). Deliberately NOT /api/projects here: project creation/listing
+    /// are admin-token-gated now (see <see cref="AssertProjectCreateAndRoundTripAsync"/>), not
+    /// reachable with a per-project bearer token at all.
+    /// </summary>
     private async Task AssertProtectedEndpointRequiresBearerTokenAsync(HttpClient client)
     {
-        var unauthorizedResponse = await client.GetAsync("/api/projects");
+        var unauthorizedResponse = await client.GetAsync("/api/sessions");
         unauthorizedResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized, "no Authorization header was sent");
 
-        using var authorizedRequest = CreateAuthorizedRequest(HttpMethod.Get, "/api/projects");
+        using var authorizedRequest = CreateAuthorizedRequest(HttpMethod.Get, "/api/sessions", _factory.BearerToken);
         var authorizedResponse = await client.SendAsync(authorizedRequest);
         authorizedResponse.IsSuccessStatusCode.Should().BeTrue("the correct bearer token was sent");
     }
@@ -205,7 +230,7 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
     }
 
     /// <summary>
-    /// A <see cref="WebApplicationFactory{TEntryPoint}"/> for the real <c>Context.Host</c>
+    /// A <see cref="WebApplicationFactory{TEntryPoint}"/> for the real <c>Context.Dashboard.Server</c>
     /// <see cref="Program"/>, isolated into its own throwaway project root.
     /// </summary>
     /// <remarks>
@@ -217,7 +242,7 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
     /// itself) must therefore exist before that first access, and a fixture constructor — run once
     /// by xunit before any test in the class executes — is exactly that point.
     /// <para/>
-    /// <b>Why the database is migrated by hand here:</b> <c>Context.Host</c>'s own <c>Program.cs</c>
+    /// <b>Why the database is migrated by hand here:</b> <c>Context.Dashboard.Server</c>'s own <c>Program.cs</c>
     /// never calls <c>Database.Migrate()</c> — in real usage that is the CLI's job (see
     /// <c>Context.Cli</c>'s <c>InitializeAsync(root, migrate: true, ...)</c>, run once by
     /// <c>context claude install</c>/<c>context init</c> before the host is ever started). Without
@@ -233,7 +258,21 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
     {
         public string TempRoot { get; }
 
+        /// <summary>
+        /// The pre-seeded "hook project"'s own per-project bearer token (see the constructor's
+        /// remarks on <see cref="ProjectTokenBackfill"/>) — what a hook script or any other
+        /// per-project caller presents to authenticate as THIS project specifically.
+        /// </summary>
         public string BearerToken { get; } = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+
+        /// <summary>
+        /// The shared <c>CONTEXT_PLATFORM_ADMIN_TOKEN</c> (see <see cref="AdminTokenAuth"/>) — gates
+        /// project creation/listing, which a not-yet-existing project's own <see cref="BearerToken"/>
+        /// cannot authorize (Phase 3).
+        /// </summary>
+        public string AdminToken { get; } = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+
+        public Guid ProjectId { get; } = Guid.NewGuid();
 
         public HostHttpWebApplicationFactory()
         {
@@ -252,18 +291,44 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
                 migrationContext.Database.Migrate();
             }
 
+            // Seeds a Project row with NO BearerTokenHash yet — exactly the pre-Phase-3-install
+            // shape ProjectTokenBackfill.ReconcileAsync exists to reconcile. Program.cs runs that
+            // reconciliation once at startup (right after migration, still ahead of any test HTTP
+            // call), and it hashes BearerToken below into this row by matching RootPath against the
+            // local config file written next — so by the time AssertHookAuthAsync runs, BearerToken
+            // really does authenticate as this project, the same way a pre-Phase-3 install's token
+            // keeps working after an upgrade rather than needing a re-install.
+            using (var seedContext = new ContextDbContext(migrationOptions))
+            {
+                seedContext.Projects.Add(new Project
+                {
+                    Id = ProjectId,
+                    Name = "Hook Project",
+                    RootPath = Path.GetFullPath(TempRoot),
+                    CreatedAt = DateTimeOffset.UtcNow,
+                });
+                seedContext.SaveChanges();
+            }
+
             var claudeDir = Path.Combine(TempRoot, ".claude");
             Directory.CreateDirectory(claudeDir);
             var localConfig = new HookLocalConfig(
-                ProjectId: Guid.NewGuid().ToString(),
+                ProjectId: ProjectId.ToString(),
                 Port: ContextHostOptions.DefaultPort,
                 BearerToken: BearerToken,
                 GeneratedAt: DateTimeOffset.UtcNow.ToString("O"));
-            File.WriteAllText(Path.Combine(claudeDir, "context-platform.local.json"), JsonSerializer.Serialize(localConfig));
+            System.IO.File.WriteAllText(Path.Combine(claudeDir, "context-platform.local.json"), JsonSerializer.Serialize(localConfig));
 
             // Must land before this factory's first lazy host build (the test method's first
-            // CreateClient() call) — see the type-level remarks above.
+            // CreateClient() call) — see the type-level remarks above. CONTEXT_PLATFORM_DATA_DIR is
+            // pinned to this fixture's own isolated dataDir too: ContextHostOptions.FromEnvironment
+            // now resolves the database via SharedDataLocation (a shared, machine-level default),
+            // which would otherwise point every test fixture at the SAME on-disk database.
+            // CONTEXT_PLATFORM_ADMIN_TOKEN is read once by AdminTokenProvider via IConfiguration,
+            // whose environment-variable provider loads at host build time same as the other two.
             Environment.SetEnvironmentVariable("CONTEXT_PLATFORM_ROOT", TempRoot);
+            Environment.SetEnvironmentVariable("CONTEXT_PLATFORM_DATA_DIR", dataDir);
+            Environment.SetEnvironmentVariable("CONTEXT_PLATFORM_ADMIN_TOKEN", AdminToken);
         }
 
         /// <summary>

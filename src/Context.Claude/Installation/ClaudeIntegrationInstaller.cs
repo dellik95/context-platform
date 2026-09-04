@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Context.Shared;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -12,11 +12,11 @@ namespace Context.Claude.Installation;
 
 /// <summary>
 /// Default <see cref="IClaudeIntegrationInstaller"/>. Writes/merges everything a project needs to
-/// talk to Context.Host from inside Claude Code:
+/// talk to Context.Dashboard.Server from inside Claude Code:
 /// <list type="bullet">
 /// <item><c>.claude/hooks/*.sh</c> and <c>.claude/hooks/*.ps1</c> — thin, fail-open hook scripts.</item>
 /// <item><c>.claude/settings.json</c> — merged, not overwritten, to wire the four hooks.</item>
-/// <item><c>.mcp.json</c> — merged, not overwritten, to register the Context.Host MCP server.</item>
+/// <item><c>.mcp.json</c> — merged, not overwritten, to register the Context.Dashboard.Server MCP server.</item>
 /// <item><c>.claude-plugin/plugin.json</c> — the Context Platform plugin manifest.</item>
 /// <item><c>.claude/context-platform.local.json</c> — a per-project bearer token + port, gitignored.</item>
 /// </list>
@@ -40,7 +40,7 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         _logger = logger ?? NullLogger<ClaudeIntegrationInstaller>.Instance;
     }
 
-    public async Task InstallAsync(Guid projectId, string projectRoot, CancellationToken ct)
+    public async Task InstallAsync(Guid projectId, string projectRoot, CancellationToken ct, string? bearerToken = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
         projectRoot = Path.GetFullPath(projectRoot);
@@ -83,18 +83,22 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         await WriteJsonAsync(settingsPath, settings, ct).ConfigureAwait(false);
 
         // Resolved up front (reusing an existing token so re-installing doesn't invalidate a
-        // Context.Host that already has it cached/authorized) because step 3 below now needs it
+        // Context.Dashboard.Server that already has it cached/authorized) because step 3 below now needs it
         // too — /mcp requires the same bearer token as every other REST endpoint (BACKLOG-02).
+        // A caller-supplied `bearerToken` (a shared Context.Dashboard.Server's POST /api/projects response)
+        // always wins over both: that call is the only place this project's *new* raw token is
+        // ever handed back, so reusing whatever was on disk here instead would silently keep
+        // authenticating with a token the host never actually minted for it.
         var localConfigPath = Path.Combine(claudeDir, LocalConfigFileName);
         var existingToken = await TryReadExistingTokenAsync(localConfigPath, ct).ConfigureAwait(false);
-        var bearerToken = existingToken ?? GenerateBearerToken();
+        var resolvedToken = bearerToken ?? existingToken ?? BearerTokenGenerator.Generate();
 
-        // 3) .mcp.json — merge the Context.Host MCP server entry.
+        // 3) .mcp.json — merge the Context.Dashboard.Server MCP server entry.
         var mcpPath = Path.Combine(projectRoot, ".mcp.json");
         BackupIfExists(mcpPath, projectRoot, backupRoot);
         var mcpConfig = await ReadOrCreateJsonObjectAsync(mcpPath, ct).ConfigureAwait(false);
         var mcpUrl = $"http://127.0.0.1:{_options.HostPort}{_options.McpPath}";
-        SettingsJsonMerger.MergeMcpServer(mcpConfig, mcpUrl, bearerToken);
+        SettingsJsonMerger.MergeMcpServer(mcpConfig, mcpUrl, resolvedToken);
         await WriteJsonAsync(mcpPath, mcpConfig, ct).ConfigureAwait(false);
 
         // 4) .claude-plugin/plugin.json manifest.
@@ -108,7 +112,7 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         {
             ["projectId"] = projectId.ToString(),
             ["port"] = _options.HostPort,
-            ["bearerToken"] = bearerToken,
+            ["bearerToken"] = resolvedToken,
             ["generatedAt"] = DateTimeOffset.UtcNow.ToString("O"),
         };
         await WriteJsonAsync(localConfigPath, localConfig, ct).ConfigureAwait(false);
@@ -265,16 +269,9 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         }
     }
 
-    private static string GenerateBearerToken()
-    {
-        Span<byte> bytes = stackalloc byte[32];
-        RandomNumberGenerator.Fill(bytes);
-        return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-    }
-
     private static async Task EnsureGitignoreEntriesAsync(string projectRoot, string backupRoot, CancellationToken ct)
     {
-        string[] required = [".claude/context-platform.local.json", ".context/"];
+        string[] required = [".claude/context-platform.local.json", ".claude/hooks.log", ".context/"];
         var path = Path.Combine(projectRoot, ".gitignore");
 
         var existingLines = File.Exists(path)

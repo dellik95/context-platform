@@ -3,7 +3,7 @@ using Context.Domain.Entities;
 
 namespace Context.Memory.Extraction;
 
-/// <summary>Builds the prompt that asks an LLM to propose candidate durable memories from a session summary.</summary>
+/// <summary>Builds the prompt that asks an LLM to propose candidate durable memories from one session summary chunk.</summary>
 internal static class MemoryExtractionPromptBuilder
 {
     public const string SystemPrompt =
@@ -13,6 +13,13 @@ internal static class MemoryExtractionPromptBuilder
         include a memory if it captures something worth remembering long-term (an architectural
         decision, a non-obvious discovery about the codebase, a completed feature/bugfix/refactor
         worth recording, or an open issue). Do not restate trivia.
+
+        Prefer fewer, higher-signal memories over many small ones. Do not split one dominant
+        thread into several candidates that each restate the same fact from a different angle —
+        if a single thread clearly dominates the session and everything else is trivial, propose
+        one memory for it, not a handful of near-duplicates. Only propose more than one memory
+        when they describe genuinely distinct decisions, discoveries, or fixes. Do not invent
+        diversity where none exists.
 
         Zero memories is a normal, often CORRECT answer — a session can do real work and still
         contain nothing worth remembering. Do not manufacture a memory just to have something to
@@ -63,24 +70,27 @@ internal static class MemoryExtractionPromptBuilder
 
         FILES_READ / FILES_MODIFIED are the specific files THIS memory is about — not every file
         touched in the whole session, only the ones this particular decision/fix/discovery
-        concerns. Use exact relative paths that literally appear in the session context below; never
-        invent a path. FILES_READ is for files that were examined/relevant but not changed;
+        concerns. Choose FILES_READ only from the "Files read" list below, and FILES_MODIFIED only
+        from the "Changed files" list below — never invent a path, and never move a path from one
+        list into the other (a file that was only read is not "modified" just because this memory
+        discusses it). FILES_READ is for files that were examined/relevant but not changed;
         FILES_MODIFIED is for files that were actually edited because of this memory's content. Omit
         either block entirely if it doesn't apply (most memories only need FILES_MODIFIED, or neither).
 
         If n is 0, respond with only "MEMORY_COUNT: 0" and nothing else.
         """;
 
-    public static string BuildUserPrompt(SessionSummary summary)
+    public static string BuildUserPrompt(SessionSummaryChunk chunk)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"Session: {summary.SessionId}");
-        AppendSection(sb, "Completed", summary.Completed);
-        AppendSection(sb, "Discovered", summary.Discovered);
-        AppendSection(sb, "Decisions", summary.Decisions);
-        AppendSection(sb, "Changed files", summary.ChangedFilesJson);
-        AppendSection(sb, "Open issues", summary.OpenIssues);
-        AppendSection(sb, "Next steps", summary.NextSteps);
+        sb.AppendLine($"Session: {chunk.SessionId}");
+        AppendSection(sb, "Completed", chunk.Completed);
+        AppendSection(sb, "Discovered", chunk.Discovered);
+        AppendSection(sb, "Decisions", chunk.Decisions);
+        AppendSection(sb, "Files read", chunk.FilesReadJson);
+        AppendSection(sb, "Changed files", chunk.ChangedFilesJson);
+        AppendSection(sb, "Open issues", chunk.OpenIssues);
+        AppendSection(sb, "Next steps", chunk.NextSteps);
         return sb.ToString();
     }
 

@@ -20,7 +20,7 @@ public interface IContextEngine
     Task RecordEventAsync(Guid sessionId, Context.Domain.Enums.SessionEventType type, object payload, CancellationToken ct);
 
     /// <summary>Enqueues <c>SummarizeSession</c>, which itself chains into <c>ExtractMemory</c> once the summary is ready.</summary>
-    Task EndSessionAsync(Guid sessionId, CancellationToken ct);
+    Task EndSessionAsync(Guid projectId, Guid sessionId, CancellationToken ct);
 
     Task<object> ProjectInfoAsync(Guid projectId, CancellationToken ct);
 }

@@ -8,7 +8,7 @@ namespace Context.Claude.Installation;
 public class ClaudeIntegrationOptions
 {
     /// <summary>
-    /// TCP port Context.Host listens on for hook callbacks
+    /// TCP port Context.Dashboard.Server listens on for hook callbacks
     /// (<c>http://127.0.0.1:{HostPort}/hooks/{name}</c>). Stored in the generated
     /// <c>.claude/context-platform.local.json</c> so it can change without regenerating scripts.
     /// </summary>
@@ -18,17 +18,17 @@ public class ClaudeIntegrationOptions
     public string HookVersion { get; set; } = "0.1.0";
 
     /// <summary>
-    /// Timeout (seconds) the generated hook scripts use when calling Context.Host. Kept short so a
+    /// Timeout (seconds) the generated hook scripts use when calling Context.Dashboard.Server. Kept short so a
     /// slow or unreachable Context Platform never meaningfully delays Claude Code — the scripts fail
     /// open (exit 0, no output) on any error, including timeout.
     /// </summary>
     public int HookTimeoutSeconds { get; set; } = 2;
 
     /// <summary>
-    /// Path (relative to <see cref="HostPort"/>'s origin) that Context.Host maps its MCP endpoint
-    /// to — see <c>app.MapMcp(...)</c> in <c>Context.Host/Program.cs</c>. The installer writes
+    /// Path (relative to <see cref="HostPort"/>'s origin) that Context.Dashboard.Server maps its MCP endpoint
+    /// to — see <c>app.MapMcp(...)</c> in <c>Context.Dashboard.Server/Program.cs</c>. The installer writes
     /// <c>.mcp.json</c> as an HTTP-type server entry (<c>http://127.0.0.1:{HostPort}{McpPath}</c>)
-    /// rather than a spawned stdio command, because Context.Host already serves MCP over HTTP on
+    /// rather than a spawned stdio command, because Context.Dashboard.Server already serves MCP over HTTP on
     /// this same always-running process (the spec's "one host process" decision) — there is no
     /// separate stdio server to launch.
     /// </summary>

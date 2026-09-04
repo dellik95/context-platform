@@ -3,9 +3,9 @@ using System.Text;
 using Context.Application.Abstractions;
 using Context.Infrastructure;
 using Context.Providers;
+using Context.Providers.Abstractions;
 using Context.Retrieval.Abstractions;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.AI;
 
 namespace Context.Application.Adapters;
 
@@ -30,7 +30,7 @@ namespace Context.Application.Adapters;
 public sealed class SqliteSearchIndex(
     IDbContextFactory<ContextDbContext> dbContextFactory,
     IChunkVectorIndex vectorIndex,
-    IEmbeddingGenerator<string, Embedding<float>> embeddingGenerator) : ISearchIndex
+    IProviderResolver providerResolver) : ISearchIndex
 {
     private const int LexicalLimit = 50;
     private const int VectorLimit = 50;
@@ -101,6 +101,7 @@ public sealed class SqliteSearchIndex(
     public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double CosineScore)>> VectorSearchAsync(
         Guid projectId, float[] queryEmbedding, CancellationToken ct)
     {
+        var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
         var hits = await vectorIndex.SearchAsync(projectId, embeddingGenerator.GetProviderName(), queryEmbedding, VectorLimit, ct)
             .ConfigureAwait(false);
         if (hits.Count == 0)

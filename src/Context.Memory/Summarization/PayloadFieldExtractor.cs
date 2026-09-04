@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Context.Domain.Entities;
+using Context.Domain.Enums;
 
 namespace Context.Memory.Summarization;
 
@@ -6,6 +8,20 @@ namespace Context.Memory.Summarization;
 internal static class PayloadFieldExtractor
 {
     private static readonly string[] PathFieldNames = ["path", "relativePath", "filePath", "file"];
+
+    /// <summary>Distinct, sorted file paths extracted from events of the given type — the deterministic
+    /// ground truth for what was actually read/edited, as opposed to LLM-transcribed prose.</summary>
+    public static List<string> ExtractDistinctPaths(IReadOnlyList<SessionEvent> events, SessionEventType type)
+    {
+        return events
+            .Where(e => e.Type == type)
+            .Select(e => TryExtractPath(e.PayloadJson))
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p!)
+            .Distinct()
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
 
     public static string? TryExtractPath(string payloadJson)
     {

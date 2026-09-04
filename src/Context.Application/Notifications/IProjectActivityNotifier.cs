@@ -11,7 +11,7 @@ public enum ProjectActivityKind
 /// Fire-and-forget notification for "something changed for this project, a live view might want
 /// to refresh" - deliberately coarse (no entity id) so Context.Application never has to know
 /// whether anything is even listening. Mirrors <c>Context.Application.Indexing.IIndexingProgressReporter</c>'s
-/// seam: the default registration is a no-op, Context.Host overrides it with a SignalR-backed one.
+/// seam: the default registration is a no-op, Context.Dashboard.Server overrides it with a SignalR-backed one.
 /// </summary>
 public interface IProjectActivityNotifier
 {

@@ -4,6 +4,8 @@ using Context.Domain.Enums;
 using Context.Indexing.Abstractions;
 using Context.Infrastructure.Abstractions;
 using Context.Application.Jobs;
+using Context.Providers.Abstractions;
+using Context.Providers.Embeddings;
 using Microsoft.Extensions.AI;
 using FluentAssertions;
 using Moq;
@@ -30,7 +32,7 @@ public sealed class IndexingPipelineTests : IDisposable
     private readonly Mock<ISymbolRepository> _symbolRepository = new();
     private readonly Mock<IChunkRepository> _chunkRepository = new();
     private readonly Mock<IEmbeddingRepository> _embeddingRepository = new();
-    private readonly Mock<IEmbeddingGenerator<string, Embedding<float>>> _embeddingGenerator = new();
+    private readonly Mock<IProviderResolver> _providerResolver = new();
     private readonly Mock<IFileScanner> _fileScanner = new();
     private readonly Mock<IContentHasher> _hasher = new();
     private readonly Mock<IJobQueue> _jobQueue = new();
@@ -61,10 +63,14 @@ public sealed class IndexingPipelineTests : IDisposable
         _embeddingRepository.Setup(e => e.GetMissingContentHashesAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<string>)[]);
 
+        _providerResolver
+            .Setup(r => r.GetEmbeddingGeneratorAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new NoOpEmbeddingGenerator());
+
         _hasher.Setup(h => h.HashFile(It.IsAny<string>())).Returns((string path) => $"hash:{path}");
         _hasher.Setup(h => h.HashText(It.IsAny<string>())).Returns((string text) => $"hash:{text.GetHashCode()}");
 
-        _jobQueue.Setup(q => q.EnqueueAsync(It.IsAny<JobType>(), It.IsAny<object>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+        _jobQueue.Setup(q => q.EnqueueAsync(It.IsAny<JobType>(), It.IsAny<object>(), It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Guid.NewGuid());
 
         _progressReporter
@@ -117,7 +123,7 @@ public sealed class IndexingPipelineTests : IDisposable
             _symbolRepository.Object,
             _chunkRepository.Object,
             _embeddingRepository.Object,
-            _embeddingGenerator.Object,
+            _providerResolver.Object,
             _fileScanner.Object,
             ignoreFactory: _ => Mock.Of<IIgnoreMatcher>(),
             parsers: [new ThrowingFakeParser()],

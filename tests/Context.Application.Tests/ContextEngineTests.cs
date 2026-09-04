@@ -261,6 +261,64 @@ public sealed class ContextEngineTests
         _graphTraversal.Verify(t => t.BlastRadiusAsync(symbolId, maxHops, It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    // ---- 3b. StartSessionAsync dedupes by claudeSessionId ----
+
+    [Fact]
+    public async Task StartSessionAsync_reuses_existing_session_with_the_same_claudeSessionId()
+    {
+        var projectId = Guid.NewGuid();
+        var claudeSessionId = "claude-session-abc";
+        var existing = new Session
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = projectId,
+            ClaudeSessionId = claudeSessionId,
+            StartedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+            Status = SessionStatus.Active
+        };
+
+        _sessionRepository.Setup(r => r.GetByClaudeSessionIdAsync(projectId, claudeSessionId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existing);
+
+        var result = await _sut.StartSessionAsync(projectId, claudeSessionId, CancellationToken.None);
+
+        result.Should().Be(existing.Id);
+        _sessionRepository.Verify(r => r.AddAsync(It.IsAny<Session>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task StartSessionAsync_creates_a_new_session_when_no_existing_row_has_that_claudeSessionId()
+    {
+        var projectId = Guid.NewGuid();
+        var claudeSessionId = "claude-session-new";
+
+        _sessionRepository.Setup(r => r.GetByClaudeSessionIdAsync(projectId, claudeSessionId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Session?)null);
+        _sessionRepository.Setup(r => r.AddAsync(It.IsAny<Session>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Session s, CancellationToken _) => s);
+
+        var result = await _sut.StartSessionAsync(projectId, claudeSessionId, CancellationToken.None);
+
+        result.Should().NotBe(Guid.Empty);
+        _sessionRepository.Verify(r => r.AddAsync(
+            It.Is<Session>(s => s.ProjectId == projectId && s.ClaudeSessionId == claudeSessionId),
+            It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task StartSessionAsync_never_looks_up_by_claudeSessionId_when_it_is_null()
+    {
+        var projectId = Guid.NewGuid();
+        _sessionRepository.Setup(r => r.AddAsync(It.IsAny<Session>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Session s, CancellationToken _) => s);
+
+        await _sut.StartSessionAsync(projectId, claudeSessionId: null, CancellationToken.None);
+
+        _sessionRepository.Verify(
+            r => r.GetByClaudeSessionIdAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     // ---- 4. EndSessionAsync enqueues SummarizeSession via IJobQueue ----
 
     [Fact]
@@ -275,17 +333,18 @@ public sealed class ContextEngineTests
             Status = SessionStatus.Active
         };
 
-        _sessionRepository.Setup(r => r.GetByIdAsync(sessionId, It.IsAny<CancellationToken>())).ReturnsAsync(session);
+        _sessionRepository.Setup(r => r.GetByIdAsync(session.ProjectId, sessionId, It.IsAny<CancellationToken>())).ReturnsAsync(session);
         _jobQueue
-            .Setup(q => q.EnqueueAsync(JobType.SummarizeSession, It.IsAny<object>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(q => q.EnqueueAsync(JobType.SummarizeSession, It.IsAny<object>(), It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Guid.NewGuid());
 
-        await _sut.EndSessionAsync(sessionId, CancellationToken.None);
+        await _sut.EndSessionAsync(session.ProjectId, sessionId, CancellationToken.None);
 
         _jobQueue.Verify(
             q => q.EnqueueAsync(
                 JobType.SummarizeSession,
                 It.Is<object>(p => p is SummarizeSessionPayload && ((SummarizeSessionPayload)p).SessionId == sessionId),
+                session.ProjectId,
                 It.IsAny<int>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -299,13 +358,14 @@ public sealed class ContextEngineTests
     public async Task EndSessionAsync_throws_when_session_does_not_exist()
     {
         var sessionId = Guid.NewGuid();
-        _sessionRepository.Setup(r => r.GetByIdAsync(sessionId, It.IsAny<CancellationToken>())).ReturnsAsync((Session?)null);
+        var projectId = Guid.NewGuid();
+        _sessionRepository.Setup(r => r.GetByIdAsync(projectId, sessionId, It.IsAny<CancellationToken>())).ReturnsAsync((Session?)null);
 
-        var act = () => _sut.EndSessionAsync(sessionId, CancellationToken.None);
+        var act = () => _sut.EndSessionAsync(projectId, sessionId, CancellationToken.None);
 
         await act.Should().ThrowAsync<KeyNotFoundException>();
         _jobQueue.Verify(
-            q => q.EnqueueAsync(It.IsAny<JobType>(), It.IsAny<object>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            q => q.EnqueueAsync(It.IsAny<JobType>(), It.IsAny<object>(), It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 

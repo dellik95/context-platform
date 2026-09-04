@@ -8,7 +8,7 @@ namespace Context.Retrieval.Abstractions;
 /// </summary>
 public interface IEmbeddingLookup
 {
-    Task<float[]> EmbedAsync(string text, CancellationToken ct);
+    Task<float[]> EmbedAsync(Guid projectId, string text, CancellationToken ct);
 
-    Task<float[][]> EmbedBatchAsync(IReadOnlyList<string> texts, CancellationToken ct);
+    Task<float[][]> EmbedBatchAsync(Guid projectId, IReadOnlyList<string> texts, CancellationToken ct);
 }

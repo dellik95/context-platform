@@ -100,6 +100,20 @@ public sealed class ContextEngine(
 
     public async Task<Guid> StartSessionAsync(Guid projectId, string? claudeSessionId, CancellationToken ct)
     {
+        // Claude Code fires SessionStart more than once per real session (resume, /clear,
+        // /compact all re-trigger it) and Context.Dashboard.Server's in-memory ClaudeSessionMap cache (Hooks
+        // layer) is lost across a restart -- either way, the same claudeSessionId can reach here
+        // more than once. Reuse the existing row instead of creating a duplicate Session per
+        // logical Claude Code session (claudeSessionId is stable for its whole lifetime).
+        if (claudeSessionId is not null)
+        {
+            var existing = await sessionRepository.GetByClaudeSessionIdAsync(projectId, claudeSessionId, ct).ConfigureAwait(false);
+            if (existing is not null && existing.ProjectId == projectId)
+            {
+                return existing.Id;
+            }
+        }
+
         var session = new Session
         {
             Id = Guid.NewGuid(),
@@ -131,9 +145,9 @@ public sealed class ContextEngine(
         await sessionRepository.AddEventAsync(sessionEvent, ct).ConfigureAwait(false);
     }
 
-    public async Task EndSessionAsync(Guid sessionId, CancellationToken ct)
+    public async Task EndSessionAsync(Guid projectId, Guid sessionId, CancellationToken ct)
     {
-        var session = await sessionRepository.GetByIdAsync(sessionId, ct).ConfigureAwait(false)
+        var session = await sessionRepository.GetByIdAsync(projectId, sessionId, ct).ConfigureAwait(false)
             ?? throw new KeyNotFoundException($"Session {sessionId} was not found.");
 
         session.Status = SessionStatus.Ended;
@@ -142,7 +156,7 @@ public sealed class ContextEngine(
 
         // SummarizeSessionJobHandler chains into ExtractMemory itself once the summary is ready -
         // see CONTRACTS.md §10's "enqueues SummarizeSession -> ExtractMemory".
-        await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(sessionId), ct: ct).ConfigureAwait(false);
+        await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(sessionId, IsSessionEnd: true), session.ProjectId, ct: ct).ConfigureAwait(false);
     }
 
     public async Task<object> ProjectInfoAsync(Guid projectId, CancellationToken ct)

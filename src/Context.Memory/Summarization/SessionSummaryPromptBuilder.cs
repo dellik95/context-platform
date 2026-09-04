@@ -31,9 +31,6 @@ internal static class SessionSummaryPromptBuilder
         DECISIONS:
         <bullet list of decisions made and why, or "(none)">
 
-        CHANGED_FILES:
-        <one relative file path per line, or "(none)">
-
         OPEN_ISSUES:
         <bullet list of unresolved problems, or "(none)">
 
@@ -43,10 +40,14 @@ internal static class SessionSummaryPromptBuilder
         Be terse and factual. Do not invent information that isn't supported by the events.
         """;
 
-    public static string BuildUserPrompt(Guid sessionId, IReadOnlyList<SessionEvent> events)
+    public static string BuildUserPrompt(Guid sessionId, IReadOnlyList<SessionEvent> events, bool isSlice = false)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Session: {sessionId}");
+        if (isSlice)
+        {
+            sb.AppendLine("This is a later slice of an ongoing session, not its start. Summarize what happened in THIS SLICE of the session, not the whole session so far.");
+        }
         sb.AppendLine($"Total events: {events.Count}");
         sb.AppendLine();
 

@@ -26,12 +26,14 @@ public class ContextDbContext : DbContext
     public DbSet<Session> Sessions => Set<Session>();
     public DbSet<SessionEvent> SessionEvents => Set<SessionEvent>();
     public DbSet<SessionSummary> SessionSummaries => Set<SessionSummary>();
+    public DbSet<SessionSummaryChunk> SessionSummaryChunks => Set<SessionSummaryChunk>();
     public DbSet<Memory> Memories => Set<Memory>();
     public DbSet<MemoryEmbedding> MemoryEmbeddings => Set<MemoryEmbedding>();
     public DbSet<Job> Jobs => Set<Job>();
     public DbSet<Provider> Providers => Set<Provider>();
     public DbSet<ProviderModel> ProviderModels => Set<ProviderModel>();
     public DbSet<ClaudeIntegration> ClaudeIntegrations => Set<ClaudeIntegration>();
+    public DbSet<UsageRecord> UsageRecords => Set<UsageRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

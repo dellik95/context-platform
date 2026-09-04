@@ -6,8 +6,20 @@ namespace Context.Infrastructure.Repositories;
 
 public class SessionRepository(ContextDbContext db) : ISessionRepository
 {
-    public Task<Session?> GetByIdAsync(Guid id, CancellationToken ct) =>
-        db.Sessions.AsNoTracking().FirstOrDefaultAsync(s => s.Id == id, ct);
+    public Task<Session?> GetByIdAsync(Guid projectId, Guid id, CancellationToken ct) =>
+        db.Sessions.AsNoTracking().FirstOrDefaultAsync(s => s.Id == id && s.ProjectId == projectId, ct);
+
+    public async Task<Session?> GetByClaudeSessionIdAsync(Guid projectId, string claudeSessionId, CancellationToken ct)
+    {
+        // Same SQLite/DateTimeOffset ORDER BY limitation as GetEventsAsync/ListByProjectAsync below:
+        // this only ever matches a handful of rows (ideally one) per claudeSessionId, so sorting
+        // client-side is cheap.
+        var matches = await db.Sessions.AsNoTracking()
+            .Where(s => s.ClaudeSessionId == claudeSessionId && s.ProjectId == projectId)
+            .ToListAsync(ct);
+
+        return matches.OrderByDescending(s => s.StartedAt).FirstOrDefault();
+    }
 
     public async Task<Session> AddAsync(Session session, CancellationToken ct)
     {
@@ -53,8 +65,18 @@ public class SessionRepository(ContextDbContext db) : ISessionRepository
         await db.SaveChangesAsync(ct);
     }
 
-    public async Task<IReadOnlyList<SessionEvent>> GetEventsAsync(Guid sessionId, CancellationToken ct)
+    public async Task<IReadOnlyList<SessionEvent>> GetEventsAsync(Guid projectId, Guid sessionId, CancellationToken ct)
     {
+        // SessionEvent has no ProjectId column of its own (only Session does), so ownership is
+        // checked with a cheap existence probe first, then events are fetched by the
+        // already-trusted sessionId — no join through Session on every event row.
+        var owned = await db.Sessions.AsNoTracking()
+            .AnyAsync(s => s.Id == sessionId && s.ProjectId == projectId, ct);
+        if (!owned)
+        {
+            return [];
+        }
+
         // SQLite's EF Core provider cannot translate ORDER BY over DateTimeOffset columns,
         // so the (bounded, per-session) result set is ordered client-side instead.
         var events = await db.SessionEvents.AsNoTracking()
@@ -77,6 +99,7 @@ public class SessionRepository(ContextDbContext db) : ISessionRepository
             existing.Completed = summary.Completed;
             existing.Discovered = summary.Discovered;
             existing.Decisions = summary.Decisions;
+            existing.FilesReadJson = summary.FilesReadJson;
             existing.ChangedFilesJson = summary.ChangedFilesJson;
             existing.OpenIssues = summary.OpenIssues;
             existing.NextSteps = summary.NextSteps;
@@ -86,8 +109,71 @@ public class SessionRepository(ContextDbContext db) : ISessionRepository
         await db.SaveChangesAsync(ct);
     }
 
-    public Task<SessionSummary?> GetSummaryAsync(Guid sessionId, CancellationToken ct) =>
-        db.SessionSummaries.AsNoTracking().FirstOrDefaultAsync(s => s.SessionId == sessionId, ct);
+    public async Task<SessionSummary?> GetSummaryAsync(Guid projectId, Guid sessionId, CancellationToken ct)
+    {
+        // Same ownership-check-then-fetch pattern as GetEventsAsync: SessionSummary has no
+        // ProjectId column of its own, so verify via Session first rather than joining.
+        var owned = await db.Sessions.AsNoTracking()
+            .AnyAsync(s => s.Id == sessionId && s.ProjectId == projectId, ct);
+        if (!owned)
+        {
+            return null;
+        }
+
+        return await db.SessionSummaries.AsNoTracking().FirstOrDefaultAsync(s => s.SessionId == sessionId, ct);
+    }
+
+    public async Task<SessionSummaryChunk> AddSummaryChunkAsync(SessionSummaryChunk chunk, CancellationToken ct)
+    {
+        if (chunk.Id == Guid.Empty)
+        {
+            chunk.Id = Guid.NewGuid();
+        }
+
+        var maxSequence = await db.SessionSummaryChunks
+            .Where(c => c.SessionId == chunk.SessionId)
+            .Select(c => (int?)c.SequenceNumber)
+            .MaxAsync(ct);
+
+        chunk.SequenceNumber = (maxSequence ?? 0) + 1;
+
+        db.SessionSummaryChunks.Add(chunk);
+        await db.SaveChangesAsync(ct);
+        return chunk;
+    }
+
+    public async Task<IReadOnlyList<SessionSummaryChunk>> GetSummaryChunksAsync(Guid projectId, Guid sessionId, CancellationToken ct)
+    {
+        // Same ownership-check-then-fetch pattern as GetEventsAsync: SessionSummaryChunk has no
+        // ProjectId column of its own, so verify via Session first rather than joining.
+        var owned = await db.Sessions.AsNoTracking()
+            .AnyAsync(s => s.Id == sessionId && s.ProjectId == projectId, ct);
+        if (!owned)
+        {
+            return [];
+        }
+
+        return await db.SessionSummaryChunks.AsNoTracking()
+            .Where(c => c.SessionId == sessionId)
+            .OrderBy(c => c.SequenceNumber)
+            .ToListAsync(ct);
+    }
+
+    public async Task<SessionSummaryChunk?> GetSummaryChunkByIdAsync(Guid projectId, Guid chunkId, CancellationToken ct)
+    {
+        // Looked up by chunk id rather than session id, so the ownership check runs the other way
+        // round: fetch the chunk first (cheap, single row), then verify its session belongs to
+        // projectId.
+        var chunk = await db.SessionSummaryChunks.AsNoTracking().FirstOrDefaultAsync(c => c.Id == chunkId, ct);
+        if (chunk is null)
+        {
+            return null;
+        }
+
+        var owned = await db.Sessions.AsNoTracking()
+            .AnyAsync(s => s.Id == chunk.SessionId && s.ProjectId == projectId, ct);
+        return owned ? chunk : null;
+    }
 
     public async Task<IReadOnlyList<SessionListItem>> ListByProjectAsync(Guid projectId, int limit, CancellationToken ct)
     {

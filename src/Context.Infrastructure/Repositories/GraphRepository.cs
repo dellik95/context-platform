@@ -26,6 +26,9 @@ public class GraphRepository(ContextDbContext db) : IGraphRepository
         return await query.ToListAsync(ct);
     }
 
+    public async Task<IReadOnlyList<GraphNode>> GetNodesByKindAsync(Guid projectId, GraphNodeKind kind, CancellationToken ct) =>
+        await db.GraphNodes.AsNoTracking().Where(n => n.ProjectId == projectId && n.Kind == kind).ToListAsync(ct);
+
     public async Task UpsertAsync(IEnumerable<GraphNode> nodes, IEnumerable<GraphEdge> edges, CancellationToken ct)
     {
         await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -95,5 +98,17 @@ public class GraphRepository(ContextDbContext db) : IGraphRepository
 
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
+    }
+
+    public async Task DeleteNodeAsync(Guid id, CancellationToken ct)
+    {
+        var node = await db.GraphNodes.FirstOrDefaultAsync(n => n.Id == id, ct);
+        if (node is null)
+        {
+            return;
+        }
+
+        db.GraphNodes.Remove(node);
+        await db.SaveChangesAsync(ct);
     }
 }

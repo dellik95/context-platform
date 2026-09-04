@@ -18,7 +18,7 @@ namespace Context.Application.Jobs;
 /// something to await instead of polling. Registered as a singleton (see
 /// <c>ServiceCollectionExtensions.AddContextApplication</c>) implementing both
 /// <see cref="IJobQueue"/> (so any scoped consumer can enqueue work) and
-/// <see cref="IHostedService"/> (so <c>Context.Host</c> only has to
+/// <see cref="IHostedService"/> (so <c>Context.Dashboard.Server</c> only has to
 /// <c>services.AddHostedService(sp => sp.GetRequiredService&lt;JobDispatcher&gt;())</c> to get the
 /// background worker pool started/stopped with the app's own lifetime — the
 /// "hosted-service-friendly" part of the brief).
@@ -72,12 +72,13 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         _logger = logger ?? NullLogger<JobDispatcher>.Instance;
     }
 
-    public async Task<Guid> EnqueueAsync(JobType type, object payload, int priority = 0, CancellationToken ct = default)
+    public async Task<Guid> EnqueueAsync(JobType type, object payload, Guid? projectId = null, int priority = 0, CancellationToken ct = default)
     {
         var job = new Job
         {
             Id = Guid.NewGuid(),
             Type = type,
+            ProjectId = projectId,
             PayloadJson = JsonSerializer.Serialize(payload, payload.GetType()),
             Status = JobStatus.Pending,
             Priority = priority,
@@ -144,8 +145,8 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         using var scope = _scopeFactory.CreateScope();
         var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
 
-        var pending = await jobRepository.ListByStatusAsync(JobStatus.Pending, ct).ConfigureAwait(false);
-        var staleRunning = await jobRepository.ListByStatusAsync(JobStatus.Running, ct).ConfigureAwait(false);
+        var pending = await jobRepository.ListByStatusAsync(JobStatus.Pending, null, ct).ConfigureAwait(false);
+        var staleRunning = await jobRepository.ListByStatusAsync(JobStatus.Running, null, ct).ConfigureAwait(false);
 
         foreach (var job in staleRunning)
         {

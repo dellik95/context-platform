@@ -65,7 +65,7 @@ internal static class SettingsJsonMerger
 
     /// <summary>
     /// Adds/overwrites the "context-platform" entry under <c>mcpConfig["mcpServers"]</c> as an
-    /// HTTP-type server pointing at Context.Host's own MCP endpoint (see
+    /// HTTP-type server pointing at Context.Dashboard.Server's own MCP endpoint (see
     /// <see cref="ClaudeIntegrationOptions.McpPath"/>) — there is no separate process to spawn.
     /// <paramref name="bearerToken"/>, when non-null, is emitted as a static <c>headers</c> entry
     /// (<c>{"headers":{"Authorization":"Bearer &lt;token&gt;"}}</c> — the schema Claude Code's own

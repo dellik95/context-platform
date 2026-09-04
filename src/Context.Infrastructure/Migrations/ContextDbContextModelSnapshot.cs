@@ -283,6 +283,9 @@ namespace Context.Infrastructure.Migrations
                     b.Property<int>("Priority")
                         .HasColumnType("INTEGER");
 
+                    b.Property<Guid?>("ProjectId")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTimeOffset?>("StartedAt")
                         .HasColumnType("TEXT");
 
@@ -297,6 +300,8 @@ namespace Context.Infrastructure.Migrations
                     b.HasIndex("NextRetryAt");
 
                     b.HasIndex("Status");
+
+                    b.HasIndex("ProjectId", "Status");
 
                     b.HasIndex("Type", "Status");
 
@@ -396,6 +401,13 @@ namespace Context.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("BearerTokenHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("BearerTokenIssuedAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ConfigJson")
                         .HasColumnType("TEXT");
 
@@ -417,6 +429,9 @@ namespace Context.Infrastructure.Migrations
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("BearerTokenHash")
+                        .IsUnique();
 
                     b.HasIndex("RootPath")
                         .IsUnique();
@@ -555,6 +570,9 @@ namespace Context.Infrastructure.Migrations
                     b.Property<string>("Discovered")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("FilesReadJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTimeOffset>("GeneratedAt")
                         .HasColumnType("TEXT");
 
@@ -570,6 +588,62 @@ namespace Context.Infrastructure.Migrations
                     b.HasKey("SessionId");
 
                     b.ToTable("SessionSummaries", (string)null);
+                });
+
+            modelBuilder.Entity("Context.Domain.Entities.SessionSummaryChunk", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChangedFilesJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Completed")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Decisions")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Discovered")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("EventCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("FilesReadJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("FromEventAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("GeneratedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NextSteps")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OpenIssues")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("SequenceNumber")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ToEventAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SessionId", "SequenceNumber")
+                        .IsUnique();
+
+                    b.ToTable("SessionSummaryChunks", (string)null);
                 });
 
             modelBuilder.Entity("Context.Domain.Entities.Symbol", b =>
@@ -654,6 +728,50 @@ namespace Context.Infrastructure.Migrations
                     b.HasIndex("SourceSymbolId", "Kind");
 
                     b.ToTable("SymbolRelations", (string)null);
+                });
+
+            modelBuilder.Entity("Context.Domain.Entities.UsageRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("CompletionTokens")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Model")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("PromptTokens")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Purpose")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("SessionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("TotalTokens")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SessionId");
+
+                    b.HasIndex("ProjectId", "CreatedAt");
+
+                    b.ToTable("UsageRecords", (string)null);
                 });
 
             modelBuilder.Entity("Context.Domain.Entities.Chunk", b =>
@@ -797,6 +915,15 @@ namespace Context.Infrastructure.Migrations
                     b.HasOne("Context.Domain.Entities.Session", null)
                         .WithOne()
                         .HasForeignKey("Context.Domain.Entities.SessionSummary", "SessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Context.Domain.Entities.SessionSummaryChunk", b =>
+                {
+                    b.HasOne("Context.Domain.Entities.Session", null)
+                        .WithMany()
+                        .HasForeignKey("SessionId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

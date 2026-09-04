@@ -6,8 +6,8 @@ using Context.Indexing;
 using Context.Indexing.Abstractions;
 using Context.Infrastructure.Abstractions;
 using Context.Providers;
+using Context.Providers.Abstractions;
 using Context.Shared;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using DomainFile = Context.Domain.Entities.File;
@@ -48,7 +48,7 @@ public sealed class IndexingPipeline(
     ISymbolRepository symbols,
     IChunkRepository chunks,
     IEmbeddingRepository embeddings,
-    IEmbeddingGenerator<string, Embedding<float>> embeddingGenerator,
+    IProviderResolver providerResolver,
     IFileScanner scanner,
     Func<string, IIgnoreMatcher> ignoreFactory,
     IEnumerable<ILanguageParser> parsers,
@@ -132,6 +132,22 @@ public sealed class IndexingPipeline(
                 await HandleFileRemovedAsync(projectId, known.RelativePath, ct).ConfigureAwait(false);
             }
         }
+
+        // Self-healing sweep for UnresolvedExternal graph placeholders (see
+        // Handlers.ResolveRelationsJobHandler's own remarks for the full story): every per-file
+        // IndexFileInternalAsync call above that needed one has already enqueued its UpdateGraph
+        // job by this point, since that enqueue happens synchronously inline, in the same loop
+        // iteration, before the loop can move on -- so this is the earliest point at which "every
+        // UpdateGraph job this reindex run will ever produce has at least been queued" is true.
+        // There's no stronger "the job queue has actually drained" signal available anywhere in
+        // this codebase to wait on instead (JobDispatcher's channel exposes no such thing), so a
+        // job enqueued here can still race a same-run UpdateGraph job that a worker hasn't gotten
+        // to yet -- the same race this handler exists to correct. That's acceptable: it's a sweep,
+        // not a one-shot guarantee, and the periodic reindex this same method serves
+        // (ReindexSchedulerService) means any node still unresolved after this pass gets another
+        // attempt on the project's next scheduled reindex.
+        await jobQueue.EnqueueAsync(JobType.ResolveRelations, new ResolveRelationsPayload(projectId), projectId, ct: ct)
+            .ConfigureAwait(false);
 
         await ReportProgressAsync(new ReindexProgressDto(projectId, filesTotal, filesTotal, Completed: true, filesFailed), ct)
             .ConfigureAwait(false);
@@ -220,7 +236,7 @@ public sealed class IndexingPipeline(
         // Chunks first (Chunk.SymbolId is FK-restricted to Symbol), then symbols, then the graph.
         await chunks.ReplaceForFileAsync(existingFile.Id, [], ct).ConfigureAwait(false);
         await symbols.ReplaceForFileAsync(existingFile.Id, [], ct).ConfigureAwait(false);
-        await jobQueue.EnqueueAsync(JobType.UpdateGraph, new UpdateGraphPayload(projectId, existingFile.Id, Invalidate: true), ct: ct)
+        await jobQueue.EnqueueAsync(JobType.UpdateGraph, new UpdateGraphPayload(projectId, existingFile.Id, Invalidate: true), projectId, ct: ct)
             .ConfigureAwait(false);
         await files.MarkDeletedAsync(existingFile.Id, ct).ConfigureAwait(false);
     }
@@ -247,7 +263,7 @@ public sealed class IndexingPipeline(
 
         if (isFirstIndex)
         {
-            await jobQueue.EnqueueAsync(JobType.UpdateGraph, new UpdateGraphPayload(projectId, fileEntity.Id, Invalidate: false), ct: ct)
+            await jobQueue.EnqueueAsync(JobType.UpdateGraph, new UpdateGraphPayload(projectId, fileEntity.Id, Invalidate: false), projectId, ct: ct)
                 .ConfigureAwait(false);
         }
     }
@@ -332,7 +348,7 @@ public sealed class IndexingPipeline(
         // as every symbol chunk above, just keyed by FileId instead of SymbolId (see
         // IndexUnparsedFileAsync's whole-file chunk for the same SymbolId == null precedent).
         var summary = await _fileSummarizer
-            .SummarizeAsync(fileEntity.RelativePath, [.. currentDrafts.Select(d => d.Name)], ct)
+            .SummarizeAsync(projectId, fileEntity.RelativePath, [.. currentDrafts.Select(d => d.Name)], ct)
             .ConfigureAwait(false);
 
         Chunk? summaryChunk = null;
@@ -373,7 +389,7 @@ public sealed class IndexingPipeline(
         var hasStructuralChange = diff.Added.Count > 0 || diff.Changed.Count > 0 || diff.Removed.Count > 0;
         if (hasStructuralChange || isFirstIndex)
         {
-            await jobQueue.EnqueueAsync(JobType.UpdateGraph, new UpdateGraphPayload(projectId, fileEntity.Id, Invalidate: false), ct: ct)
+            await jobQueue.EnqueueAsync(JobType.UpdateGraph, new UpdateGraphPayload(projectId, fileEntity.Id, Invalidate: false), projectId, ct: ct)
                 .ConfigureAwait(false);
         }
     }
@@ -427,6 +443,7 @@ public sealed class IndexingPipeline(
             return;
         }
 
+        var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
         var hashes = candidateChunks.Select(c => c.ContentHash).Distinct().ToList();
         var missing = await embeddings.GetMissingContentHashesAsync(hashes, embeddingGenerator.GetProviderName(), ct).ConfigureAwait(false);
         if (missing.Count == 0)
@@ -458,7 +475,7 @@ public sealed class IndexingPipeline(
             }
 
             await jobQueue.EnqueueAsync(
-                JobType.EmbedChunk, new EmbedChunkPayload(projectId, chunkIds, chunk.ContentHash, chunk.Text), ct: ct)
+                JobType.EmbedChunk, new EmbedChunkPayload(projectId, chunkIds, chunk.ContentHash, chunk.Text), projectId, ct: ct)
                 .ConfigureAwait(false);
         }
     }

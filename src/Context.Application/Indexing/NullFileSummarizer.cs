@@ -13,6 +13,6 @@ public sealed class NullFileSummarizer : IFileSummarizer
     {
     }
 
-    public Task<string?> SummarizeAsync(string relativePath, IReadOnlyList<string> symbolNames, CancellationToken ct) =>
+    public Task<string?> SummarizeAsync(Guid projectId, string relativePath, IReadOnlyList<string> symbolNames, CancellationToken ct) =>
         Task.FromResult<string?>(null);
 }

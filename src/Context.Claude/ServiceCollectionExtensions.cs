@@ -9,7 +9,7 @@ public static class ServiceCollectionExtensions
 {
     /// <summary>
     /// Registers <see cref="IClaudeIntegrationInstaller"/> and its <see cref="ClaudeIntegrationOptions"/>.
-    /// Called from Context.Host/Program.cs (and Context.Cli, for `context claude install`).
+    /// Called from Context.Dashboard.Server/Program.cs (and Context.Cli, for `context claude install`).
     /// </summary>
     public static IServiceCollection AddContextClaude(
         this IServiceCollection services, Action<ClaudeIntegrationOptions>? configure = null)

@@ -221,8 +221,8 @@ public sealed class RetrievalQualityHarnessTests : IAsyncLifetime
         {
             await using var scope = provider.CreateAsyncScope();
             var jobs = scope.ServiceProvider.GetRequiredService<IJobRepository>();
-            var pending = await jobs.ListByStatusAsync(JobStatus.Pending, ct);
-            var running = await jobs.ListByStatusAsync(JobStatus.Running, ct);
+            var pending = await jobs.ListByStatusAsync(JobStatus.Pending, null, ct);
+            var running = await jobs.ListByStatusAsync(JobStatus.Running, null, ct);
             if (pending.Count == 0 && running.Count == 0)
             {
                 return;

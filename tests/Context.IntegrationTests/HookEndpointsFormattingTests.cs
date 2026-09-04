@@ -1,4 +1,4 @@
-using Context.Host.Hooks;
+using Context.Dashboard.Server.Hooks;
 using Context.Retrieval.Abstractions;
 using FluentAssertions;
 

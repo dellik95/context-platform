@@ -20,7 +20,7 @@ namespace Context.Application.Scheduling;
 /// the reindex is fired (not after it completes) so a slow reindex can't still be running when
 /// the next poll ticks and re-triggers it. The reindex itself runs via a fire-and-forget
 /// <see cref="Task.Run(Func{Task})"/> against its own fresh <see cref="IServiceScope"/> — same
-/// shape as <c>Context.Host.Api.ProjectEndpoints.TriggerIndex</c> — so one project's failure or
+/// shape as <c>Context.Dashboard.Server.Api.ProjectEndpoints.TriggerIndex</c> — so one project's failure or
 /// slowness can never block another project's turn or delay the next poll.
 /// </remarks>
 public sealed class ReindexSchedulerService : BackgroundService

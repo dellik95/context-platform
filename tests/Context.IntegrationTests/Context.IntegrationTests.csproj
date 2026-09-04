@@ -28,7 +28,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Context.Application\Context.Application.csproj" />
-    <ProjectReference Include="..\..\apps\host\Context.Host\Context.Host.csproj" />
+    <ProjectReference Include="..\..\apps\host\Context.Dashboard\Context.Dashboard.Server\Context.Dashboard.Server.csproj" />
   </ItemGroup>
 
 </Project>

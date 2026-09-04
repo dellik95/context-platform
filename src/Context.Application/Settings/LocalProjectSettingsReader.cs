@@ -8,7 +8,7 @@ namespace Context.Application.Settings;
 /// (<c>.claude/context-platform.local.json</c>'s <c>"settings"</c> node) -- the source of truth
 /// every provider-options setup class layers under env-var/appsettings config. Centralizes the
 /// path + parse-failure-is-null logic that used to be duplicated between <see cref="ProjectSettingsService"/>
-/// and Context.Host's <c>Program.cs</c>.
+/// and Context.Dashboard.Server's <c>Program.cs</c>.
 /// </summary>
 public static class LocalProjectSettingsReader
 {

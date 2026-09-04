@@ -23,7 +23,7 @@ public static class ContextProvidersOptionsResolver
     public static ContextProvidersOptions Resolve(IConfiguration configuration, string projectRoot)
     {
         // The Dashboard Settings tab's saved local override always wins over CONTEXT_* env vars --
-        // this is what "Provider changes require a Context.Host restart" refers to (a restart is
+        // this is what "Provider changes require a Context.Dashboard.Server restart" refers to (a restart is
         // still needed for the *type* switch above, but the Dashboard save takes effect on it).
         var localSettings = LocalProjectSettingsReader.TryRead(projectRoot);
 

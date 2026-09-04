@@ -5,6 +5,7 @@ using Context.Domain.Entities;
 using Context.Domain.Enums;
 using Context.Infrastructure.Abstractions;
 using Context.Providers;
+using Context.Providers.Abstractions;
 using Microsoft.Extensions.AI;
 
 namespace Context.Application.Jobs.Handlers;
@@ -17,7 +18,7 @@ namespace Context.Application.Jobs.Handlers;
 public sealed class EmbedChunkJobHandler(
     IEmbeddingRepository embeddings,
     IChunkVectorIndex vectorIndex,
-    IEmbeddingGenerator<string, Embedding<float>> embeddingGenerator) : IJobHandler
+    IProviderResolver providerResolver) : IJobHandler
 {
     public JobType Type => JobType.EmbedChunk;
 
@@ -26,6 +27,7 @@ public sealed class EmbedChunkJobHandler(
         var payload = JsonSerializer.Deserialize<EmbedChunkPayload>(job.PayloadJson)
             ?? throw new InvalidOperationException($"Job {job.Id}: could not deserialize {nameof(EmbedChunkPayload)}.");
 
+        var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(payload.ProjectId, ct).ConfigureAwait(false);
         var providerName = embeddingGenerator.GetProviderName();
 
         // Re-check under the job's own execution: another EmbedChunk job for an identical chunk

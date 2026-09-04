@@ -85,6 +85,46 @@ public sealed class HybridSearchEngineTests
         hits[0].NodeId.Should().Be(lexicalNode);
     }
 
+    [Fact]
+    public async Task SearchAsync_falls_back_to_lexical_only_when_embedding_lookup_throws()
+    {
+        var lexicalNode = Guid.NewGuid();
+        var searchIndex = new FakeSearchIndex(
+            lexical: [(Guid.NewGuid(), (Guid?)null, lexicalNode, "lexical-snippet", 10.0)],
+            vector: [(Guid.NewGuid(), (Guid?)null, Guid.NewGuid(), "unreachable-vector-snippet", 0.9)]);
+
+        var scorer = new HybridScorer(new HybridScoringOptions
+        {
+            LexicalWeight = 0.5,
+            VectorWeight = 0.5,
+            GraphWeight = 0,
+            RecencyWeight = 0,
+            MemoryWeight = 0
+        });
+
+        var sut = new HybridSearchEngine(
+            searchIndex,
+            new ThrowingEmbeddingLookup(),
+            new FakeGraphTraversal(),
+            new FakeReranker(),
+            scorer,
+            new HybridSearchOptions { RerankTopK = 1 });
+
+        var hits = await sut.SearchAsync(new SearchQuery(Guid.NewGuid(), "query", null, 1024), CancellationToken.None);
+
+        hits.Should().ContainSingle();
+        hits[0].NodeId.Should().Be(lexicalNode);
+    }
+
+    private sealed class ThrowingEmbeddingLookup : IEmbeddingLookup
+    {
+        public Task<float[]> EmbedAsync(Guid projectId, string text, CancellationToken ct) =>
+            throw new HttpRequestException("Connection refused");
+
+        public Task<float[][]> EmbedBatchAsync(Guid projectId, IReadOnlyList<string> texts, CancellationToken ct) =>
+            throw new HttpRequestException("Connection refused");
+    }
+
     private sealed class FakeSearchIndex(
         IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double BM25Score)> lexical,
         IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double CosineScore)> vector) : ISearchIndex
@@ -98,9 +138,9 @@ public sealed class HybridSearchEngineTests
 
     private sealed class FakeEmbeddingLookup : IEmbeddingLookup
     {
-        public Task<float[]> EmbedAsync(string text, CancellationToken ct) => Task.FromResult<float[]>([0.1f, 0.2f]);
+        public Task<float[]> EmbedAsync(Guid projectId, string text, CancellationToken ct) => Task.FromResult<float[]>([0.1f, 0.2f]);
 
-        public Task<float[][]> EmbedBatchAsync(IReadOnlyList<string> texts, CancellationToken ct) =>
+        public Task<float[][]> EmbedBatchAsync(Guid projectId, IReadOnlyList<string> texts, CancellationToken ct) =>
             Task.FromResult(texts.Select(_ => new[] { 0.1f, 0.2f }).ToArray());
     }
 

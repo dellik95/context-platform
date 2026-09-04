@@ -5,7 +5,11 @@ namespace Context.Application.Jobs;
 /// <summary>See CONTRACTS.md §10. Implemented by <see cref="JobDispatcher"/>.</summary>
 public interface IJobQueue
 {
-    Task<Guid> EnqueueAsync(JobType type, object payload, int priority = 0, CancellationToken ct = default);
+    /// <summary><paramref name="projectId"/> is null for host-wide maintenance job types
+    /// (<see cref="JobType.DecayMemory"/>, <see cref="JobType.BackupDb"/>) that aren't scoped to
+    /// any single project; every other call site should pass the owning project's id so the
+    /// Dashboard's Jobs view can filter by currently-selected project.</summary>
+    Task<Guid> EnqueueAsync(JobType type, object payload, Guid? projectId = null, int priority = 0, CancellationToken ct = default);
 
     /// <summary>
     /// Manually re-triggers a job that has already exhausted its automatic retries and is

@@ -18,8 +18,8 @@ internal static class HeuristicSessionSummaryBuilder
             .GroupBy(e => e.Type)
             .ToDictionary(g => g.Key, g => g.Count());
 
-        var editedFiles = ExtractDistinctPaths(events, SessionEventType.FileEdit);
-        var readFiles = ExtractDistinctPaths(events, SessionEventType.FileRead);
+        var editedFiles = PayloadFieldExtractor.ExtractDistinctPaths(events, SessionEventType.FileEdit);
+        var readFiles = PayloadFieldExtractor.ExtractDistinctPaths(events, SessionEventType.FileRead);
         var errors = events.Where(e => e.Type == SessionEventType.Error).ToList();
         var commands = counts.GetValueOrDefault(SessionEventType.Command);
         var toolCalls = counts.GetValueOrDefault(SessionEventType.ToolCall);
@@ -30,18 +30,15 @@ internal static class HeuristicSessionSummaryBuilder
             : BulletOrNone(
             [
                 $"{prompts} prompt(s), {toolCalls} tool call(s) and {commands} command(s) processed",
-                editedFiles.Count > 0 ? $"{editedFiles.Count} file(s) edited" : null
+                editedFiles.Count > 0 ? $"{editedFiles.Count} file(s) edited" : null,
+                readFiles.Count > 0 ? $"{readFiles.Count} file(s) read for context" : null
             ]);
-
-        var discovered = readFiles.Count == 0
-            ? null
-            : $"- {readFiles.Count} file(s) were read during the session:\n" +
-              string.Join('\n', readFiles.Take(20).Select(f => $"  - {f}"));
 
         var openIssues = errors.Count == 0
             ? null
             : $"- {errors.Count} error event(s) occurred during the session (see session events for detail)";
 
+        var filesReadJson = JsonSerializer.Serialize(readFiles);
         var changedFilesJson = JsonSerializer.Serialize(editedFiles);
         var title = DeriveTitle(editedFiles, prompts, toolCalls, commands, events.Count);
 
@@ -50,8 +47,9 @@ internal static class HeuristicSessionSummaryBuilder
             SessionId = sessionId,
             Title = title,
             Completed = completed,
-            Discovered = discovered,
+            Discovered = null, // no LLM available to infer facts from raw events
             Decisions = null, // no LLM available to infer rationale from raw events
+            FilesReadJson = filesReadJson,
             ChangedFilesJson = changedFilesJson,
             OpenIssues = openIssues,
             NextSteps = events.Count == 0
@@ -76,18 +74,6 @@ internal static class HeuristicSessionSummaryBuilder
         }
 
         return $"{prompts} prompt(s), {toolCalls} tool call(s), {commands} command(s)";
-    }
-
-    private static List<string> ExtractDistinctPaths(IReadOnlyList<SessionEvent> events, SessionEventType type)
-    {
-        return events
-            .Where(e => e.Type == type)
-            .Select(e => PayloadFieldExtractor.TryExtractPath(e.PayloadJson))
-            .Where(p => !string.IsNullOrWhiteSpace(p))
-            .Select(p => p!)
-            .Distinct()
-            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
-            .ToList();
     }
 
     private static string? BulletOrNone(IEnumerable<string?> lines)

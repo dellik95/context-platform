@@ -28,7 +28,7 @@ public sealed class DeleteFileJobHandler(
         // Chunks first (Chunk.SymbolId is FK-restricted to Symbol), then symbols.
         await chunks.ReplaceForFileAsync(file.Id, [], ct).ConfigureAwait(false);
         await symbols.ReplaceForFileAsync(file.Id, [], ct).ConfigureAwait(false);
-        await jobQueue.EnqueueAsync(JobType.UpdateGraph, new UpdateGraphPayload(payload.ProjectId, file.Id, Invalidate: true), ct: ct)
+        await jobQueue.EnqueueAsync(JobType.UpdateGraph, new UpdateGraphPayload(payload.ProjectId, file.Id, Invalidate: true), payload.ProjectId, ct: ct)
             .ConfigureAwait(false);
         await files.MarkDeletedAsync(file.Id, ct).ConfigureAwait(false);
     }

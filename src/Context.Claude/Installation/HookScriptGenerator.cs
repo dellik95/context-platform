@@ -4,10 +4,13 @@ namespace Context.Claude.Installation;
 /// Renders the thin bash/PowerShell hook scripts installed into <c>.claude/hooks/</c>. Each script:
 /// reads the hook's stdin JSON verbatim, reads the bearer token + port from
 /// <c>.claude/context-platform.local.json</c>, POSTs the JSON to
-/// <c>http://127.0.0.1:{port}/hooks/{route}</c>, and prints the response's <c>additionalContext</c>
-/// field (if any) to stdout. Every failure path (missing config, unreachable host, timeout,
-/// malformed response) exits 0 with no output — Context Platform being down must never block
-/// Claude Code.
+/// <c>http://{host}:{port}/hooks/{route}</c> — trying <c>127.0.0.1</c> first and, only when the
+/// script detects it's running inside a container (mirrors <c>Context.Providers.OllamaHostFallbackHandler</c>'s
+/// heuristic), falling back to <c>host.docker.internal</c> then <c>172.17.0.1</c> — and prints the
+/// response's <c>additionalContext</c> field (if any) to stdout. Every failure path (missing
+/// config, every host unreachable, timeout, malformed response) still exits 0 with no output —
+/// Context Platform being down must never block Claude Code — but an unreachable-host failure is
+/// now appended to <c>.claude/hooks.log</c> so it's diagnosable instead of silently disappearing.
 /// </summary>
 internal static class HookScriptGenerator
 {
@@ -22,6 +25,11 @@ internal static class HookScriptGenerator
             INPUT="$(cat)"
             PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
             CONFIG_FILE="$PROJECT_DIR/.claude/context-platform.local.json"
+            LOG_FILE="$PROJECT_DIR/.claude/hooks.log"
+
+            log_error() {
+                printf '%s [{{hook.HostRouteName}}] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$LOG_FILE" 2>/dev/null
+            }
 
             [ -f "$CONFIG_FILE" ] || exit 0
 
@@ -30,11 +38,34 @@ internal static class HookScriptGenerator
             [ -n "$TOKEN" ] || exit 0
             PORT="${PORT:-{{options.HostPort}}}"
 
-            RESPONSE="$(curl -fsS -m {{options.HookTimeoutSeconds}} -X POST "http://127.0.0.1:${PORT}/hooks/{{hook.HostRouteName}}" \
-                -H "Authorization: Bearer $TOKEN" \
-                -H "Content-Type: application/json" \
-                --data-binary "$INPUT" 2>/dev/null)"
-            [ $? -eq 0 ] || exit 0
+            # Same host-resolution problem/heuristic as OllamaHostFallbackHandler: 127.0.0.1 always
+            # works bare-metal (and for a container whose port is published back to the host's own
+            # loopback), but a hook script running INSIDE a container needs a different address to
+            # reach a Context.Dashboard.Server that lives outside it.
+            HOSTS=(127.0.0.1)
+            if [ -f /.dockerenv ] || [ "${DOTNET_RUNNING_IN_CONTAINER:-}" = "true" ] || [ "${CONTEXT_RUNNING_IN_CONTAINER:-}" = "true" ]; then
+                HOSTS+=(host.docker.internal 172.17.0.1)
+            fi
+
+            RESPONSE=""
+            LAST_ERROR=""
+            for HOST in "${HOSTS[@]}"; do
+                OUTPUT="$(curl -fsS -m {{options.HookTimeoutSeconds}} -X POST "http://${HOST}:${PORT}/hooks/{{hook.HostRouteName}}" \
+                    -H "Authorization: Bearer $TOKEN" \
+                    -H "Content-Type: application/json" \
+                    --data-binary "$INPUT" 2>&1)"
+                if [ $? -eq 0 ]; then
+                    RESPONSE="$OUTPUT"
+                    LAST_ERROR=""
+                    break
+                fi
+                LAST_ERROR="host ${HOST}:${PORT}: $OUTPUT"
+            done
+
+            if [ -n "$LAST_ERROR" ]; then
+                log_error "unreachable ($LAST_ERROR)"
+                exit 0
+            fi
             [ -n "$RESPONSE" ] || exit 0
 
             CONTEXT="$(printf '%s' "$RESPONSE" | grep -o '"additionalContext"[[:space:]]*:[[:space:]]*"\([^"\\]\|\\.\)*"' 2>/dev/null | sed -E 's/^"additionalContext"[[:space:]]*:[[:space:]]*"//; s/"$//')"
@@ -52,12 +83,19 @@ internal static class HookScriptGenerator
         # Re-run the installer (`context claude install`) to regenerate. This script fails open:
         # any error here must never block Claude Code.
         $ErrorActionPreference = 'Stop'
+        $projectDir = $env:CLAUDE_PROJECT_DIR
+        if ([string]::IsNullOrWhiteSpace($projectDir)) {
+            $projectDir = Split-Path -Parent $PSScriptRoot
+        }
+        $logFile = Join-Path $projectDir '.claude/hooks.log'
+        function Write-HookError([string]$message) {
+            try {
+                $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                Add-Content -LiteralPath $logFile -Value "$timestamp [{{hook.HostRouteName}}] $message" -ErrorAction SilentlyContinue
+            } catch {}
+        }
         try {
             $stdin = [Console]::In.ReadToEnd()
-            $projectDir = $env:CLAUDE_PROJECT_DIR
-            if ([string]::IsNullOrWhiteSpace($projectDir)) {
-                $projectDir = Split-Path -Parent $PSScriptRoot
-            }
             $configPath = Join-Path $projectDir '.claude/context-platform.local.json'
             if (-not (Test-Path -LiteralPath $configPath)) { exit 0 }
 
@@ -67,15 +105,38 @@ internal static class HookScriptGenerator
             if ([string]::IsNullOrWhiteSpace($token)) { exit 0 }
             if (-not $port) { $port = {{options.HostPort}} }
 
-            $uri = "http://127.0.0.1:$port/hooks/{{hook.HostRouteName}}"
-            $response = Invoke-RestMethod -Uri $uri -Method Post -Body $stdin -ContentType 'application/json' `
-                -Headers @{ Authorization = "Bearer $token" } -TimeoutSec {{options.HookTimeoutSeconds}}
+            # Same host-resolution problem/heuristic as OllamaHostFallbackHandler: 127.0.0.1 always
+            # works bare-metal (and for a container whose port is published back to the host's own
+            # loopback), but a hook script running INSIDE a container needs a different address to
+            # reach a Context.Dashboard.Server that lives outside it.
+            $candidateHosts = @('127.0.0.1')
+            $inContainer = (Test-Path -LiteralPath '/.dockerenv') -or ($env:DOTNET_RUNNING_IN_CONTAINER -eq 'true') -or ($env:CONTEXT_RUNNING_IN_CONTAINER -eq 'true')
+            if ($inContainer) { $candidateHosts += @('host.docker.internal', '172.17.0.1') }
+
+            $response = $null
+            $lastError = $null
+            foreach ($candidateHost in $candidateHosts) {
+                try {
+                    $uri = "http://${candidateHost}:$port/hooks/{{hook.HostRouteName}}"
+                    $response = Invoke-RestMethod -Uri $uri -Method Post -Body $stdin -ContentType 'application/json' `
+                        -Headers @{ Authorization = "Bearer $token" } -TimeoutSec {{options.HookTimeoutSeconds}}
+                    $lastError = $null
+                    break
+                } catch {
+                    $lastError = "host ${candidateHost}:${port}: $($_.Exception.Message)"
+                }
+            }
+
+            if ($lastError) {
+                Write-HookError "unreachable ($lastError)"
+                exit 0
+            }
 
             if ($response -and $response.additionalContext) {
                 Write-Output $response.additionalContext
             }
         } catch {
-            # Fail open: Context Platform being unavailable must never block Claude Code.
+            Write-HookError $_.Exception.Message
         }
         exit 0
 

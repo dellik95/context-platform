@@ -21,4 +21,15 @@ public static class Hashing
         SHA256.HashData(bytes, hash);
         return Convert.ToHexStringLower(hash);
     }
+
+    /// <summary>
+    /// Computes the base64 SHA-256 hash of a raw bearer token, for storage/lookup of
+    /// <c>Project.BearerTokenHash</c> without persisting the token itself.
+    /// </summary>
+    public static string HashToken(string rawToken)
+    {
+        Span<byte> hash = stackalloc byte[SHA256.HashSizeInBytes];
+        SHA256.HashData(Encoding.UTF8.GetBytes(rawToken), hash);
+        return Convert.ToBase64String(hash);
+    }
 }

@@ -181,7 +181,7 @@ public sealed class GoldenPathE2ETests : IAsyncLifetime
                 await engine.RecordEventAsync(
                     sessionId, SessionEventType.Prompt, new { text = "Add a ComputeTotal method to OrderCalculator." }, ct);
 
-                await engine.EndSessionAsync(sessionId, ct);
+                await engine.EndSessionAsync(project.Id, sessionId, ct);
             }
 
             // -----------------------------------------------------------------------------------
@@ -200,7 +200,7 @@ public sealed class GoldenPathE2ETests : IAsyncLifetime
             await using (var assertScope = _provider.CreateAsyncScope())
             {
                 var sessions = assertScope.ServiceProvider.GetRequiredService<ISessionRepository>();
-                summary = await sessions.GetSummaryAsync(sessionId, ct);
+                summary = await sessions.GetSummaryAsync(project.Id, sessionId, ct);
 
                 var memoryRepository = assertScope.ServiceProvider.GetRequiredService<IMemoryRepository>();
                 memories = await memoryRepository.ListByProjectAsync(project.Id, includeSuperseded: false, ct);
@@ -245,8 +245,8 @@ public sealed class GoldenPathE2ETests : IAsyncLifetime
         {
             await using var scope = provider.CreateAsyncScope();
             var jobs = scope.ServiceProvider.GetRequiredService<IJobRepository>();
-            var pending = await jobs.ListByStatusAsync(JobStatus.Pending, ct);
-            var running = await jobs.ListByStatusAsync(JobStatus.Running, ct);
+            var pending = await jobs.ListByStatusAsync(JobStatus.Pending, null, ct);
+            var running = await jobs.ListByStatusAsync(JobStatus.Running, null, ct);
             if (pending.Count == 0 && running.Count == 0)
             {
                 return;

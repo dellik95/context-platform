@@ -11,7 +11,7 @@ internal static partial class SessionSummaryParser
 {
     private static readonly string[] SectionKeys =
     [
-        "TITLE", "COMPLETED", "DISCOVERED", "DECISIONS", "CHANGED_FILES", "OPEN_ISSUES", "NEXT_STEPS"
+        "TITLE", "COMPLETED", "DISCOVERED", "DECISIONS", "OPEN_ISSUES", "NEXT_STEPS"
     ];
 
     public sealed record ParsedSections(
@@ -19,7 +19,6 @@ internal static partial class SessionSummaryParser
         string? Completed,
         string? Discovered,
         string? Decisions,
-        IReadOnlyList<string> ChangedFiles,
         string? OpenIssues,
         string? NextSteps)
     {
@@ -27,7 +26,6 @@ internal static partial class SessionSummaryParser
             string.IsNullOrWhiteSpace(Completed) &&
             string.IsNullOrWhiteSpace(Discovered) &&
             string.IsNullOrWhiteSpace(Decisions) &&
-            ChangedFiles.Count == 0 &&
             string.IsNullOrWhiteSpace(OpenIssues) &&
             string.IsNullOrWhiteSpace(NextSteps);
     }
@@ -62,14 +60,6 @@ internal static partial class SessionSummaryParser
             }
         }
 
-        var changedFilesRaw = buckets["CHANGED_FILES"].ToString();
-        var changedFiles = changedFilesRaw
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(StripBullet)
-            .Where(line => line.Length > 0 && !IsNonePlaceholder(line))
-            .Distinct()
-            .ToList();
-
         var title = buckets["TITLE"].ToString()
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(StripBullet)
@@ -80,7 +70,6 @@ internal static partial class SessionSummaryParser
             Clean(buckets["COMPLETED"]),
             Clean(buckets["DISCOVERED"]),
             Clean(buckets["DECISIONS"]),
-            changedFiles,
             Clean(buckets["OPEN_ISSUES"]),
             Clean(buckets["NEXT_STEPS"]));
     }

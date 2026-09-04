@@ -94,7 +94,7 @@ public sealed class UpdateGraphJobHandler(
             {
                 Id = symbol.Id,
                 ProjectId = payload.ProjectId,
-                Kind = MapSymbolKind(symbol.Kind),
+                Kind = GraphRelationResolution.MapSymbolKind(symbol.Kind),
                 RefId = symbol.Id,
                 Label = symbol.QualifiedName,
                 OwningFileId = file.Id
@@ -209,36 +209,13 @@ public sealed class UpdateGraphJobHandler(
             return local.Id;
         }
 
-        IReadOnlyList<Symbol> candidates;
-        try
-        {
-            candidates = await symbols.SearchByNameAsync(projectId, targetName, limit: 5, ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch
-        {
-            candidates = [];
-        }
-
-        var resolved = candidates.FirstOrDefault(s => string.Equals(s.Name, targetName, StringComparison.Ordinal))
-            ?? candidates.FirstOrDefault();
+        var resolved = await GraphRelationResolution.ResolveByNameAsync(symbols, projectId, targetName, limit: 5, ct).ConfigureAwait(false);
 
         if (resolved is not null)
         {
             if (!nodesById.ContainsKey(resolved.Id))
             {
-                var node = new GraphNode
-                {
-                    Id = resolved.Id,
-                    ProjectId = projectId,
-                    Kind = MapSymbolKind(resolved.Kind),
-                    RefId = resolved.Id,
-                    Label = resolved.QualifiedName,
-                    OwningFileId = resolved.FileId
-                };
+                var node = GraphRelationResolution.ToGraphNode(resolved, projectId);
                 nodes.Add(node);
                 nodesById[node.Id] = node;
             }
@@ -283,22 +260,6 @@ public sealed class UpdateGraphJobHandler(
     };
 
     private static Guid DeterministicGuid(string key) => Guid.ParseExact(Hashing.HashText(key)[..32], "N");
-
-    private static GraphNodeKind MapSymbolKind(SymbolKind kind) => kind switch
-    {
-        SymbolKind.Class => GraphNodeKind.Class,
-        SymbolKind.Interface => GraphNodeKind.Interface,
-        SymbolKind.Struct => GraphNodeKind.Type,
-        SymbolKind.Enum => GraphNodeKind.Type,
-        SymbolKind.Function => GraphNodeKind.Function,
-        SymbolKind.Method => GraphNodeKind.Method,
-        SymbolKind.Property => GraphNodeKind.Variable,
-        SymbolKind.Field => GraphNodeKind.Variable,
-        SymbolKind.Variable => GraphNodeKind.Variable,
-        SymbolKind.Module => GraphNodeKind.Module,
-        SymbolKind.Type => GraphNodeKind.Type,
-        _ => GraphNodeKind.Type
-    };
 
     private static GraphEdgeKind MapRelationKind(RelationKind kind) => kind switch
     {

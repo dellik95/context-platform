@@ -5,7 +5,11 @@ namespace Context.Infrastructure.Abstractions;
 
 public interface IJobRepository
 {
-    Task<Job?> GetByIdAsync(Guid id, CancellationToken ct);
+    /// <summary>The job, or null if it doesn't exist. When <paramref name="projectId"/> is provided,
+    /// the job is only returned if it belongs to that project or is host-wide (<see cref="Job.ProjectId"/>
+    /// is null) — otherwise it is treated as not found. Omitting <paramref name="projectId"/> preserves
+    /// today's unfiltered behavior.</summary>
+    Task<Job?> GetByIdAsync(Guid id, CancellationToken ct, Guid? projectId = null);
     Task<Job> EnqueueAsync(Job job, CancellationToken ct);
     Task UpdateAsync(Job job, CancellationToken ct);
 
@@ -13,5 +17,7 @@ public interface IJobRepository
     /// within the same priority), marking it Running, or null if none are runnable right now.</summary>
     Task<Job?> DequeueNextAsync(CancellationToken ct);
 
-    Task<IReadOnlyList<Job>> ListByStatusAsync(JobStatus status, CancellationToken ct);
+    /// <summary>When <paramref name="projectId"/> is null, returns jobs for every project (plus
+    /// host-wide maintenance jobs) — the pre-filtering, host-wide behavior.</summary>
+    Task<IReadOnlyList<Job>> ListByStatusAsync(JobStatus status, Guid? projectId, CancellationToken ct);
 }

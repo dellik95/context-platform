@@ -13,7 +13,7 @@ public static class ServiceCollectionExtensions
     /// <paramref name="services"/> (each options class's own property initializers supply the
     /// default when nothing configures it) -- bind real config via
     /// <c>services.Configure&lt;HybridScoringOptions&gt;(configuration.GetSection(...))</c> etc.
-    /// (see Context.Host's Program.cs) before calling this.
+    /// (see Context.Dashboard.Server's Program.cs) before calling this.
     /// </summary>
     public static IServiceCollection AddContextRetrieval(this IServiceCollection services)
     {

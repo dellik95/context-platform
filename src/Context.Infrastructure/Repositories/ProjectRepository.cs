@@ -12,6 +12,9 @@ public class ProjectRepository(ContextDbContext db) : IProjectRepository
     public Task<Project?> GetByRootPathAsync(string rootPath, CancellationToken ct) =>
         db.Projects.AsNoTracking().FirstOrDefaultAsync(p => p.RootPath == rootPath, ct);
 
+    public Task<Project?> GetByBearerTokenHashAsync(string tokenHash, CancellationToken ct) =>
+        db.Projects.AsNoTracking().FirstOrDefaultAsync(p => p.BearerTokenHash == tokenHash, ct);
+
     public async Task<IReadOnlyList<Project>> ListAsync(CancellationToken ct) =>
         await db.Projects.AsNoTracking().OrderBy(p => p.Name).ToListAsync(ct);
 

@@ -64,11 +64,28 @@ public sealed class HybridSearchEngine : ISearchEngine
         ct.ThrowIfCancellationRequested();
 
         var lexicalTask = _searchIndex.LexicalSearchAsync(query.ProjectId, query.Text, ct);
-        var queryEmbedding = await _embeddingLookup.EmbedAsync(query.Text, ct).ConfigureAwait(false);
-        var vectorTask = _searchIndex.VectorSearchAsync(query.ProjectId, queryEmbedding, ct);
+
+        float[]? queryEmbedding;
+        try
+        {
+            queryEmbedding = await _embeddingLookup.EmbedAsync(query.ProjectId, query.Text, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            // Embedding provider (e.g. Ollama) may be unreachable/misconfigured; vector search is
+            // an enrichment signal only and must never take down lexical retrieval.
+            queryEmbedding = null;
+        }
+
+        var vector = queryEmbedding is null
+            ? []
+            : await _searchIndex.VectorSearchAsync(query.ProjectId, queryEmbedding, ct).ConfigureAwait(false);
 
         var lexical = await lexicalTask.ConfigureAwait(false);
-        var vector = await vectorTask.ConfigureAwait(false);
 
         var candidates = MergeCandidates(lexical, vector);
         if (candidates.Count == 0)

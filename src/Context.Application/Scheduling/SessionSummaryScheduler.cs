@@ -111,7 +111,7 @@ public sealed class SessionSummaryScheduler : BackgroundService
 
             try
             {
-                var summary = await sessionRepository.GetSummaryAsync(session.Id, ct).ConfigureAwait(false);
+                var summary = await sessionRepository.GetSummaryAsync(projectId, session.Id, ct).ConfigureAwait(false);
                 var lastSummarizedAt = summary?.GeneratedAt ?? session.StartedAt;
                 if (DateTimeOffset.UtcNow - lastSummarizedAt < interval)
                 {
@@ -129,7 +129,7 @@ public sealed class SessionSummaryScheduler : BackgroundService
                 // burning an LLM call on (and creating a low-value memory from) almost nothing -
                 // codemem batches raw events the same way before its own observer runs, for the
                 // same reason. A quiet session just waits longer instead of generating noise.
-                var events = await sessionRepository.GetEventsAsync(session.Id, ct).ConfigureAwait(false);
+                var events = await sessionRepository.GetEventsAsync(projectId, session.Id, ct).ConfigureAwait(false);
                 var newEventCount = events.Count(e => e.Timestamp > lastSummarizedAt);
                 if (newEventCount < settings.MinEventsForSessionSummary)
                 {
@@ -137,7 +137,7 @@ public sealed class SessionSummaryScheduler : BackgroundService
                 }
 
                 _lastEnqueuedAt[session.Id] = DateTimeOffset.UtcNow;
-                await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(session.Id), ct: ct)
+                await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(session.Id, IsSessionEnd: false), session.ProjectId, ct: ct)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)

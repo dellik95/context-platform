@@ -2,8 +2,9 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
-using Context.Host;
-using Context.Host.Hooks;
+using Context.Domain.Entities;
+using Context.Dashboard.Server;
+using Context.Dashboard.Server.Hooks;
 using Context.Infrastructure;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
@@ -22,7 +23,7 @@ namespace Context.IntegrationTests;
 /// <remarks>
 /// Shares <see cref="HostHttpE2ETests.CollectionName"/> so xunit never runs this class's
 /// WebApplicationFactory-backed <see cref="Program"/> concurrently with that class's. Both boot the
-/// real Context.Host <c>Program</c>, which sets the global static Serilog.Log.Logger at startup —
+/// real Context.Dashboard.Server <c>Program</c>, which sets the global static Serilog.Log.Logger at startup —
 /// only one instance may ever be live at a time. Test classes within the same xunit collection run
 /// strictly sequentially (one class's IClassFixture fully built, exercised, and disposed before the
 /// next class in the collection starts), which is exactly the guarantee this relies on.
@@ -58,10 +59,14 @@ public sealed class HostHttpProductionCorsTests : IClassFixture<HostHttpProducti
         evilOriginResponse.Headers.TryGetValues("Access-Control-Allow-Origin", out _).Should().BeFalse();
 
         // Bearer auth is still enforced in Production exactly as in Development (BACKLOG-02).
-        var unauthorizedResponse = await client.GetAsync("/api/projects");
+        // /api/projects/{id} rather than the bare list here: project listing is admin-token-gated
+        // now (Phase 3 — see AdminTokenAuth/ProjectEndpoints), unreachable with a per-project bearer
+        // token at all, whereas GET /{id} accepts the pre-seeded project's own token because the
+        // route id matches the project that token resolves to (RequireOwnProjectOrAdminAsync).
+        var unauthorizedResponse = await client.GetAsync($"/api/projects/{_factory.ProjectId}");
         unauthorizedResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized, "no Authorization header was sent");
 
-        using var authorizedRequest = new HttpRequestMessage(HttpMethod.Get, "/api/projects");
+        using var authorizedRequest = new HttpRequestMessage(HttpMethod.Get, $"/api/projects/{_factory.ProjectId}");
         authorizedRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _factory.BearerToken);
         var authorizedResponse = await client.SendAsync(authorizedRequest);
         authorizedResponse.IsSuccessStatusCode.Should().BeTrue("the correct bearer token was sent");
@@ -76,7 +81,10 @@ public sealed class HostHttpProductionCorsTests : IClassFixture<HostHttpProducti
     {
         public string TempRoot { get; }
 
+        /// <summary>This project's own per-project bearer token — see <c>ProjectTokenBackfill</c>'s remarks on how the seeded row below picks it up at startup.</summary>
         public string BearerToken { get; } = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+
+        public Guid ProjectId { get; } = Guid.NewGuid();
 
         public ProductionWebApplicationFactory()
         {
@@ -95,18 +103,38 @@ public sealed class HostHttpProductionCorsTests : IClassFixture<HostHttpProducti
                 migrationContext.Database.Migrate();
             }
 
+            // Seeds a Project row with no BearerTokenHash yet, mirroring
+            // HostHttpE2ETests.HostHttpWebApplicationFactory: Program.cs's ProjectTokenBackfill pass
+            // (run once at startup, right after migration) hashes BearerToken below into this row by
+            // matching RootPath against the local config file written next, so BearerToken really
+            // does authenticate as this project by the time the Fact above sends it.
+            using (var seedContext = new ContextDbContext(migrationOptions))
+            {
+                seedContext.Projects.Add(new Project
+                {
+                    Id = ProjectId,
+                    Name = "Hook Project",
+                    RootPath = Path.GetFullPath(TempRoot),
+                    CreatedAt = DateTimeOffset.UtcNow,
+                });
+                seedContext.SaveChanges();
+            }
+
             var claudeDir = Path.Combine(TempRoot, ".claude");
             Directory.CreateDirectory(claudeDir);
             var localConfig = new HookLocalConfig(
-                ProjectId: Guid.NewGuid().ToString(),
+                ProjectId: ProjectId.ToString(),
                 Port: ContextHostOptions.DefaultPort,
                 BearerToken: BearerToken,
                 GeneratedAt: DateTimeOffset.UtcNow.ToString("O"));
-            File.WriteAllText(Path.Combine(claudeDir, "context-platform.local.json"), JsonSerializer.Serialize(localConfig));
+            System.IO.File.WriteAllText(Path.Combine(claudeDir, "context-platform.local.json"), JsonSerializer.Serialize(localConfig));
 
             // Must land before this factory's first lazy host build (this class's Fact's first
-            // CreateClient() call) — same reasoning as HostHttpE2ETests.HostHttpWebApplicationFactory.
+            // CreateClient() call) — same reasoning as HostHttpE2ETests.HostHttpWebApplicationFactory,
+            // including pinning CONTEXT_PLATFORM_DATA_DIR so this fixture doesn't share the default
+            // SharedDataLocation database with every other test fixture.
             Environment.SetEnvironmentVariable("CONTEXT_PLATFORM_ROOT", TempRoot);
+            Environment.SetEnvironmentVariable("CONTEXT_PLATFORM_DATA_DIR", dataDir);
         }
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)

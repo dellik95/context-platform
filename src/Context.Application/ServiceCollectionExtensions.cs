@@ -3,11 +3,13 @@ using Context.Application.Adapters;
 using Context.Application.Indexing;
 using Context.Application.Jobs;
 using Context.Application.Jobs.Handlers;
+using Context.Application.Providers;
 using Context.Application.Scheduling;
 using Context.Application.Settings;
 using Context.Graph.Abstractions;
 using Context.Infrastructure;
 using Context.Memory.Abstractions;
+using Context.Providers.Abstractions;
 using Context.Retrieval;
 using Context.Retrieval.Abstractions;
 using Microsoft.EntityFrameworkCore;
@@ -18,7 +20,7 @@ namespace Context.Application;
 
 /// <summary>
 /// DI wiring for Context.Application, the integration layer. This is the one method
-/// <c>Context.Host</c> calls, <b>after</b> it has already called every other layer's own
+/// <c>Context.Dashboard.Server</c> calls, <b>after</b> it has already called every other layer's own
 /// <c>AddContextX</c> (<c>AddContextInfrastructure</c>, <c>AddContextIndexing</c>,
 /// <c>AddContextGraph</c>, <c>AddContextRetrieval</c>, <c>AddContextMemory</c>,
 /// <c>AddContextProviders</c>) — those calls register everything <em>except</em> the small seam
@@ -56,6 +58,12 @@ public static class ServiceCollectionExtensions
         var dbPath = Path.Combine(projectDataDir, "context.db");
         services.AddPooledDbContextFactory<ContextDbContext>(options => options.UseSqlite($"Data Source={dbPath}"));
 
+        // Singleton: its own consumers (HybridSearchEngine, SqliteSearchIndex, IFileSummarizer,
+        // every Scoped job handler) span both Singleton and Scoped lifetimes, so this can't itself
+        // be Scoped — see ProjectProviderResolver's own remarks for how it safely reaches the
+        // Scoped IProjectSettingsService from here anyway.
+        services.AddSingleton<IProviderResolver, ProjectProviderResolver>();
+
         AddSeamAdapters(services, dbPath);
         AddJobHandlers(services);
         AddJobDispatcher(services);
@@ -68,7 +76,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IFileSummarizer, LlmFileSummarizer>();
 
         // Default/fallback so Context.Application has zero hard dependency on SignalR;
-        // Context.Host overrides this with a SignalR-backed reporter (registration order —
+        // Context.Dashboard.Server overrides this with a SignalR-backed reporter (registration order —
         // last AddSingleton for a given interface wins).
         services.AddSingleton<IIndexingProgressReporter>(NullIndexingProgressReporter.Instance);
         services.AddSingleton<Context.Application.Notifications.IProjectActivityNotifier>(
@@ -99,10 +107,9 @@ public static class ServiceCollectionExtensions
         // singleton (see IDbContextFactory remark above).
         services.AddSingleton<ISearchIndex, SqliteSearchIndex>();
 
-        // Also consumed by the singleton HybridSearchEngine, but their own dependencies
-        // (Context.Providers' IEmbeddingGenerator/IRerankerProvider) are themselves registered
-        // singleton by AddContextProviders in every built-in configuration, so these are safe as
-        // singletons too (and must be, for the same DI-lifetime reason as the two adapters above).
+        // Also consumed by the singleton HybridSearchEngine, so must itself be singleton; safe to
+        // be, since it resolves per-project providers through the singleton-safe IProviderResolver
+        // above rather than constructor-injecting IEmbeddingGenerator directly.
         services.AddSingleton<IEmbeddingLookup, EmbeddingLookupAdapter>();
         services.AddSingleton<IReranker, RerankerAdapter>();
 
@@ -111,6 +118,12 @@ public static class ServiceCollectionExtensions
         // Scoped is correct and sufficient here; both talk to Scoped repositories/DbContext.
         services.AddScoped<IMemoryStore, MemoryStoreAdapter>();
         services.AddScoped<ISessionEventSource, SessionEventSourceAdapter>();
+
+        // Same seam pattern as the two above, forwarding to Context.Infrastructure's own
+        // IUsageRecorder (registered by AddContextInfrastructure) so LlmSessionSummarizer /
+        // LlmMemoryExtractor can record token usage (BACKLOG-27) without depending on
+        // Context.Infrastructure/EF Core directly.
+        services.AddScoped<Context.Memory.Abstractions.IUsageRecorder, UsageRecorderAdapter>();
 
         // ContextPackBuilder is registered by AddContextRetrieval as the singleton
         // IContextPackBuilder implementation. ContextEngine needs the concrete type directly (see
@@ -142,7 +155,7 @@ public static class ServiceCollectionExtensions
     /// <summary>
     /// Registers <see cref="JobDispatcher"/> exactly once as a singleton, and exposes that same
     /// instance under both roles it plays: the <see cref="IJobQueue"/> every scoped consumer
-    /// enqueues work through, and the <see cref="IHostedService"/> <c>Context.Host</c> starts/stops
+    /// enqueues work through, and the <see cref="IHostedService"/> <c>Context.Dashboard.Server</c> starts/stops
     /// with the application's own lifetime (which runs <see cref="JobDispatcher.HydrateOnStartupAsync"/>
     /// then <see cref="JobDispatcher.StartProcessingAsync"/> - see its own remarks).
     /// </summary>
