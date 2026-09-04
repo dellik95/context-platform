@@ -40,30 +40,55 @@ robocopy apps\host\Context.Dashboard\context.dashboard.client\dist\dashboard\bro
 
 ## 2. Install the service
 
-**Linux (systemd)** — one instance per project, run as root:
+The host is multi-tenant (Phase 3): one running instance serves every project you add to it
+afterwards via the Dashboard or `POST /api/projects` — there's no per-project install step, just
+one shared, always-on service.
+
+**Linux (systemd)**, run as root:
 
 ```bash
-sudo ./deploy/install-systemd-service.sh --project-root /path/to/repo --name myproject
-# uninstall: sudo ./deploy/uninstall-systemd-service.sh --name myproject
+sudo ./deploy/install-systemd-service.sh
+# optional: --port 47923 --data-dir /path/to/data
+# uninstall: sudo ./deploy/uninstall-systemd-service.sh
 ```
 
-**Windows** — one service per project, from an elevated PowerShell:
+**Windows**, from an elevated PowerShell — this script still predates the multi-tenant host and
+takes a `-ProjectRoot`/`-ServiceName` pair it no longer strictly needs (it's only used to name the
+service and populate its description); any value works:
 
 ```powershell
-.\deploy\install-windows-service.ps1 -ProjectRoot 'C:\Projects\MyRepo' -ServiceName 'ContextPlatform-MyRepo'
-# uninstall: .\deploy\uninstall-windows-service.ps1 -ServiceName 'ContextPlatform-MyRepo'
+.\deploy\install-windows-service.ps1 -ProjectRoot 'C:\Projects\MyRepo' -ServiceName 'ContextPlatform'
+# uninstall: .\deploy\uninstall-windows-service.ps1 -ServiceName 'ContextPlatform'
 ```
 
 Both scripts require the publish step above to have already happened at the path they expect
 (`/opt/context-platform` / `C:\ContextPlatform` by default) and print the exact next steps
 (log location, service-management commands) once done. Neither script runs with elevated
 privileges implicitly picked up from this repo — you run them yourself, deliberately, as root /
-Administrator, which is also why `context claude install` (Context.Cli) does not attempt to
-invoke them automatically.
+Administrator.
 
-## 3. Point Claude Code at it
+## 3. Add a project and point Claude Code at it
 
-`context claude install` (or `context claude install --project <id>`) writes `.mcp.json` and the
-hook scripts assuming Context.Dashboard.Server listens on `127.0.0.1:47923` (or `CONTEXT_PLATFORM_PORT` if
-you overrode it) — run it once per project after the service is up, same as the local `dotnet
-run` workflow.
+Open the Dashboard (`http://127.0.0.1:47923`), create a project pointing at the repo you want
+indexed, then run `context claude install --project <id>` (Context.Cli) from that repo — it writes
+`.mcp.json` and the hook scripts assuming Context.Dashboard.Server listens on `127.0.0.1:47923` (or
+`CONTEXT_PLATFORM_PORT` if you overrode it).
+
+## Running under WSL2, consumed from Windows
+
+WSL2 forwards ports a process binds inside the distro on `127.0.0.1` to Windows' own `localhost`
+automatically (its default NAT networking — no port-proxy/`.wslconfig` needed, unless you've
+switched to mirrored networking mode). So a systemd-managed instance installed inside WSL2 per
+step 2 above is reachable from Windows at `http://127.0.0.1:47923` (Dashboard, `.mcp.json`, hook
+scripts) exactly as if it were running natively on Windows — no separate Windows service needed.
+
+Two things to know:
+
+- **WSL2 doesn't start on its own at Windows boot.** Until the distro is running, systemd (and the
+  forwarded port) isn't there to hit. Either open a WSL terminal once per Windows session, or
+  schedule `wsl.exe -d <Distro>` to run at logon (Task Scheduler) so it's always up.
+- **Point a project's root at wherever Windows already has it checked out**, e.g.
+  `/mnt/c/Projects/MyRepo` — not a separate WSL-side clone — so the same working copy Windows edits
+  is what gets indexed. `/mnt/c/...` (DrvFs) is slower for heavy file I/O than a native WSL
+  filesystem path, which matters for the initial full reindex of a large repo but not for normal
+  incremental use.
