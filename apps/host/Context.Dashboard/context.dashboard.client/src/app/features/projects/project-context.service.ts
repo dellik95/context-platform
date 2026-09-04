@@ -49,7 +49,7 @@ export class ProjectContextService implements OnDestroy {
       this._reindexProgress.set(event);
       if (event.completed) {
         this._reindexing.set(false);
-        this.snackBar.open('Reindex complete.', 'Dismiss', { duration: 4000 });
+        this.snackBar.open(event.cancelled ? 'Reindex cancelled.' : 'Reindex complete.', 'Dismiss', { duration: 4000 });
       }
     }),
   ];
@@ -99,6 +99,21 @@ export class ProjectContextService implements OnDestroy {
       error: () => {
         this._reindexing.set(false);
         this.snackBar.open('Failed to start reindex — is Context.Host running?', 'Dismiss');
+      },
+    });
+  }
+
+  /**
+   * Requests cancellation of the currently-running reindex. Doesn't flip `reindexing` locally on
+   * success -- that happens when the ReindexProgress Completed:true/cancelled event this triggers
+   * arrives (see the subscription above), the same way a normal completion is detected.
+   */
+  cancelIndex(): void {
+    this.api.cancelIndex(this._projectId()).subscribe({
+      next: () => this.snackBar.open('Cancelling reindex…', 'Dismiss', { duration: 3000 }),
+      error: (err: { status?: number }) => {
+        const message = err?.status === 404 ? 'No reindex is currently running.' : 'Failed to cancel reindex.';
+        this.snackBar.open(message, 'Dismiss');
       },
     });
   }

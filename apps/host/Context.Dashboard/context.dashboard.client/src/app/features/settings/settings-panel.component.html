@@ -125,5 +125,19 @@
         </button>
       </div>
     </mat-card>
+
+    <mat-card class="settings-card danger-zone">
+      <h2 class="section-title">Danger zone</h2>
+      <p class="integration-description">
+        Permanently removes this project's index, memories, sessions, and settings from Context
+        Platform. Files on disk are never touched.
+      </p>
+      <div class="actions">
+        <button mat-stroked-button color="warn" [disabled]="deleting()" (click)="deleteProject()">
+          <mat-icon>delete_forever</mat-icon>
+          {{ deleting() ? 'Deleting…' : 'Delete project' }}
+        </button>
+      </div>
+    </mat-card>
   }
 </div>

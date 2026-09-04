@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Context.Application.Indexing;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
@@ -156,6 +157,68 @@ public sealed class IndexingPipelineTests : IDisposable
         final.FilesFailed.Should().Be(1);
     }
 
+    /// <summary>
+    /// Covers the cancellation wiring introduced for "stop an in-progress reindex" (see
+    /// <see cref="Context.Application.Indexing.ReindexCancellationRegistry"/>): a token cancelled
+    /// mid-scan must actually stop <see cref="IndexingPipeline.ReindexProjectAsync"/> rather than
+    /// silently finish the pass, and must do so before the scan phase's buffering loop even hands
+    /// control to the per-file indexing loop below it (see that method's own comment on why the
+    /// scan is buffered into a list up front).
+    /// </summary>
+    [Fact]
+    public async Task ReindexProjectAsync_throws_and_indexes_nothing_when_the_token_is_cancelled_mid_scan()
+    {
+        var projectId = Guid.NewGuid();
+        var project = new Project { Id = projectId, Name = "Demo", RootPath = _root, CreatedAt = DateTimeOffset.UtcNow };
+
+        System.IO.File.WriteAllText(Path.Combine(_root, "a.fake"), "one");
+        System.IO.File.WriteAllText(Path.Combine(_root, "b.fake"), "two");
+
+        _projectRepository.Setup(p => p.GetByIdAsync(projectId, It.IsAny<CancellationToken>())).ReturnsAsync(project);
+
+        var cts = new CancellationTokenSource();
+        var scanned = new List<ScannedFile>
+        {
+            new("a.fake", Path.Combine(_root, "a.fake"), 3),
+            new("b.fake", Path.Combine(_root, "b.fake"), 3),
+        };
+
+        // Cancels right after yielding the first entry -- by the time the scan's own async
+        // enumerator is asked for the second, the token this test passes to ReindexProjectAsync
+        // is already cancelled, the same as a real POST /api/projects/{id}/index/cancel landing
+        // while IFileScanner.ScanAsync is still walking the tree.
+        _fileScanner
+            .Setup(s => s.ScanAsync(_root, It.IsAny<IIgnoreMatcher>(), It.IsAny<CancellationToken>()))
+            .Returns(CancelAfterFirstAsyncEnumerable(scanned, cts));
+
+        var pipeline = new IndexingPipeline(
+            _projectRepository.Object,
+            _fileRepository.Object,
+            _symbolRepository.Object,
+            _chunkRepository.Object,
+            _embeddingRepository.Object,
+            _providerResolver.Object,
+            _fileScanner.Object,
+            ignoreFactory: _ => Mock.Of<IIgnoreMatcher>(),
+            parsers: [new ThrowingFakeParser()],
+            hasher: _hasher.Object,
+            jobQueue: _jobQueue.Object,
+            logger: null,
+            progressReporter: _progressReporter.Object,
+            fileSummarizer: null);
+
+var act = () => pipeline.ReindexProjectAsync(projectId, full: false, cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+
+        // The scan never finished buffering, so the per-file indexing loop never ran at all: no
+        // file was indexed and no progress event (not even a partial one) was reported.
+        _symbolRepository.Verify(
+            s => s.ReplaceForFileAsync(It.IsAny<Guid>(), It.IsAny<IReadOnlyList<Symbol>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _reportedProgress.Should().BeEmpty();
+    }
+
     private static async IAsyncEnumerable<ScannedFile> ToAsyncEnumerable(IEnumerable<ScannedFile> items)
     {
         foreach (var item in items)
@@ -164,6 +227,23 @@ public sealed class IndexingPipelineTests : IDisposable
         }
 
         await Task.CompletedTask;
+    }
+
+    private static async IAsyncEnumerable<ScannedFile> CancelAfterFirstAsyncEnumerable(
+        IReadOnlyList<ScannedFile> items, CancellationTokenSource cancelAfterFirst, [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        for (var i = 0; i < items.Count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return items[i];
+
+            if (i == 0)
+            {
+                cancelAfterFirst.Cancel();
+            }
+
+            await Task.Yield();
+        }
     }
 
     /// <summary>Throws mid-parse for any source text equal to the literal "THROW" -- the

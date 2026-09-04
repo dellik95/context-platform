@@ -1,8 +1,10 @@
 import { CommonModule } from '@angular/common';
 import { Component, computed, effect, inject, signal } from '@angular/core';
 import { FormField, form, min } from '@angular/forms/signals';
+import { Router } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
+import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
@@ -12,6 +14,7 @@ import { MatSlideToggleModule, MatSlideToggleChange } from '@angular/material/sl
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { ApiService } from '../../core/api.service';
 import { ProjectSettingsDto } from '../../core/models';
+import { ConfirmDialogComponent } from '../../shared/confirm-dialog/confirm-dialog.component';
 import { ProjectContextService } from '../projects/project-context.service';
 
 @Component({
@@ -27,6 +30,7 @@ import { ProjectContextService } from '../projects/project-context.service';
     MatSelectModule,
     MatSlideToggleModule,
     MatProgressBarModule,
+    MatDialogModule,
   ],
   templateUrl: './settings-panel.component.html',
   styleUrl: './settings-panel.component.scss',
@@ -34,10 +38,13 @@ import { ProjectContextService } from '../projects/project-context.service';
 export class SettingsPanelComponent {
   private readonly api = inject(ApiService);
   private readonly snackBar = inject(MatSnackBar);
+  private readonly router = inject(Router);
+  private readonly dialog = inject(MatDialog);
   protected readonly ctx = inject(ProjectContextService);
 
   protected readonly saving = signal(false);
   protected readonly installing = signal(false);
+  protected readonly deleting = signal(false);
   private lastReindexScheduledAt: string | null = null;
 
   protected readonly settingsModel = signal({
@@ -169,5 +176,38 @@ export class SettingsPanelComponent {
         this.snackBar.open('Failed to register Claude Code integration.', 'Dismiss');
       },
     });
+  }
+
+  protected deleteProject(): void {
+    const projectId = this.ctx.projectId();
+    const projectName = this.ctx.projectName();
+
+    this.dialog
+      .open(ConfirmDialogComponent, {
+        width: '440px',
+        data: {
+          title: 'Delete project',
+          message: `Delete "${projectName}"? This permanently removes its index, memories, sessions, and settings from Context Platform. Files on disk are never touched.`,
+          confirmLabel: 'Delete project',
+        },
+      })
+      .afterClosed()
+      .subscribe((confirmed) => {
+        if (!confirmed) {
+          return;
+        }
+
+        this.deleting.set(true);
+        this.api.deleteProject(projectId).subscribe({
+          next: () => {
+            this.snackBar.open('Project deleted.', 'Dismiss', { duration: 4000 });
+            this.router.navigate(['/projects']);
+          },
+          error: () => {
+            this.deleting.set(false);
+            this.snackBar.open('Failed to delete project.', 'Dismiss');
+          },
+        });
+      });
   }
 }

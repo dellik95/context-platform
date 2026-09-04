@@ -278,13 +278,16 @@ export interface UsageSummaryDto {
 }
 
 // Mirrors src/Context.Application/Indexing/ReindexProgressDto.cs, pushed over the
-// /hubs/indexing SignalR hub's "ReindexProgress" event.
+// /hubs/indexing SignalR hub's "ReindexProgress" event. `cancelled` is only ever true on the
+// synthetic final event Context.Host sends after POST /api/projects/{id}/index/cancel actually
+// stops a reindex (completed is also true on that event -- see the DTO's own remarks).
 export interface ReindexProgressEvent {
   projectId: string;
   filesProcessed: number;
   filesTotal: number;
   completed: boolean;
   filesFailed: number;
+  cancelled: boolean;
 }
 
 // Mirrors Context.Application.Settings.ProjectSettingsDto exactly (see CONTRACTS.md §12 and

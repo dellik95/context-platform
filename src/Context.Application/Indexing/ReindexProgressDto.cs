@@ -8,4 +8,10 @@ namespace Context.Application.Indexing;
 // IndexingPipeline.ReindexProjectAsync's per-file try/catch) and were skipped rather than
 // aborting the whole pass; it is always 0 until the pass completes, since failures can only be
 // tallied once every file has been attempted.
-public sealed record ReindexProgressDto(Guid ProjectId, int FilesProcessed, int FilesTotal, bool Completed, int FilesFailed = 0);
+//
+// Cancelled is true only for the synthetic final progress event Context.Host's ProjectEndpoints
+// sends after a reindex observes cancellation (see its POST /api/projects/{id}/index/cancel) --
+// IndexingPipeline itself never sets it. Completed is also true on that event: cancellation still
+// ends the reindex, it just doesn't finish the scan, and Completed is what the Dashboard's
+// progress UI keys off to stop showing "reindexing...".
+public sealed record ReindexProgressDto(Guid ProjectId, int FilesProcessed, int FilesTotal, bool Completed, int FilesFailed = 0, bool Cancelled = false);
