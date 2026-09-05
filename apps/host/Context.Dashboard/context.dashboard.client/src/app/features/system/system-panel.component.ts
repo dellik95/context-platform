@@ -98,6 +98,8 @@ export class SystemPanelComponent {
   protected readonly initialJobsLoading = computed(() => this.jobsLoading() && !this.failedJobsResource.hasValue());
   protected readonly jobsError = computed(() => Boolean(this.failedJobsResource.error()));
   protected readonly retryingJobId = signal<string | null>(null);
+  protected readonly retryingAll = signal(false);
+  protected readonly cleaningUp = signal(false);
 
   // Log tail: fetched on demand (button click) rather than eagerly, since most visits to this tab
   // don't need it and a 200-line tail on every load would be wasted work.
@@ -204,6 +206,35 @@ export class SystemPanelComponent {
         this.retryingJobId.set(null);
         const message = err?.error?.message ?? `Failed to retry ${job.type} job.`;
         this.snackBar.open(message, 'Dismiss');
+      },
+    });
+  }
+
+  protected retryAllFailed(): void {
+    this.retryingAll.set(true);
+    this.api.retryAllFailedJobs(this.ctx.projectId()).subscribe({
+      next: (result) => {
+        this.retryingAll.set(false);
+        this.failedJobsResource.reload();
+        this.snackBar.open(`Retried ${result.retried}/${result.total} failed job(s).`, 'Dismiss');
+      },
+      error: () => {
+        this.retryingAll.set(false);
+        this.snackBar.open('Failed to retry jobs.', 'Dismiss');
+      },
+    });
+  }
+
+  protected cleanupCompleted(): void {
+    this.cleaningUp.set(true);
+    this.api.cleanupCompletedJobs(this.ctx.projectId()).subscribe({
+      next: (result) => {
+        this.cleaningUp.set(false);
+        this.snackBar.open(`Removed ${result.removed} completed job(s) from the queue.`, 'Dismiss');
+      },
+      error: () => {
+        this.cleaningUp.set(false);
+        this.snackBar.open('Failed to clean up the job queue.', 'Dismiss');
       },
     });
   }

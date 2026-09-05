@@ -26,6 +26,14 @@ public interface IJobRepository
     /// both <c>GET /api/system/status</c>'s four jobsXxx fields and <c>JobDispatcher</c>'s
     /// SignalR push of the same figures, so both stay computed exactly one way.</summary>
     Task<JobStatusCounts> CountByStatusAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Bulk-deletes every job row in <paramref name="status"/> (optionally scoped to one project),
+    /// returning how many were removed. Backs the System tab's "clean up job queue" action — a
+    /// long-running host accumulates one permanent <see cref="Job"/> row per completed EmbedChunk
+    /// job with nothing left to act on, and this is the only way to shrink that table back down.
+    /// </summary>
+    Task<int> DeleteByStatusAsync(JobStatus status, Guid? projectId, CancellationToken ct);
 }
 
 public sealed record JobStatusCounts(int Pending, int Running, int Failed, int Done);

@@ -83,4 +83,9 @@ public class JobRepository(ContextDbContext db) : IJobRepository
             CountFor(JobStatus.Failed),
             CountFor(JobStatus.Done));
     }
+
+    public Task<int> DeleteByStatusAsync(JobStatus status, Guid? projectId, CancellationToken ct) =>
+        db.Jobs
+            .Where(j => j.Status == status && (projectId == null || j.ProjectId == projectId))
+            .ExecuteDeleteAsync(ct);
 }

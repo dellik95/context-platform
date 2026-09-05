@@ -247,6 +247,17 @@ export interface JobDto {
   nextRetryAt: string | null;
 }
 
+// Response of POST /api/jobs/retry-all.
+export interface RetryAllJobsResponse {
+  retried: number;
+  total: number;
+}
+
+// Response of POST /api/jobs/cleanup.
+export interface CleanupJobsResponse {
+  removed: number;
+}
+
 // Mirrors apps/host/Context.Host/Api/JobsEndpoints.cs's LogTailDto record.
 export interface LogTailDto {
   lines: string[];

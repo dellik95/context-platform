@@ -79,6 +79,22 @@
         <mat-icon>refresh</mat-icon>
         Refresh
       </button>
+      @if (failedJobs().length > 0) {
+        <button mat-stroked-button type="button" color="primary" (click)="retryAllFailed()" [disabled]="retryingAll()">
+          <mat-icon>replay</mat-icon>
+          Retry all
+        </button>
+      }
+      <button
+        mat-stroked-button
+        type="button"
+        (click)="cleanupCompleted()"
+        [disabled]="cleaningUp()"
+        matTooltip="Remove finished (Done) jobs from the queue"
+      >
+        <mat-icon>delete_sweep</mat-icon>
+        Clean up completed
+      </button>
       @if (jobsLoading() && !initialJobsLoading()) {
         <mat-progress-bar mode="indeterminate" class="inline-progress" />
       }

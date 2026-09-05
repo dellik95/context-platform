@@ -1,4 +1,5 @@
 using Context.Application.Jobs;
+using Context.Application.Notifications;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
 using Context.Dashboard.Server.Security;
@@ -25,6 +26,8 @@ public static class JobsEndpoints
         var group = app.MapGroup("").RequireBearerToken();
         group.MapGet("/api/jobs", ListAsync);
         group.MapPost("/api/jobs/{id:guid}/retry", RetryAsync);
+        group.MapPost("/api/jobs/retry-all", RetryAllAsync);
+        group.MapPost("/api/jobs/cleanup", CleanupAsync);
         group.MapGet("/api/logs/tail", TailLogAsync);
     }
 
@@ -57,6 +60,55 @@ public static class JobsEndpoints
         {
             return Results.Conflict(new { message = $"Job '{id}' is not retryable: it is currently {ex.ActualStatus}, not {JobStatus.Failed}." });
         }
+    }
+
+    /// <summary>
+    /// System tab "retry all" — requeues every currently <see cref="JobStatus.Failed"/> job
+    /// (optionally scoped to one project) instead of clicking each one individually. Loads the
+    /// list fresh right before requeuing rather than reusing whatever the caller already had
+    /// rendered, so a job that finished/changed status between page load and this click is simply
+    /// skipped (not retryable) instead of erroring the whole batch.
+    /// </summary>
+    private static async Task<IResult> RetryAllAsync(Guid? projectId, IJobRepository jobs, IJobQueue jobQueue, CancellationToken ct)
+    {
+        var failed = await jobs.ListByStatusAsync(JobStatus.Failed, projectId, ct).ConfigureAwait(false);
+
+        var retried = 0;
+        foreach (var job in failed)
+        {
+            try
+            {
+                await jobQueue.RequeueAsync(job.Id, ct).ConfigureAwait(false);
+                retried++;
+            }
+            catch (JobNotRetryableException)
+            {
+                // Raced with something else already advancing this job's status -- skip it, don't
+                // fail the whole batch over one job.
+            }
+        }
+
+        return Results.Ok(new { retried, total = failed.Count });
+    }
+
+    /// <summary>
+    /// System tab "clean up job queue" — bulk-deletes every <see cref="JobStatus.Done"/> job
+    /// (optionally scoped to one project). Deliberately leaves Failed/Pending/Running alone: a
+    /// Failed row is still actionable (retry/diagnose), and Pending/Running are, by definition,
+    /// not finished yet.
+    /// </summary>
+    private static async Task<IResult> CleanupAsync(
+        Guid? projectId, IJobRepository jobs, IJobCountsNotifier jobCountsNotifier, CancellationToken ct)
+    {
+        var removed = await jobs.DeleteByStatusAsync(JobStatus.Done, projectId, ct).ConfigureAwait(false);
+
+        // Same host-wide counts push JobDispatcher does after every status change -- otherwise the
+        // System tab's Done tile stays stale (showing the pre-cleanup count) until its next slow
+        // reconciliation poll.
+        var counts = await jobs.CountByStatusAsync(ct).ConfigureAwait(false);
+        await jobCountsNotifier.NotifyAsync(new JobCounts(counts.Pending, counts.Running, counts.Failed, counts.Done), ct).ConfigureAwait(false);
+
+        return Results.Ok(new { removed });
     }
 
     /// <summary>

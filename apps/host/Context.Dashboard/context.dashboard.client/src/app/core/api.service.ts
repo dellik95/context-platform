@@ -4,6 +4,7 @@ import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
   BrowseDirectoryResponse,
+  CleanupJobsResponse,
   ClaudeInstallResponse,
   ContextPack,
   CreateProjectRequest,
@@ -18,6 +19,7 @@ import {
   ProjectDto,
   ProjectSettingsDto,
   ProjectStatusDto,
+  RetryAllJobsResponse,
   SessionDetailDto,
   SessionListItemDto,
   SessionSummaryChunkDto,
@@ -198,6 +200,14 @@ export class ApiService {
 
   retryJob(id: string): Observable<void> {
     return this.http.post<void>(`${this.base}/api/jobs/${id}/retry`, {});
+  }
+
+  retryAllFailedJobs(projectId: string): Observable<RetryAllJobsResponse> {
+    return this.http.post<RetryAllJobsResponse>(`${this.base}/api/jobs/retry-all?projectId=${projectId}`, {});
+  }
+
+  cleanupCompletedJobs(projectId: string): Observable<CleanupJobsResponse> {
+    return this.http.post<CleanupJobsResponse>(`${this.base}/api/jobs/cleanup?projectId=${projectId}`, {});
   }
 
   /** `requested` gates the initial fetch (stays idle until true); call the returned resource's

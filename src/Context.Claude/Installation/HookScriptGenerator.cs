@@ -47,13 +47,22 @@ internal static class HookScriptGenerator
                 HOSTS+=(host.docker.internal 172.17.0.1)
             fi
 
+            # $INPUT (a tool's full input/response JSON) can be large enough to blow past a
+            # platform's command-line length limit if passed to curl as a literal argument --
+            # Windows' ~32K CreateProcess limit in particular, which mingw64 curl.exe is subject to
+            # even though bash itself has no such limit. Writing it to a temp file and using
+            # curl's `--data-binary @file` sidesteps argv entirely, regardless of platform.
+            TMP_INPUT="$(mktemp 2>/dev/null)" || exit 0
+            trap 'rm -f "$TMP_INPUT"' EXIT
+            printf '%s' "$INPUT" > "$TMP_INPUT" 2>/dev/null
+
             RESPONSE=""
             LAST_ERROR=""
             for HOST in "${HOSTS[@]}"; do
                 OUTPUT="$(curl -fsS -m {{options.HookTimeoutSeconds}} -X POST "http://${HOST}:${PORT}/hooks/{{hook.HostRouteName}}" \
                     -H "Authorization: Bearer $TOKEN" \
                     -H "Content-Type: application/json" \
-                    --data-binary "$INPUT" 2>&1)"
+                    --data-binary @"$TMP_INPUT" 2>&1)"
                 if [ $? -eq 0 ]; then
                     RESPONSE="$OUTPUT"
                     LAST_ERROR=""
