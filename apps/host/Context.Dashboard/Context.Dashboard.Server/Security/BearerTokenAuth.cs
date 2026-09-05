@@ -49,7 +49,13 @@ public static class BearerTokenAuth
         return projects.GetByBearerTokenHashAsync(tokenHash, ct);
     }
 
-    private static string? ExtractToken(HttpContext http)
+    /// <summary>
+    /// Exposed <c>internal</c> so an endpoint that must re-mint local install artifacts (hooks,
+    /// <c>.mcp.json</c>) can reuse the exact token that already authenticated the current request —
+    /// see <see cref="Context.Dashboard.Server.Api.ClaudeEndpoints.InstallAsync"/>'s remarks on why
+    /// minting a fresh one there instead desyncs from <see cref="Project.BearerTokenHash"/>.
+    /// </summary>
+    internal static string? ExtractToken(HttpContext http)
     {
         var header = http.Request.Headers.Authorization.ToString();
         if (header.StartsWith(HeaderPrefix, StringComparison.Ordinal))

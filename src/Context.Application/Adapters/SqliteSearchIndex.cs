@@ -102,7 +102,7 @@ public sealed class SqliteSearchIndex(
         Guid projectId, float[] queryEmbedding, CancellationToken ct)
     {
         var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
-        var hits = await vectorIndex.SearchAsync(projectId, embeddingGenerator.GetProviderName(), queryEmbedding, VectorLimit, ct)
+        var hits = await vectorIndex.SearchAsync(projectId, embeddingGenerator.GetProviderModelKey(), queryEmbedding, VectorLimit, ct)
             .ConfigureAwait(false);
         if (hits.Count == 0)
         {

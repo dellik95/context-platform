@@ -28,12 +28,12 @@ public sealed class EmbedChunkJobHandler(
             ?? throw new InvalidOperationException($"Job {job.Id}: could not deserialize {nameof(EmbedChunkPayload)}.");
 
         var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(payload.ProjectId, ct).ConfigureAwait(false);
-        var providerName = embeddingGenerator.GetProviderName();
+        var providerKey = embeddingGenerator.GetProviderModelKey();
 
         // Re-check under the job's own execution: another EmbedChunk job for an identical chunk
         // (same content hash, different chunk id - e.g. two symbols with byte-identical bodies)
         // may have already embedded this content since this job was enqueued.
-        var existing = await embeddings.GetByContentHashAsync(payload.ContentHash, providerName, ct).ConfigureAwait(false);
+        var existing = await embeddings.GetByContentHashAsync(payload.ContentHash, providerKey, ct).ConfigureAwait(false);
 
         float[] vector;
         if (existing is not null)
@@ -48,8 +48,8 @@ public sealed class EmbedChunkJobHandler(
             await embeddings.UpsertAsync(new Context.Domain.Entities.Embedding
             {
                 ContentHash = payload.ContentHash,
-                Provider = providerName,
-                Model = providerName,
+                Provider = providerKey,
+                Model = embeddingGenerator.GetModelId() ?? providerKey,
                 Dim = vector.Length,
                 Vector = EmbeddingVectorCodec.Encode(vector),
                 CreatedAt = DateTimeOffset.UtcNow
@@ -58,7 +58,7 @@ public sealed class EmbedChunkJobHandler(
 
         foreach (var chunkId in payload.ChunkIds)
         {
-            await vectorIndex.UpsertAsync(chunkId, payload.ProjectId, providerName, vector, ct).ConfigureAwait(false);
+            await vectorIndex.UpsertAsync(chunkId, payload.ProjectId, providerKey, vector, ct).ConfigureAwait(false);
         }
     }
 }

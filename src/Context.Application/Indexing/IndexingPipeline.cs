@@ -450,7 +450,7 @@ public sealed class IndexingPipeline(
 
         var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
         var hashes = candidateChunks.Select(c => c.ContentHash).Distinct().ToList();
-        var missing = await embeddings.GetMissingContentHashesAsync(hashes, embeddingGenerator.GetProviderName(), ct).ConfigureAwait(false);
+        var missing = await embeddings.GetMissingContentHashesAsync(hashes, embeddingGenerator.GetProviderModelKey(), ct).ConfigureAwait(false);
         if (missing.Count == 0)
         {
             return;

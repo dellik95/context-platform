@@ -15,8 +15,19 @@ public static class ClaudeEndpoints
         app.MapPost("/api/projects/{id:guid}/claude/install", InstallAsync).RequireBearerToken();
     }
 
+    /// <summary>
+    /// Passes the token that already authenticated this request (validated against this exact
+    /// project's <see cref="Context.Domain.Entities.Project.BearerTokenHash"/> by
+    /// <see cref="BearerTokenAuth.RequireBearerTokenFilter"/>) straight through to
+    /// <see cref="IClaudeIntegrationInstaller.InstallAsync"/>. Without this, a project created via
+    /// the Dashboard (no local <c>context-platform.local.json</c> on disk yet) hits
+    /// <c>InstallAsync</c>'s fallback and mints a brand-new random token to write into the hook
+    /// scripts and <c>.mcp.json</c> — one <see cref="Project.BearerTokenHash"/> never matches, so
+    /// every hook call and MCP request the freshly-installed integration makes is rejected.
+    /// </summary>
     private static async Task<IResult> InstallAsync(
         Guid id,
+        HttpContext http,
         IProjectRepository projects,
         IClaudeIntegrationInstaller installer,
         CancellationToken ct)
@@ -27,7 +38,8 @@ public static class ClaudeEndpoints
             return Results.NotFound();
         }
 
-        await installer.InstallAsync(id, project.RootPath, ct).ConfigureAwait(false);
+        var bearerToken = BearerTokenAuth.ExtractToken(http);
+        await installer.InstallAsync(id, project.RootPath, ct, bearerToken).ConfigureAwait(false);
         await installer.InstallSkillAsync(id, project.RootPath, ct).ConfigureAwait(false);
 
         return Results.Ok(new { installed = true });
