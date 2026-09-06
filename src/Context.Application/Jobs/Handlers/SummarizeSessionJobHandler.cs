@@ -33,12 +33,35 @@ public sealed class SummarizeSessionJobHandler(
             ?? throw new InvalidOperationException($"Job {job.Id}: {nameof(JobType)}.{nameof(JobType.SummarizeSession)} jobs must carry a ProjectId.");
 
         var session = await sessionRepository.GetByIdAsync(projectId, payload.SessionId, ct).ConfigureAwait(false);
+        var settings = await settingsService.GetAsync(projectId, ct).ConfigureAwait(false);
 
         // since = the last recorded chunk's end, or the session's start when this is its first
         // chunk - either way, the boundary before which events are already covered by an
         // existing chunk and shouldn't be re-summarized.
         var existingChunks = await sessionRepository.GetSummaryChunksAsync(projectId, payload.SessionId, ct).ConfigureAwait(false);
         DateTimeOffset? since = existingChunks.Count > 0 ? existingChunks[^1].ToEventAt : session?.StartedAt;
+
+        // Gate against ProjectSettingsDto.MinEventsForSessionSummary - SessionSummaryScheduler
+        // already enforces this for its own periodic firing, but ContextEngine.EndSessionAsync
+        // enqueues this job unconditionally regardless of how little (or how much) happened, so
+        // without a check here every session - even one that ended after a single trivial event,
+        // or with literally nothing new since its last chunk - still got a persisted SessionSummary
+        // row (product feedback: "I do not need to write empty sessions"). Two cases:
+        //  - no new events at all: summarizing would only ever produce a placeholder ("No activity
+        //    recorded") chunk, and merging it in would clobber a real title already set by an
+        //    earlier chunk (SessionSummaryMerger.Merge keeps the LAST non-blank title) - so bail
+        //    unconditionally, even for a session that already has real chunks.
+        //  - some new events, but this would be the session's first-ever chunk and it doesn't clear
+        //    the "worth summarizing" bar: skip rather than persist a thin, near-empty summary. A
+        //    session that already has a real chunk is allowed through below that bar, since this is
+        //    just topping up an already-meaningful summary rather than creating one from scratch.
+        var allEvents = await sessionRepository.GetEventsAsync(projectId, payload.SessionId, ct).ConfigureAwait(false);
+        var newEventCount = since is null ? allEvents.Count : allEvents.Count(e => e.Timestamp > since.Value);
+
+        if (newEventCount == 0 || (existingChunks.Count == 0 && newEventCount < settings.MinEventsForSessionSummary))
+        {
+            return;
+        }
 
         var newChunk = await summarizer.SummarizeAsync(projectId, payload.SessionId, since, ct).ConfigureAwait(false);
         var savedChunk = await sessionRepository.AddSummaryChunkAsync(newChunk, ct).ConfigureAwait(false);
@@ -60,7 +83,7 @@ public sealed class SummarizeSessionJobHandler(
         // isn't worth that unless the session is actually ending, at which point every chunk must
         // be processed since there won't be a later pass to pick it up.
         var minEventsForExtraction = session is not null
-            ? (await settingsService.GetAsync(session.ProjectId, ct).ConfigureAwait(false)).MinEventsForMemoryExtraction
+            ? settings.MinEventsForMemoryExtraction
             : 0;
 
         if (payload.IsSessionEnd || savedChunk.EventCount >= minEventsForExtraction)

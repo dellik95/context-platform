@@ -37,7 +37,11 @@ internal static class SessionSummaryPromptBuilder
         NEXT_STEPS:
         <bullet list of suggested follow-up work, or "(none)">
 
-        Be terse and factual. Do not invent information that isn't supported by the events.
+        Be terse and factual. Do not invent information that isn't supported by the events. Ground
+        every bullet in the concrete specifics visible in the events — name the actual file paths,
+        symbol/function/class names, commands, and error messages involved instead of describing
+        them generically ("a service", "some files", "the config"); this summary is the only input
+        a later memory-extraction pass sees, so a vague bullet here becomes an unusable memory later.
         """;
 
     public static string BuildUserPrompt(Guid sessionId, IReadOnlyList<SessionEvent> events, bool isSlice = false)
