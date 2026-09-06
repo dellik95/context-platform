@@ -36,8 +36,15 @@ public sealed class SqliteSearchIndex(
     private const int VectorLimit = 50;
     private const int SnippetLength = 400;
 
-    private static readonly SemaphoreSlim InitGate = new(1, 1);
-    private static volatile bool _ftsInitialized;
+    // Instance-level, not static: SqliteSearchIndex is a singleton per DI container in production
+    // (one instance == one database file, so this is still effectively "once per process" there),
+    // but tests build more than one DI container -- each against its own temp database file --
+    // within the same test process. A `static` flag here previously meant the FIRST test to touch
+    // lexical search left every later test's *different* database permanently un-initialized
+    // (chunks_fts never created for it), silently returning zero hits regardless of what data it
+    // indexed -- indistinguishable from an actual search bug.
+    private readonly SemaphoreSlim _initGate = new(1, 1);
+    private volatile bool _ftsInitialized;
 
     public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double BM25Score)>> LexicalSearchAsync(
         Guid projectId, string text, CancellationToken ct)
@@ -68,7 +75,14 @@ public sealed class SqliteSearchIndex(
             LIMIT @limit;
             """;
         AddParameter(command, "@match", matchExpression);
-        AddParameter(command, "@projectId", projectId.ToString());
+        // EF Core's Sqlite provider persists Guid columns as upper-invariant TEXT (confirmed
+        // against this project's own on-disk data: e.g. Files."ProjectId" is stored as
+        // "4FE55277-...", not "4fe55277-..."). This command runs on the raw ADO.NET connection,
+        // bypassing EF's value conversion entirely, so binding the default (lowercase)
+        // Guid.ToString() here made this WHERE clause compare against SQLite's case-sensitive
+        // default (BINARY) collation and never match -- LexicalSearchAsync silently returned zero
+        // rows for every project. Match EF's own on-disk casing so the comparison actually hits.
+        AddParameter(command, "@projectId", projectId.ToString().ToUpperInvariant());
         AddParameter(command, "@snippetLength", SnippetLength);
         AddParameter(command, "@limit", LexicalLimit);
 
@@ -179,14 +193,14 @@ public sealed class SqliteSearchIndex(
     /// <see cref="SqliteSearchIndex"/> instances get constructed, and idempotent across process
     /// restarts against the same on-disk database (checked via <c>sqlite_master</c>).
     /// </summary>
-    private static async Task EnsureFtsInitializedAsync(ContextDbContext db, CancellationToken ct)
+    private async Task EnsureFtsInitializedAsync(ContextDbContext db, CancellationToken ct)
     {
         if (_ftsInitialized)
         {
             return;
         }
 
-        await InitGate.WaitAsync(ct).ConfigureAwait(false);
+        await _initGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             if (_ftsInitialized)
@@ -200,8 +214,16 @@ public sealed class SqliteSearchIndex(
             var alreadyExists = await FtsTableExistsAsync(connection, ct).ConfigureAwait(false);
             if (!alreadyExists)
             {
+                // trigram (not the FTS5 default, unicode61): unicode61 only splits on
+                // non-alphanumeric characters, so a source-code identifier like "AuthMiddleware"
+                // indexes as one token "authmiddleware" -- a query for "auth" or "middleware"
+                // (BuildMatchExpression's OR-of-tokens, built from natural-language-style search
+                // text) then never matches it, silently returning zero lexical hits for exactly the
+                // kind of query this search exists for. trigram tokenizes into overlapping
+                // 3-character sequences instead, which matches substrings regardless of
+                // camelCase/PascalCase/snake_case word boundaries.
                 await db.Database.ExecuteSqlRawAsync(
-                    "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, content='Chunks', content_rowid='rowid');", ct)
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, content='Chunks', content_rowid='rowid', tokenize='trigram');", ct)
                     .ConfigureAwait(false);
 
                 await db.Database.ExecuteSqlRawAsync("""
@@ -232,7 +254,7 @@ public sealed class SqliteSearchIndex(
         }
         finally
         {
-            InitGate.Release();
+            _initGate.Release();
         }
     }
 
