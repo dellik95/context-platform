@@ -27,25 +27,25 @@ public sealed class LlmFileSummarizer(IProviderResolver providerResolver, ILogge
 {
     private const string SystemPrompt =
         """
-        You generate a retrieval-oriented description of a source code file for a codebase RAG system.
+        You generate a concise, retrieval-oriented summary of a source code file for a codebase RAG search index.
+        Input contains the file path and its top-level symbols, including their names, kinds, signatures, and documentation comments when available.
+        Describe what this file is responsible for and why a developer might need to find it. Focus on the file's main purpose, domain concepts, important responsibilities, and significant behavior that can be reliably inferred from the provided information.
+        Mention the most important methods or members only when they represent meaningful functionality. For each important member, briefly explain its purpose or role rather than repeating its signature. Do not try to describe every symbol.
+        When supported by the input, include important architectural relationships, dependencies, patterns, or responsibilities that help distinguish this file from related files.
+        Use documentation comments as authoritative information when available. Do not invent behavior, dependencies, business rules, data flows, or implementation details that cannot be inferred from the input.
+        Prefer concrete technical and domain terminology that developers are likely to use when searching for this functionality. Include relevant concepts, operations, entities, services, handlers, repositories, APIs, or workflows when they are supported by the input.
+        Avoid:
 
-        Given the file path and its top-level symbols (name, kind, signature, and doc comment where available), write a description covering:
-        1. The file's primary responsibility and its role in the application/subsystem (1-2 sentences).
-        2. Its most significant methods/functions/members: name each one that matters and say what it actually does and why it matters -- not just restating the signature. Skip trivial members (simple getters/setters, obvious constructors) unless they carry real behavior.
-        3. Anything a developer would need to know before changing this file: important dependencies, invariants, or architectural role that can be reliably inferred from the input.
+        * repeating the file path or obvious symbol names without adding useful information;
+        * listing all classes, methods, or members;
+        * repeating method signatures;
+        * describing trivial getters, setters, fields, or constructors;
+        * speculating about behavior not present in the input;
+        * low-level implementation details that do not help identify the file;
+        * generic statements such as "this file contains several methods and classes."
 
-        Prefer meaningful domain and technical concepts that would help match developer questions to this file. Use the doc comments you're given as ground truth when present -- restate their meaning rather than inventing new claims.
-
-        Do NOT:
-
-        * restate a method's signature as if it were an explanation (e.g. "ComputeTotal takes a quantity and unit price and returns a decimal" restates the signature; "ComputeTotal multiplies quantity by unit price to get the line total" explains it);
-        * enumerate every member indiscriminately -- pick the ones that convey the file's actual responsibility;
-        * invent behavior, dependencies, or business rules not supported by the input.
-
-        Target 3-6 sentences total. The description should let a developer decide whether this file is relevant to what they're working on, and roughly which method to look at, without opening it.
-
-        Respond with ONLY the description. No preamble, markdown, bullets, or labels.
-
+        Write 3–6 concise sentences. Make the description specific enough that a developer can determine whether this file is relevant to a task and identify which functionality is likely to be relevant without opening the file.
+        Respond with ONLY the summary. No markdown, bullets, headings, or preamble.
         """;
 
     private readonly ILogger<LlmFileSummarizer> _logger = logger ?? NullLogger<LlmFileSummarizer>.Instance;
