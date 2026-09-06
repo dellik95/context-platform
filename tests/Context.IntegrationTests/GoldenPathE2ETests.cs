@@ -1,6 +1,7 @@
 using Context.Application;
 using Context.Application.Abstractions;
 using Context.Application.Jobs;
+using Context.Application.Settings;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
 using Context.Graph;
@@ -173,6 +174,16 @@ public sealed class GoldenPathE2ETests : IAsyncLifetime
             Guid sessionId;
             await using (var sessionScope = _provider.CreateAsyncScope())
             {
+                // This fixture's session deliberately carries only two events -- enough to prove
+                // the summarize/extract pipeline runs, not enough to be a realistic session length.
+                // SummarizeSessionJobHandler now skips persisting a summary for a session's first
+                // chunk when it doesn't clear MinEventsForSessionSummary (product feedback: "I do
+                // not need to write empty sessions"), so this fixture must lower that bar itself
+                // rather than rely on the default meant for real usage.
+                var settingsService = sessionScope.ServiceProvider.GetRequiredService<IProjectSettingsService>();
+                var settings = await settingsService.GetAsync(project.Id, ct);
+                await settingsService.UpdateAsync(project.Id, settings with { MinEventsForSessionSummary = 1 }, ct);
+
                 var engine = sessionScope.ServiceProvider.GetRequiredService<IContextEngine>();
                 sessionId = await engine.StartSessionAsync(project.Id, claudeSessionId: null, ct);
 

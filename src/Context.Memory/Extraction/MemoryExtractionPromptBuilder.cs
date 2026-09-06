@@ -31,11 +31,42 @@ internal static class MemoryExtractionPromptBuilder
         - a task still in progress with no decision or conclusion yet
 
         Titles must be outcome-focused (what changed or was learned), never process-focused (what
-        you did to find out). For example:
+        you did to find out), and must be as concrete as the session material allows - name the
+        actual thing, not a category of thing. For example:
         GOOD: "OAuth2 PKCE flow added to authentication"
         GOOD: "Discovered flush strategy fails under concurrent sessions"
         BAD:  "Analyzed authentication implementation" (describes the analysis, not what was found)
         BAD:  "Reviewed session handling code" (process narration, no outcome)
+        BAD:  "Embedding service architecture spans multiple modules" (true but says nothing an
+              engineer could act on - which modules, and via what mechanism?)
+        GOOD: "OllamaEmbeddingGeneratorDecorator caps concurrent embedding calls via SemaphoreSlim"
+              (same underlying fact, but names the actual class and mechanism)
+
+        BODY is the main payload and the most common failure mode is writing it too generically -
+        a memory that only restates its own title in sentence form, or names a class/module without
+        saying what it actually does or why it matters, is nearly useless when it resurfaces in a
+        future session. Write BODY as if explaining to an engineer who was NOT in this session and
+        needs to act on it immediately:
+        - Name the SPECIFIC files (by path), classes/functions/symbols (by name), and config keys
+          or settings actually involved, exactly as they appeared in the session material below -
+          never fall back to a generic stand-in ("a service", "some files", "the config", "the
+          module") when the concrete name is available.
+        - State the actual mechanism or reasoning, not just that something happened: what the
+          concrete problem or prior behavior was, what specifically changed or was found, and why
+          that resolves/explains it (the causal link a reader would otherwise have to re-derive).
+        - Prefer one dense, specific paragraph over several vague ones. A BODY that could be copy-
+          pasted onto an unrelated memory of the same TYPE without anyone noticing is too generic -
+          rewrite it with the details that make it true of THIS session and no other.
+        Example, same underlying session fact as the title example above:
+        BAD BODY:  "Embedding service architecture spans multiple modules via
+                    ModuleEfConfigurationRegistry." (names one symbol but explains no mechanism,
+                    no problem, no reasoning - just a label dressed as a sentence)
+        GOOD BODY: "OllamaEmbeddingGeneratorDecorator (src/Context.Providers/Embeddings/
+                    OllamaEmbeddingGeneratorDecorator.cs) wraps the raw Ollama client and limits
+                    concurrent GenerateAsync calls to 4 via a SemaphoreSlim, because the shared
+                    Ollama instance returned truncated/zero vectors when more than ~6 embedding
+                    requests were in flight at once. EmbeddingLookupAdapter now awaits this
+                    decorator instead of calling the raw generator directly."
 
         Respond in EXACTLY this format:
 
@@ -43,7 +74,7 @@ internal static class MemoryExtractionPromptBuilder
         MEMORY 1
         TYPE: <one of Decision, Discovery, BugFix, Feature, Refactor, Change, Exploration, Architecture, Issue>
         TITLE: <short one-line title, under 100 characters>
-        BODY: <1-3 sentence explanation, self-contained without needing the session for context>
+        BODY: <2-5 sentences, self-contained, naming specific files/symbols/config keys and the actual mechanism or reasoning per the BODY guidance above - not a restatement of TITLE>
         FACTS:
         - <fact 1>
         - <fact 2>
@@ -61,7 +92,10 @@ internal static class MemoryExtractionPromptBuilder
 
         FACTS is 2-5 short, atomic, standalone facts pulled out of this memory — each one must
         make sense read on its own, with no surrounding narrative, since it is shown when a
-        search result needs to say something useful in very few tokens.
+        search result needs to say something useful in very few tokens. Reuse the concrete names
+        from BODY (a file path, a symbol, a number, a config key) rather than a vaguer paraphrase —
+        a fact is a compressed restatement of something specific already said in BODY, not a new,
+        softer summary of it.
 
         CONCEPTS is 1-3 tags naming what KIND of knowledge this memory is, chosen ONLY from this
         fixed list (do not invent new ones): how-it-works, why-it-exists, what-changed,
