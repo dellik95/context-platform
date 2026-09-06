@@ -13,7 +13,14 @@ public interface IContextEngine
 
     Task<Context.Graph.Abstractions.ImpactSet> GraphImpactAsync(Guid symbolId, int maxHops, CancellationToken ct);
 
-    Task<IReadOnlyList<Context.Domain.Entities.Memory>> SearchMemoryAsync(Guid projectId, string query, bool includeSuperseded, CancellationToken ct);
+    /// <summary>
+    /// <paramref name="topic"/> (optional, added alongside <see cref="Context.Domain.Entities.Memory.Topic"/>)
+    /// additionally restricts results to memories tagged with that topic — see
+    /// <see cref="Context.Infrastructure.Abstractions.IMemoryRepository.SearchAsync"/> for the
+    /// exact matching rule. Trailing/optional rather than inserted earlier in the parameter list
+    /// so every existing positional call site (CONTRACTS.md §10's original fixed shape) keeps compiling.
+    /// </summary>
+    Task<IReadOnlyList<Context.Domain.Entities.Memory>> SearchMemoryAsync(Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null);
 
     Task<Guid> StartSessionAsync(Guid projectId, string? claudeSessionId, CancellationToken ct);
 

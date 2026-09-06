@@ -15,8 +15,11 @@ public interface IMemoryRepository
 
     /// <summary>Simple substring match over Title/Body scoped to a project — the offline-friendly
     /// fallback path; a real implementation can layer embedding similarity on top via
-    /// Context.Retrieval without changing this contract.</summary>
-    Task<IReadOnlyList<Memory>> SearchAsync(Guid projectId, string query, bool includeSuperseded, CancellationToken ct);
+    /// Context.Retrieval without changing this contract. When <paramref name="topic"/> is
+    /// non-null/whitespace, results are additionally restricted to memories whose
+    /// <see cref="Memory.Topic"/> matches it (case-insensitive, exact match) — lets a caller
+    /// combine free-text search with "only this topic" the way the dashboard's filter bar does.</summary>
+    Task<IReadOnlyList<Memory>> SearchAsync(Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null);
 
     Task<IReadOnlyList<Memory>> ListByProjectAsync(Guid projectId, bool includeSuperseded, CancellationToken ct);
 }

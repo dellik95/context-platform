@@ -39,7 +39,7 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
         // affected == 0 (id didn't exist) is a no-op, not an error — delete is idempotent here.
     }
 
-    public async Task<IReadOnlyList<Memory>> SearchAsync(Guid projectId, string query, bool includeSuperseded, CancellationToken ct)
+    public async Task<IReadOnlyList<Memory>> SearchAsync(Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null)
     {
         var pattern = $"%{query}%";
         var q = db.Memories.AsNoTracking().Where(m => m.ProjectId == projectId &&
@@ -48,6 +48,14 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
         if (!includeSuperseded)
         {
             q = q.Where(m => m.SupersededById == null);
+        }
+
+        if (!string.IsNullOrWhiteSpace(topic))
+        {
+            // SQLite's LIKE is case-insensitive for ASCII by default (same assumption the
+            // Title/Body match above relies on) — used here with no wildcards for an
+            // effectively case-insensitive exact match against the topic tag.
+            q = q.Where(m => m.Topic != null && EF.Functions.Like(m.Topic, topic));
         }
 
         // SQLite's EF Core provider cannot translate ORDER BY over DateTimeOffset columns

@@ -244,6 +244,7 @@ public sealed class LlmMemoryExtractor(
         Type = candidate.Type,
         Title = candidate.Title,
         Body = candidate.Body,
+        Topic = candidate.Topic,
         FactsJson = JsonSerializer.Serialize(candidate.Facts),
         ConceptsJson = candidate.Concepts.Count > 0 ? JsonSerializer.Serialize(candidate.Concepts) : null,
         FilesReadJson = candidate.FilesRead.Count > 0 ? JsonSerializer.Serialize(candidate.FilesRead) : null,
