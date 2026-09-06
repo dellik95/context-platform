@@ -206,8 +206,8 @@ export class ApiService {
     return this.http.post<RetryAllJobsResponse>(`${this.base}/api/jobs/retry-all?projectId=${projectId}`, {});
   }
 
-  cleanupCompletedJobs(projectId: string): Observable<CleanupJobsResponse> {
-    return this.http.post<CleanupJobsResponse>(`${this.base}/api/jobs/cleanup?projectId=${projectId}`, {});
+  cleanupJobs(projectId: string, status: 'Done' | 'Pending'): Observable<CleanupJobsResponse> {
+    return this.http.post<CleanupJobsResponse>(`${this.base}/api/jobs/cleanup?projectId=${projectId}&status=${status}`, {});
   }
 
   /** `requested` gates the initial fetch (stays idle until true); call the returned resource's

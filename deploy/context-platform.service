@@ -1,6 +1,11 @@
 [Unit]
 Description=Context Platform Host
-After=network.target
+After=network.target redis-server.service
+# Soft dependency only -- most installs don't run Redis at all (CONTEXT_PLATFORM_REDIS unset means
+# JobDispatcher's IJobSignal falls back to its single-process in-memory default), and systemd
+# tolerates ordering against a unit that doesn't exist on this box. Wants (not Requires) so a
+# missing/failed redis-server never blocks this service from starting.
+Wants=redis-server.service
 
 [Service]
 # UseSystemd() in Program.cs sends the READY=1 notification this Type expects.

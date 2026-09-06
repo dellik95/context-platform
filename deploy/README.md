@@ -74,6 +74,26 @@ indexed, then run `context claude install --project <id>` (Context.Cli) from tha
 `.mcp.json` and the hook scripts assuming Context.Dashboard.Server listens on `127.0.0.1:47923` (or
 `CONTEXT_PLATFORM_PORT` if you overrode it).
 
+## Multi-instance job dispatch (optional)
+
+A single instance needs nothing here -- `JobDispatcher` defaults to an in-process signal and works
+exactly as before. Running more than one `Context.Dashboard.Server` process against the *same*
+database (e.g. for more embedding/indexing throughput than one process's worker pool gives you)
+needs a shared way for each instance to learn "something new is ready to claim" -- set
+`CONTEXT_PLATFORM_REDIS` (e.g. `localhost:6379`) on every instance pointed at the same Redis, and
+each will claim actual work from the database itself (`IJobRepository.DequeueNextAsync`'s atomic
+claim), Redis only relays the wake-up. Nothing here installs Redis for you:
+
+```bash
+# Linux (systemd) -- installs Redis locally, points this instance at it
+sudo apt-get install -y redis-server
+sudo ./deploy/install-systemd-service.sh --redis localhost:6379
+```
+
+If Redis is down or unreachable when this process starts, it does not fail to start -- job dispatch
+just falls back to its own poll-timer cadence (a few seconds slower to notice new work, see
+`JobDispatcher`'s remarks) until Redis comes back.
+
 ## Running under WSL2, consumed from Windows
 
 WSL2 forwards ports a process binds inside the distro on `127.0.0.1` to Windows' own `localhost`

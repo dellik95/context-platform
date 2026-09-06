@@ -91,24 +91,41 @@ public static class JobsEndpoints
         return Results.Ok(new { retried, total = failed.Count });
     }
 
+    /// <summary>Statuses this endpoint is willing to bulk-delete. Running is excluded outright — a
+    /// row backing an in-flight job must never be deleted out from under its worker. Failed is
+    /// excluded too: it's still actionable via retry/diagnose, and has no bulk-delete ask today
+    /// (only "retry all").</summary>
+    private static readonly JobStatus[] CleanableStatuses = [JobStatus.Done, JobStatus.Pending];
+
     /// <summary>
-    /// System tab "clean up job queue" — bulk-deletes every <see cref="JobStatus.Done"/> job
-    /// (optionally scoped to one project). Deliberately leaves Failed/Pending/Running alone: a
-    /// Failed row is still actionable (retry/diagnose), and Pending/Running are, by definition,
-    /// not finished yet.
+    /// System tab "clean up job queue" — bulk-deletes every job in <paramref name="status"/>
+    /// (default <see cref="JobStatus.Done"/>, optionally scoped to one project). Pending is also
+    /// allowed: a backlog built up by a since-fixed bug (e.g. a bad embedding model config that
+    /// queued thousands of doomed retries) has nothing worth keeping either — but unlike Done, a
+    /// Pending row can still represent real, not-yet-attempted work, so the caller opts into it
+    /// explicitly rather than it being bundled into the default cleanup.
     /// </summary>
     private static async Task<IResult> CleanupAsync(
-        Guid? projectId, IJobRepository jobs, IJobCountsNotifier jobCountsNotifier, CancellationToken ct)
+        JobStatus? status, Guid? projectId, IJobRepository jobs, IJobCountsNotifier jobCountsNotifier, CancellationToken ct)
     {
-        var removed = await jobs.DeleteByStatusAsync(JobStatus.Done, projectId, ct).ConfigureAwait(false);
+        var effectiveStatus = status ?? JobStatus.Done;
+        if (!CleanableStatuses.Contains(effectiveStatus))
+        {
+            return Results.BadRequest(new
+            {
+                message = $"Cannot bulk-delete jobs in status '{effectiveStatus}'. Allowed: {string.Join(", ", CleanableStatuses)}."
+            });
+        }
+
+        var removed = await jobs.DeleteByStatusAsync(effectiveStatus, projectId, ct).ConfigureAwait(false);
 
         // Same host-wide counts push JobDispatcher does after every status change -- otherwise the
-        // System tab's Done tile stays stale (showing the pre-cleanup count) until its next slow
+        // System tab's stat tiles stay stale (showing the pre-cleanup count) until its next slow
         // reconciliation poll.
         var counts = await jobs.CountByStatusAsync(ct).ConfigureAwait(false);
         await jobCountsNotifier.NotifyAsync(new JobCounts(counts.Pending, counts.Running, counts.Failed, counts.Done), ct).ConfigureAwait(false);
 
-        return Results.Ok(new { removed });
+        return Results.Ok(new { removed, status = effectiveStatus });
     }
 
     /// <summary>

@@ -83,6 +83,12 @@ public static class ServiceCollectionExtensions
             Context.Application.Notifications.NullProjectActivityNotifier.Instance);
         services.AddSingleton<Context.Application.Notifications.IJobCountsNotifier>(
             Context.Application.Notifications.NullJobCountsNotifier.Instance);
+
+        // Default/fallback so Context.Application has zero hard dependency on Redis;
+        // Context.Dashboard.Server overrides this with a Redis-backed IJobSignal when
+        // multi-instance operation is configured (registration order — last AddSingleton for a
+        // given interface wins), so more than one Dashboard.Server process can share one job queue.
+        services.AddSingleton<IJobSignal, InMemoryJobSignal>();
         AddProjectSettings(services);
 
         return services;

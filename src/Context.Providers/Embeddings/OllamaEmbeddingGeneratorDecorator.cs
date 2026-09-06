@@ -13,9 +13,24 @@ namespace Context.Providers.Embeddings;
 public sealed class OllamaEmbeddingGeneratorDecorator(IEmbeddingGenerator<string, Embedding<float>> inner, string model)
     : DelegatingEmbeddingGenerator<string, Embedding<float>>(inner)
 {
+    // Ollama serializes inference per model on one CPU/GPU pipeline by default -- JobDispatcher's
+    // own worker pool (one per CPU core, so a dozen-plus on a typical dev box) can fire far more
+    // concurrent EmbedChunk requests than a single local Ollama instance can actually run at once.
+    // The excess doesn't fail fast, it queues up *inside* Ollama; by the time a late request's turn
+    // comes up it can exceed the caller's own HttpClient timeout, and every one of those requests
+    // holds its job's DB scope open the whole time it waits, which was observed degrading latency
+    // for everything else sharing the same SQLite database (hooks, search) while a large backlog
+    // drained. Process-wide (not per-model/per-project) because every Ollama-backed project on this
+    // host ultimately shares the same one local Ollama process -- the real bottleneck is that
+    // shared backend, not any one project's config. Capping it here means the requests that don't
+    // fit just wait cheaply (no HTTP call, no open DB scope) instead of timing out.
+    private const int MaxConcurrentRequests = 2;
+    private static readonly SemaphoreSlim Gate = new(MaxConcurrentRequests, MaxConcurrentRequests);
+
     public override async Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(
         IEnumerable<string> values, EmbeddingGenerationOptions? options = null, CancellationToken ct = default)
     {
+        await Gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             return await base.GenerateAsync(values, options, ct).ConfigureAwait(false);
@@ -26,6 +41,10 @@ public sealed class OllamaEmbeddingGeneratorDecorator(IEmbeddingGenerator<string
                 $"Ollama embeddings rejected this content as exceeding '{model}''s context window. " +
                 "It needs to be split into smaller chunks upstream, or embedded with a model that has a larger window.",
                 ex);
+        }
+        finally
+        {
+            Gate.Release();
         }
     }
 

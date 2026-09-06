@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Threading.Channels;
 using Context.Application.Notifications;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
@@ -12,34 +11,45 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Context.Application.Jobs;
 
 /// <summary>
-/// Durable-log-plus-in-process-dispatcher <see cref="IJobQueue"/> implementation, per the task
-/// brief §2. <see cref="IJobRepository"/> is the durable log (every
-/// job is a <see cref="Job"/> row, and nothing is ever lost across a process restart);
-/// <see cref="Channel{T}"/> of job ids is the live, in-memory work queue that gives workers
-/// something to await instead of polling. Registered as a singleton (see
-/// <c>ServiceCollectionExtensions.AddContextApplication</c>) implementing both
-/// <see cref="IJobQueue"/> (so any scoped consumer can enqueue work) and
-/// <see cref="IHostedService"/> (so <c>Context.Dashboard.Server</c> only has to
+/// Durable-log-plus-signal <see cref="IJobQueue"/> implementation, per the task brief §2.
+/// <see cref="IJobRepository"/> is the durable log AND the sole source of truth for which job runs
+/// next: <see cref="IJobRepository.DequeueNextAsync"/> atomically claims the highest-priority
+/// runnable job (flips it <c>Pending</c> -&gt; <c>Running</c> inside one transaction), so claiming is
+/// safe even when more than one <see cref="JobDispatcher"/> process shares the same database.
+/// <see cref="IJobSignal"/> is only ever a hint to go check the database again -- it never carries a
+/// specific job id -- which is what makes multi-process operation correct: two processes racing to
+/// claim after the same signal simply have one of them get the job and the other get <c>null</c>
+/// back, no coordination beyond what the database's own transaction already provides. Registered as
+/// a singleton (see <c>ServiceCollectionExtensions.AddContextApplication</c>) implementing both
+/// <see cref="IJobQueue"/> (so any scoped consumer can enqueue work) and <see cref="IHostedService"/>
+/// (so <c>Context.Dashboard.Server</c> only has to
 /// <c>services.AddHostedService(sp => sp.GetRequiredService&lt;JobDispatcher&gt;())</c> to get the
-/// background worker pool started/stopped with the app's own lifetime — the
-/// "hosted-service-friendly" part of the brief).
+/// background worker pool started/stopped with the app's own lifetime).
 /// </summary>
 /// <remarks>
 /// <b>Per-job DI scope:</b> <see cref="Handlers.IJobHandler"/> implementations depend on Scoped
-/// repositories (EF Core), and this dispatcher is a singleton, so every job is processed inside
-/// its own freshly-created <see cref="IServiceScope"/> (see <see cref="ProcessJobAsync"/>) —
+/// repositories (EF Core), and this dispatcher is a singleton, so every job is processed inside its
+/// own freshly-created <see cref="IServiceScope"/> (see <see cref="ProcessClaimedJobAsync"/>) --
 /// exactly as documented on <see cref="Handlers.IJobHandler"/> itself.
 /// </remarks>
 /// <remarks>
-/// <b>Retry scheduling:</b> the channel literally carries the id of the job to run next (matching
-/// the brief's "writes the Id to the channel" / "loads the Job" wording), not just a wake-up
-/// signal. A failed job that still has attempts left is put back to <see cref="JobStatus.Pending"/>
-/// with <see cref="Job.NextRetryAt"/> set, and its id is re-written to the channel after an
-/// in-process <see cref="Task.Delay(TimeSpan,CancellationToken)"/> matching the backoff — so the
-/// live queue, not just the durable log, is what actually drives the retry. A crash-recovered
-/// (stale <see cref="JobStatus.Running"/>) or previously-<see cref="JobStatus.Pending"/> job whose
-/// <see cref="Job.NextRetryAt"/> is still in the future gets the same delayed-re-enqueue treatment
-/// from <see cref="HydrateOnStartupAsync"/>, so a restart never loses a pending backoff window.
+/// <b>Bounded concurrency, not one worker per job:</b> a single <see cref="DrainAsync"/> loop
+/// (woken by <see cref="IJobSignal"/> and by a fallback poll timer) repeatedly claims the next
+/// runnable job and hands it to <see cref="ProcessClaimedJobAsync"/> without awaiting it, gated by a
+/// <see cref="SemaphoreSlim"/> sized to <see cref="Environment.ProcessorCount"/> -- up to that many
+/// jobs run concurrently in this process, same as before, but claiming itself is single-threaded so
+/// there is exactly one <see cref="IJobRepository.DequeueNextAsync"/> call in flight at a time
+/// rather than every worker polling independently.
+/// </remarks>
+/// <remarks>
+/// <b>Retry scheduling:</b> a failed job with attempts remaining goes back to
+/// <see cref="JobStatus.Pending"/> with <see cref="Job.NextRetryAt"/> set, same as before. There is
+/// no precise per-job re-enqueue timer any more -- <see cref="IJobRepository.DequeueNextAsync"/>
+/// already filters on <c>NextRetryAt</c>, so the fallback poll timer (<see cref="PollInterval"/>)
+/// picks up an elapsed backoff on its own, within one poll interval. That small added latency
+/// (seconds, against a backoff already measured in seconds-to-minutes) is the price of a mechanism
+/// that also works correctly across more than one process, where a per-process in-memory timer
+/// could not.
 /// </remarks>
 public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 {
@@ -50,11 +60,16 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     /// <summary>A Running job found at startup can only mean the previous process died mid-job; always requeue it.</summary>
     private static readonly TimeSpan RunningIsAlwaysStaleAtStartup = TimeSpan.Zero;
 
+    /// <summary>Fallback cadence for noticing a job whose backoff (<see cref="Job.NextRetryAt"/>)
+    /// has elapsed, or a signal that never arrived (dropped notification, no Redis configured and
+    /// this is a different process, etc.) -- see this type's own remarks on retry scheduling.</summary>
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<JobDispatcher> _logger;
     private readonly IJobCountsNotifier _jobCountsNotifier;
-    private readonly Channel<Guid> _channel = Channel.CreateUnbounded<Guid>(
-        new UnboundedChannelOptions { SingleReader = false, SingleWriter = false });
+    private readonly IJobSignal _jobSignal;
+    private readonly SemaphoreSlim _concurrencyGate = new(Math.Max(1, Environment.ProcessorCount));
 
     private CancellationTokenSource? _lifetimeCts;
     private Task? _processingTask;
@@ -71,11 +86,13 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     public JobDispatcher(
         IServiceScopeFactory scopeFactory,
         ILogger<JobDispatcher>? logger = null,
-        IJobCountsNotifier? jobCountsNotifier = null)
+        IJobCountsNotifier? jobCountsNotifier = null,
+        IJobSignal? jobSignal = null)
     {
         _scopeFactory = scopeFactory;
         _logger = logger ?? NullLogger<JobDispatcher>.Instance;
         _jobCountsNotifier = jobCountsNotifier ?? NullJobCountsNotifier.Instance;
+        _jobSignal = jobSignal ?? new InMemoryJobSignal();
     }
 
     /// <summary>
@@ -121,18 +138,15 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
             job = await jobRepository.EnqueueAsync(job, ct).ConfigureAwait(false);
         }
 
-        await _channel.Writer.WriteAsync(job.Id, ct).ConfigureAwait(false);
+        await _jobSignal.PublishAsync(ct).ConfigureAwait(false);
         await PublishJobCountsAsync(ct).ConfigureAwait(false);
         return job.Id;
     }
 
     /// <summary>
     /// Manual re-trigger for a permanently <see cref="JobStatus.Failed"/> job (System tab "retry"
-    /// button) — see <see cref="IJobQueue.RequeueAsync"/>. Resets the durable row to a fresh
-    /// attempt and then reuses <see cref="ScheduleOrEnqueueAsync"/> (the same helper
-    /// <see cref="HydrateOnStartupAsync"/> and <see cref="ScheduleRetry"/> feed into) to hand it
-    /// back to the live channel immediately, instead of leaving it Pending in the DB until the next
-    /// process restart's hydration pass would pick it up.
+    /// button) — see <see cref="IJobQueue.RequeueAsync"/>. Resets the durable row to a fresh attempt
+    /// and publishes a signal so it's picked up promptly rather than waiting for the next poll tick.
     /// </summary>
     public async Task RequeueAsync(Guid jobId, CancellationToken ct = default)
     {
@@ -159,26 +173,24 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 
         _logger.LogInformation("Job {JobId} ({JobType}) manually requeued after permanent failure.", job.Id, job.Type);
 
-        await ScheduleOrEnqueueAsync(job.Id, job.NextRetryAt, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+        await _jobSignal.PublishAsync(ct).ConfigureAwait(false);
         await PublishJobCountsAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Loads every currently <see cref="JobStatus.Pending"/> job, plus every
-    /// <see cref="JobStatus.Running"/> job (which — this being a single in-process dispatcher with
-    /// no other writer of that status — can only mean the previous process crashed mid-job, so it
-    /// is unconditionally treated as crashed and reset to Pending), and feeds them into the live
-    /// channel so they resume being processed. Call once at startup, before or right after
-    /// <see cref="StartProcessingAsync"/> (both are safe in either order: the channel buffers).
+    /// Resets every currently <see cref="JobStatus.Running"/> job back to <see cref="JobStatus.Pending"/>:
+    /// this being a single-writer-per-row model with no heartbeat, a job still marked Running at
+    /// startup can only mean whichever process claimed it died mid-job. Deliberately does NOT
+    /// re-enqueue anything itself any more -- <see cref="DrainAsync"/>, started right after this by
+    /// <see cref="StartAsync"/>, claims everything runnable (including what this just reset) on its
+    /// own first pass.
     /// </summary>
-    public async Task HydrateOnStartupAsync(CancellationToken ct)
+    private async Task HydrateOnStartupAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
 
-        var pending = await jobRepository.ListByStatusAsync(JobStatus.Pending, null, ct).ConfigureAwait(false);
         var staleRunning = await jobRepository.ListByStatusAsync(JobStatus.Running, null, ct).ConfigureAwait(false);
-
         foreach (var job in staleRunning)
         {
             ct.ThrowIfCancellationRequested();
@@ -191,61 +203,54 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
             job.NextRetryAt = DateTimeOffset.UtcNow + RunningIsAlwaysStaleAtStartup;
             await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
         }
-
-        var toResume = pending.Concat(staleRunning)
-            .DistinctBy(j => j.Id)
-            .OrderByDescending(j => j.Priority)
-            .ThenBy(j => j.CreatedAt);
-
-        var now = DateTimeOffset.UtcNow;
-        foreach (var job in toResume)
-        {
-            ct.ThrowIfCancellationRequested();
-            await ScheduleOrEnqueueAsync(job.Id, job.NextRetryAt, now, ct).ConfigureAwait(false);
-        }
     }
 
     /// <summary>
-    /// Drains the live channel with a bounded-concurrency pool of <see cref="Environment.ProcessorCount"/>
-    /// workers. Runs until <paramref name="ct"/> is cancelled or the channel is completed (on
-    /// <see cref="StopAsync"/>). One job type's failure never stops another's processing — every
-    /// job is wrapped in its own try/catch inside <see cref="ProcessJobAsync"/>, and a worker loop
-    /// only ever exits on cancellation.
+    /// The two long-running loops that keep this process claiming work: <see cref="ListenLoopAsync"/>
+    /// reacts to <see cref="IJobSignal"/> notifications (near-instant), <see cref="PollLoopAsync"/>
+    /// is the fallback that catches anything a dropped/never-sent signal would otherwise miss (an
+    /// elapsed retry backoff, a signal lost before this process was listening). Both ultimately call
+    /// the same <see cref="DrainAsync"/>, which is safe to run concurrently with itself.
     /// </summary>
-    public Task StartProcessingAsync(CancellationToken ct)
-    {
-        var workerCount = Math.Max(1, Environment.ProcessorCount);
-        var workers = new Task[workerCount];
-        for (var i = 0; i < workerCount; i++)
-        {
-            workers[i] = Task.Run(() => WorkerLoopAsync(ct), ct);
-        }
+    private Task StartProcessingAsync(CancellationToken ct) =>
+        Task.WhenAll(ListenLoopAsync(ct), PollLoopAsync(ct));
 
-        return Task.WhenAll(workers);
-    }
-
-    private async Task WorkerLoopAsync(CancellationToken ct)
+    private async Task ListenLoopAsync(CancellationToken ct)
     {
         try
         {
-            await foreach (var jobId in _channel.Reader.ReadAllAsync(ct).ConfigureAwait(false))
+            await foreach (var _ in _jobSignal.ListenAsync(ct).ConfigureAwait(false))
             {
-                try
-                {
-                    await ProcessJobAsync(jobId, ct).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    // ProcessJobAsync already catches and records handler failures against the Job
-                    // row itself; reaching here means something failed outside that (e.g. the
-                    // repository call to load/mark the job). Never let it take the whole worker
-                    // down — one bad job must not stop every other job type from progressing.
-                    _logger.LogError(ex, "Unhandled error in job dispatcher worker while processing job {JobId}.", jobId);
-                }
+                await DrainAsync(ct).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Normal shutdown.
+        }
+        catch (Exception ex)
+        {
+            // A signal transport failure (e.g. Redis unreachable for the whole process lifetime,
+            // not just a transient reconnect) must never take job processing down with it --
+            // PollLoopAsync's fallback timer keeps jobs moving on its own, just up to PollInterval
+            // slower without this loop's near-instant wake-ups.
+            _logger.LogError(ex, "Job signal listener stopped unexpectedly; falling back to polling every {PollInterval}.", PollInterval);
+        }
+    }
+
+    private async Task PollLoopAsync(CancellationToken ct)
+    {
+        try
+        {
+            // Drain once immediately (covers whatever HydrateOnStartupAsync just reset, plus
+            // anything already Pending from before this process started) rather than waiting out
+            // the first full interval.
+            await DrainAsync(ct).ConfigureAwait(false);
+
+            using var timer = new PeriodicTimer(PollInterval);
+            while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+            {
+                await DrainAsync(ct).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -254,68 +259,127 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         }
     }
 
-    private async Task ProcessJobAsync(Guid jobId, CancellationToken ct)
+    /// <summary>
+    /// Claims and dispatches runnable jobs one at a time (so there is only ever one
+    /// <see cref="IJobRepository.DequeueNextAsync"/> call in flight from this loop) until either
+    /// none remain or <see cref="_concurrencyGate"/> is full, at which point it stops -- whichever
+    /// in-flight job finishes next releases a slot but does not itself resume draining, so the next
+    /// signal or poll tick is what picks up any work still waiting for that freed slot. Safe to
+    /// invoke concurrently with itself (<see cref="ListenLoopAsync"/> and <see cref="PollLoopAsync"/>
+    /// both call it): both instances simply compete for the same semaphore and the same atomic
+    /// database claim.
+    /// </summary>
+    private async Task DrainAsync(CancellationToken ct)
     {
-        using var scope = _scopeFactory.CreateScope();
-        var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
-
-        var job = await jobRepository.GetByIdAsync(jobId, ct).ConfigureAwait(false);
-        if (job is null)
+        while (!ct.IsCancellationRequested)
         {
-            _logger.LogWarning("Job {JobId} was signalled for processing but no longer exists.", jobId);
-            return;
+            if (!await _concurrencyGate.WaitAsync(0, ct).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            Job? job;
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
+                job = await jobRepository.DequeueNextAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                _concurrencyGate.Release();
+                return;
+            }
+            catch (Exception ex)
+            {
+                _concurrencyGate.Release();
+                _logger.LogError(ex, "Unhandled error while claiming the next job; the next signal or poll tick will try again.");
+                return;
+            }
+
+            if (job is null)
+            {
+                _concurrencyGate.Release();
+                return;
+            }
+
+            _ = ProcessClaimedJobAsync(job, ct).ContinueWith(
+                _ => _concurrencyGate.Release(),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         }
+    }
 
-        if (job.Status is JobStatus.Done)
-        {
-            return; // duplicate signal (e.g. re-enqueued while already mid-flight elsewhere)
-        }
-
-        job.Status = JobStatus.Running;
-        job.StartedAt = DateTimeOffset.UtcNow;
-        job.Attempts += 1;
-        await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
-
-        var handler = scope.ServiceProvider.GetServices<Handlers.IJobHandler>().FirstOrDefault(h => h.Type == job.Type);
-        if (handler is null)
-        {
-            job.Status = JobStatus.Failed;
-            job.LastError = $"No {nameof(Handlers.IJobHandler)} is registered for job type {job.Type}.";
-            job.FinishedAt = DateTimeOffset.UtcNow;
-            await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
-            _logger.LogError("No handler registered for job type {JobType} (job {JobId}); marking Failed.", job.Type, job.Id);
-            await PublishJobCountsAsync(ct).ConfigureAwait(false);
-            return;
-        }
-
+    /// <summary>
+    /// Runs one job already claimed (marked <see cref="JobStatus.Running"/>) by
+    /// <see cref="IJobRepository.DequeueNextAsync"/>. Never lets an exception escape -- this is
+    /// invoked fire-and-forget from <see cref="DrainAsync"/>, so an unhandled exception here would
+    /// otherwise become an unobserved task exception instead of a logged, recoverable failure.
+    /// </summary>
+    private async Task ProcessClaimedJobAsync(Job job, CancellationToken ct)
+    {
         try
         {
-            await handler.HandleAsync(job, ct).ConfigureAwait(false);
+            using var scope = _scopeFactory.CreateScope();
+            var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
 
-            job.Status = JobStatus.Done;
-            job.FinishedAt = DateTimeOffset.UtcNow;
-            job.LastError = null;
-            job.NextRetryAt = null;
-            await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
-            await PublishJobCountsAsync(ct).ConfigureAwait(false);
+            var handler = scope.ServiceProvider.GetServices<Handlers.IJobHandler>().FirstOrDefault(h => h.Type == job.Type);
+            if (handler is null)
+            {
+                job.Status = JobStatus.Failed;
+                job.LastError = $"No {nameof(Handlers.IJobHandler)} is registered for job type {job.Type}.";
+                job.FinishedAt = DateTimeOffset.UtcNow;
+                await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
+                _logger.LogError("No handler registered for job type {JobType} (job {JobId}); marking Failed.", job.Type, job.Id);
+                await PublishJobCountsAsync(ct).ConfigureAwait(false);
+                return;
+            }
+
+            try
+            {
+                await handler.HandleAsync(job, ct).ConfigureAwait(false);
+
+                job.Status = JobStatus.Done;
+                job.FinishedAt = DateTimeOffset.UtcNow;
+                job.LastError = null;
+                job.NextRetryAt = null;
+                await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
+                await PublishJobCountsAsync(ct).ConfigureAwait(false);
+
+                // This job finishing just freed a concurrency-gate slot; wake the drain loop
+                // immediately rather than leaving anything already waiting for that slot to sit
+                // idle until the next poll tick (see this type's remarks on retry scheduling for
+                // why that tradeoff is fine for a *backoff* wakeup but not for this one).
+                await _jobSignal.PublishAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Host is shutting down mid-job, not a job failure: put it back exactly as it was
+                // found so HydrateOnStartupAsync picks it up again next run, without burning an
+                // attempt. Deliberately CancellationToken.None here - ct is already cancelled at this
+                // point, and this compensating write must still land (otherwise the job is merely left
+                // Running, which HydrateOnStartupAsync would still recover on the next start, just less
+                // cleanly - see remarks). Same reasoning applies to the counts push right after it.
+                job.Status = JobStatus.Pending;
+                job.Attempts = Math.Max(0, job.Attempts - 1);
+                job.StartedAt = null;
+                await jobRepository.UpdateAsync(job, CancellationToken.None).ConfigureAwait(false);
+                await PublishJobCountsAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                await HandleFailureAsync(jobRepository, job, ex, ct).ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Host is shutting down mid-job, not a job failure: put it back exactly as it was
-            // found so HydrateOnStartupAsync picks it up again next run, without burning an
-            // attempt. Deliberately CancellationToken.None here - ct is already cancelled at this
-            // point, and this compensating write must still land (otherwise the job is merely left
-            // Running, which HydrateOnStartupAsync would still recover on the next start, just less
-            // cleanly - see remarks). Same reasoning applies to the counts push right after it.
-            job.Status = JobStatus.Pending;
-            job.Attempts = Math.Max(0, job.Attempts - 1);
-            job.StartedAt = null;
-            await jobRepository.UpdateAsync(job, CancellationToken.None).ConfigureAwait(false);
-            await PublishJobCountsAsync(CancellationToken.None).ConfigureAwait(false);
+            // Shutting down before even getting a scope/handler resolved -- the row is whatever
+            // DequeueNextAsync left it as (Running); HydrateOnStartupAsync recovers it next start.
         }
         catch (Exception ex)
         {
-            await HandleFailureAsync(jobRepository, job, ex, ct).ConfigureAwait(false);
+            _logger.LogError(ex, "Unhandled error processing job {JobId} ({JobType}).", job.Id, job.Type);
         }
     }
 
@@ -340,7 +404,9 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         }
 
         // Exponential backoff: 2s, 4s, 8s, ... capped at 5 minutes so a mis-tuned attempt count
-        // never leaves a job in limbo for an unreasonable time.
+        // never leaves a job in limbo for an unreasonable time. DequeueNextAsync's own NextRetryAt
+        // filter (picked up by the next poll tick, see this type's remarks) is what actually
+        // resumes it -- no per-job timer here any more.
         var backoff = TimeSpan.FromSeconds(Math.Min(300, Math.Pow(2, job.Attempts + 1)));
         job.Status = JobStatus.Pending;
         job.NextRetryAt = DateTimeOffset.UtcNow + backoff;
@@ -351,54 +417,6 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
             job.Id, job.Type, job.Attempts, maxAttempts, job.NextRetryAt);
 
         await PublishJobCountsAsync(ct).ConfigureAwait(false);
-        ScheduleRetry(job.Id, backoff);
-    }
-
-    /// <summary>
-    /// Writes <paramref name="jobId"/> to the live channel immediately if it's already runnable,
-    /// or schedules a delayed write for when <paramref name="nextRetryAt"/> elapses. Used by both
-    /// <see cref="HydrateOnStartupAsync"/> (recovering jobs across a restart) and
-    /// <see cref="HandleFailureAsync"/> (via <see cref="ScheduleRetry"/>) so both paths share one
-    /// implementation of "respect NextRetryAt".
-    /// </summary>
-    private async Task ScheduleOrEnqueueAsync(Guid jobId, DateTimeOffset? nextRetryAt, DateTimeOffset now, CancellationToken ct)
-    {
-        if (nextRetryAt is { } retryAt && retryAt > now)
-        {
-            ScheduleRetry(jobId, retryAt - now);
-            return;
-        }
-
-        await _channel.Writer.WriteAsync(jobId, ct).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Fire-and-forget delayed re-enqueue, tied to the dispatcher's own lifetime token (not the
-    /// caller's, which may already be gone by the time the delay elapses — e.g. a job's original
-    /// per-request cancellation token). Any failure here (including cancellation on shutdown) is
-    /// swallowed: on shutdown the job simply stays Pending in the durable log and
-    /// <see cref="HydrateOnStartupAsync"/> picks it up on the next start.
-    /// </summary>
-    private void ScheduleRetry(Guid jobId, TimeSpan delay)
-    {
-        var lifetimeToken = _lifetimeCts?.Token ?? CancellationToken.None;
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(delay, lifetimeToken).ConfigureAwait(false);
-                await _channel.Writer.WriteAsync(jobId, lifetimeToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // Shutting down before the retry was due - fine, the durable log still has it Pending.
-            }
-            catch (ChannelClosedException)
-            {
-                // Same as above, raced against StopAsync completing the channel.
-            }
-        }, lifetimeToken);
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -419,7 +437,6 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         }
 
         _lifetimeCts.Cancel();
-        _channel.Writer.TryComplete();
 
         if (_processingTask is not null)
         {

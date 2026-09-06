@@ -89,11 +89,22 @@
         mat-stroked-button
         type="button"
         (click)="cleanupCompleted()"
-        [disabled]="cleaningUp()"
+        [disabled]="cleaningUpDone()"
         matTooltip="Remove finished (Done) jobs from the queue"
       >
         <mat-icon>delete_sweep</mat-icon>
         Clean up completed
+      </button>
+      <button
+        mat-stroked-button
+        type="button"
+        color="warn"
+        (click)="cleanupPending()"
+        [disabled]="cleaningUpPending()"
+        matTooltip="Delete every currently Pending job (discards queued work that hasn't run yet)"
+      >
+        <mat-icon>delete_forever</mat-icon>
+        Clear pending
       </button>
       @if (jobsLoading() && !initialJobsLoading()) {
         <mat-progress-bar mode="indeterminate" class="inline-progress" />

@@ -99,7 +99,8 @@ export class SystemPanelComponent {
   protected readonly jobsError = computed(() => Boolean(this.failedJobsResource.error()));
   protected readonly retryingJobId = signal<string | null>(null);
   protected readonly retryingAll = signal(false);
-  protected readonly cleaningUp = signal(false);
+  protected readonly cleaningUpDone = signal(false);
+  protected readonly cleaningUpPending = signal(false);
 
   // Log tail: fetched on demand (button click) rather than eagerly, since most visits to this tab
   // don't need it and a 200-line tail on every load would be wasted work.
@@ -226,15 +227,39 @@ export class SystemPanelComponent {
   }
 
   protected cleanupCompleted(): void {
-    this.cleaningUp.set(true);
-    this.api.cleanupCompletedJobs(this.ctx.projectId()).subscribe({
+    this.cleaningUpDone.set(true);
+    this.api.cleanupJobs(this.ctx.projectId(), 'Done').subscribe({
       next: (result) => {
-        this.cleaningUp.set(false);
+        this.cleaningUpDone.set(false);
         this.snackBar.open(`Removed ${result.removed} completed job(s) from the queue.`, 'Dismiss');
       },
       error: () => {
-        this.cleaningUp.set(false);
+        this.cleaningUpDone.set(false);
         this.snackBar.open('Failed to clean up the job queue.', 'Dismiss');
+      },
+    });
+  }
+
+  /**
+   * Clears the Pending backlog outright (e.g. thousands of doomed retries queued by a since-fixed
+   * config bug) rather than waiting for them to be attempted and either succeed or eventually fail.
+   * Unlike "clean up completed", this can discard real not-yet-attempted work, so it gets its own
+   * explicit action and confirmation instead of being folded into the Done cleanup.
+   */
+  protected cleanupPending(): void {
+    if (!confirm('Delete every currently Pending job? This discards queued work that has not run yet.')) {
+      return;
+    }
+
+    this.cleaningUpPending.set(true);
+    this.api.cleanupJobs(this.ctx.projectId(), 'Pending').subscribe({
+      next: (result) => {
+        this.cleaningUpPending.set(false);
+        this.snackBar.open(`Removed ${result.removed} pending job(s) from the queue.`, 'Dismiss');
+      },
+      error: () => {
+        this.cleaningUpPending.set(false);
+        this.snackBar.open('Failed to clear pending jobs.', 'Dismiss');
       },
     });
   }

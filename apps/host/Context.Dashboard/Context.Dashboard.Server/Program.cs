@@ -125,6 +125,28 @@ try
     builder.Services.AddSingleton<Context.Application.Notifications.IProjectActivityNotifier, Context.Dashboard.Server.Hubs.SignalRProjectActivityNotifier>();
     builder.Services.AddSingleton<Context.Application.Notifications.IJobCountsNotifier, Context.Dashboard.Server.Hubs.SignalRJobCountsNotifier>();
 
+    // Multi-instance job dispatch: overrides Context.Application's single-process InMemoryJobSignal
+    // default only when CONTEXT_PLATFORM_REDIS is configured, so more than one Context.Dashboard.Server
+    // instance can share one job queue (each still claims work from the same database via
+    // IJobRepository.DequeueNextAsync — Redis only relays the "go check again" wake-up). Unset
+    // (the common single-instance case) leaves today's in-memory behavior untouched.
+    if (hostOptions.RedisConnectionString is { Length: > 0 } redisConnectionString)
+    {
+        builder.Services.AddSingleton<StackExchange.Redis.IConnectionMultiplexer>(_ =>
+        {
+            var redisOptions = StackExchange.Redis.ConfigurationOptions.Parse(redisConnectionString);
+            // Redis being briefly down/not-yet-started must never crash this host at startup (same
+            // fail-open posture as everything else Ollama/hooks-adjacent) -- without this,
+            // ConnectionMultiplexer.Connect throws on a failed first attempt instead of retrying in
+            // the background, and job dispatch would simply fall back to no signal at all (the
+            // JobDispatcher's own poll-timer fallback still keeps jobs moving, just up to
+            // PollInterval slower) rather than take the whole process down with it.
+            redisOptions.AbortOnConnectFail = false;
+            return StackExchange.Redis.ConnectionMultiplexer.Connect(redisOptions);
+        });
+        builder.Services.AddSingleton<Context.Application.Jobs.IJobSignal, Context.Dashboard.Server.Jobs.RedisJobSignal>();
+    }
+
     // Dev-only, explicit allow-list — see BACKLOG-01 in docs/architecture/ARCHITECTURE_ASSESSMENT.md.
     // The previous SetIsOriginAllowed(_ => true).AllowCredentials() combination let ANY local
     // browser tab silently call this API/hub/MCP endpoint with the user's own cookies/credentials

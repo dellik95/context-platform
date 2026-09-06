@@ -23,7 +23,11 @@ internal static class HookScriptGenerator
             # any error here must never block Claude Code, so it never uses `set -e`.
 
             INPUT="$(cat)"
-            PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+            # Fallback only matters when CLAUDE_PROJECT_DIR isn't set (Claude Code always sets it
+            # for hooks today, but don't rely on that). The script lives at
+            # <project-root>/.claude/hooks/<name>.sh, so reaching <project-root> needs two levels
+            # up from dirname(script), not one.
+            PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
             CONFIG_FILE="$PROJECT_DIR/.claude/context-platform.local.json"
             LOG_FILE="$PROJECT_DIR/.claude/hooks.log"
 
@@ -94,7 +98,10 @@ internal static class HookScriptGenerator
         $ErrorActionPreference = 'Stop'
         $projectDir = $env:CLAUDE_PROJECT_DIR
         if ([string]::IsNullOrWhiteSpace($projectDir)) {
-            $projectDir = Split-Path -Parent $PSScriptRoot
+            # Fallback only matters when CLAUDE_PROJECT_DIR isn't set. The script lives at
+            # <project-root>\.claude\hooks\<name>.ps1, so reaching <project-root> needs two levels
+            # up from $PSScriptRoot (...\hooks), not one.
+            $projectDir = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
         }
         $logFile = Join-Path $projectDir '.claude/hooks.log'
         function Write-HookError([string]$message) {

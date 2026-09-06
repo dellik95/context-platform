@@ -24,6 +24,11 @@ namespace Context.Dashboard.Server;
 /// means "unreachable from outside the container", so the actual access boundary shifts to how
 /// the container's port is published (see deploy/docker/README.md: publish it bound to the host's
 /// own 127.0.0.1, e.g. <c>-p 127.0.0.1:47923:47923</c>, to keep the same effective guarantee).</item>
+/// <item><c>CONTEXT_PLATFORM_REDIS</c> — optional. When set, this process's <c>IJobSignal</c> is
+/// Redis pub/sub-backed instead of the single-process in-memory default, so more than one
+/// <c>Context.Dashboard.Server</c> instance can share one job queue (see Program.cs's registration
+/// and <c>Jobs/RedisJobSignal.cs</c>). Unset means single-instance operation, unchanged from
+/// before this existed.</item>
 /// </list>
 /// </summary>
 public sealed class ContextHostOptions
@@ -50,6 +55,10 @@ public sealed class ContextHostOptions
 
     public required string BindHost { get; init; }
 
+    /// <summary><c>CONTEXT_PLATFORM_REDIS</c> — e.g. <c>localhost:6379</c>. Null means single-instance,
+    /// in-memory job signaling (see <see cref="Context.Application.Jobs.IJobSignal"/>).</summary>
+    public string? RedisConnectionString { get; init; }
+
     public static ContextHostOptions FromEnvironment(IConfiguration configuration)
     {
         var root = Path.GetFullPath(
@@ -72,13 +81,18 @@ public sealed class ContextHostOptions
             ? configuredBindHost
             : inContainer ? "0.0.0.0" : "127.0.0.1";
 
+        var redisConnectionString = configuration["CONTEXT_PLATFORM_REDIS"] is { Length: > 0 } configuredRedis
+            ? configuredRedis
+            : null;
+
         return new ContextHostOptions
         {
             ProjectRoot = root,
             ProjectDataDir = dataDir,
             DbPath = dbPath,
             Port = port,
-            BindHost = bindHost
+            BindHost = bindHost,
+            RedisConnectionString = redisConnectionString
         };
     }
 

@@ -18,6 +18,8 @@
     <PackageVersion Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     <!-- MCP -->
     <PackageVersion Include="ModelContextProtocol" Version="0.2.0-preview.3" />
+    <!-- Multi-instance job dispatch (IJobSignal Redis pub/sub backend, opt-in via CONTEXT_PLATFORM_REDIS) -->
+    <PackageVersion Include="StackExchange.Redis" Version="2.9.17" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="0.2.0-preview.3" />
     <!-- Logging -->
     <PackageVersion Include="Serilog" Version="4.2.0" />

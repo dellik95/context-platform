@@ -9,8 +9,16 @@ services:
     # this machine can ever reach it.
     ports:
       - "127.0.0.1:${CONTEXT_PLATFORM_PORT:-47923}:47923"
+    depends_on:
+      - redis
     environment:
       CONTEXT_PLATFORM_PORT: "47923"
+      # Redis-backed IJobSignal (see ContextHostOptions/Program.cs) -- lets more than one
+      # Context.Dashboard.Server instance share one job queue, each still claiming actual work from
+      # the same database via IJobRepository.DequeueNextAsync. Harmless with just this one replica
+      # too: it's still correct, just extra hops compared to the in-memory default used when this
+      # is unset. "redis" resolves via this compose file's own network to the service below.
+      CONTEXT_PLATFORM_REDIS: "redis:6379"
       # Required to create/list projects (POST/GET /api/projects — see AdminTokenAuth, which fails
       # closed if this is unset). Generate one with `openssl rand -base64 32` and set it via a
       # `.env` file next to this compose file (never commit one) or your shell environment.
@@ -86,5 +94,14 @@ services:
       # to drop it along with the index.
       - "context-data:/data/context-platform"
 
+  # Backs IJobSignal for multi-instance job dispatch (CONTEXT_PLATFORM_REDIS above) -- not reachable
+  # from outside this compose network, matching context-platform's own loopback-only posture.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
 volumes:
   context-data:
+  redis-data:
