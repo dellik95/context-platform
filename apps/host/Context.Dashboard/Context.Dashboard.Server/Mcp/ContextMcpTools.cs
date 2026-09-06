@@ -97,12 +97,13 @@ public sealed class ContextMcpTools(
         => await symbolRepository.SearchByNameAsync(currentProject.ProjectId, namePattern, Math.Max(1, limit), ct).ConfigureAwait(false);
 
     [McpServerTool(Name = "memory_search")]
-    [Description("Searches a project's persistent memories (decisions, discoveries, bug fixes, open issues, ...).")]
+    [Description("Searches a project's persistent memories (decisions, discoveries, bug fixes, open issues, ...). Each memory carries a short reusable Topic tag (e.g. \"Auth middleware\") naming the feature/subsystem it's about, so memories on the same subject from different sessions can be found together via the topic filter.")]
     public async Task<IReadOnlyList<Context.Domain.Entities.Memory>> MemorySearchAsync(
         [Description("Search query (substring match).")] string query,
         [Description("Include memories that have been superseded by a newer one.")] bool includeSuperseded = false,
+        [Description("Optional exact-match filter on the memory's Topic tag, e.g. \"Auth middleware\".")] string? topic = null,
         CancellationToken ct = default)
-        => await engine.SearchMemoryAsync(currentProject.ProjectId, query, includeSuperseded, ct).ConfigureAwait(false);
+        => await engine.SearchMemoryAsync(currentProject.ProjectId, query, includeSuperseded, ct, topic).ConfigureAwait(false);
 
     [McpServerTool(Name = "memory_get")]
     [Description("Fetches one memory by id, or null if it doesn't exist.")]

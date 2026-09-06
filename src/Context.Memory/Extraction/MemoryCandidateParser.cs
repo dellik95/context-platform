@@ -23,6 +23,7 @@ internal static partial class MemoryCandidateParser
 
         MemoryType? type = null;
         string? title = null;
+        string? topic = null;
         var confidence = DefaultConfidence;
         var body = new StringBuilder();
         var facts = new List<string>();
@@ -44,11 +45,13 @@ internal static partial class MemoryCandidateParser
                     facts.ToList(),
                     concepts.ToList(),
                     filesRead.ToList(),
-                    filesModified.ToList()));
+                    filesModified.ToList(),
+                    string.IsNullOrWhiteSpace(topic) ? null : topic.Trim()));
             }
 
             type = null;
             title = null;
+            topic = null;
             confidence = DefaultConfidence;
             body.Clear();
             facts.Clear();
@@ -106,6 +109,15 @@ internal static partial class MemoryCandidateParser
                 body.Clear();
                 body.AppendLine(bodyMatch.Groups[1].Value.Trim());
                 inBody = true;
+                currentList = ListSection.None;
+                continue;
+            }
+
+            var topicMatch = TopicRegex().Match(trimmed);
+            if (topicMatch.Success)
+            {
+                topic = topicMatch.Groups[1].Value.Trim();
+                inBody = false;
                 currentList = ListSection.None;
                 continue;
             }
@@ -191,6 +203,9 @@ internal static partial class MemoryCandidateParser
 
     [GeneratedRegex(@"^BODY:\s*(.*)$", RegexOptions.IgnoreCase)]
     private static partial Regex BodyRegex();
+
+    [GeneratedRegex(@"^TOPIC:\s*(.+)$", RegexOptions.IgnoreCase)]
+    private static partial Regex TopicRegex();
 
     [GeneratedRegex(@"^CONFIDENCE:\s*([0-9.]+)", RegexOptions.IgnoreCase)]
     private static partial Regex ConfidenceRegex();

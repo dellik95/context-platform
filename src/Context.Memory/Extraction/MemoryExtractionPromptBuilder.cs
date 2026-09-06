@@ -75,6 +75,7 @@ internal static class MemoryExtractionPromptBuilder
         TYPE: <one of Decision, Discovery, BugFix, Feature, Refactor, Change, Exploration, Architecture, Issue>
         TITLE: <short one-line title, under 100 characters>
         BODY: <2-5 sentences, self-contained, naming specific files/symbols/config keys and the actual mechanism or reasoning per the BODY guidance above - not a restatement of TITLE>
+        TOPIC: <short 2-5 word phrase naming the feature/subsystem/component this memory is about>
         FACTS:
         - <fact 1>
         - <fact 2>
@@ -89,6 +90,15 @@ internal static class MemoryExtractionPromptBuilder
         MEMORY 2
         ...
         END_MEMORY
+
+        TOPIC is a short (2-5 word) phrase naming the feature, subsystem, or component this memory
+        is about — e.g. "Auth middleware", "Embedding pipeline", "Job dispatcher retry logic". It
+        is NOT a full sentence and NOT the memory's own TITLE restated: TITLE describes what this
+        specific memory says, TOPIC names the broader thing it's about, so that memories from
+        different sessions about the same area end up with the same TOPIC and can be found
+        together later. Reuse an existing, natural name a reader/engineer would already use for
+        that area of the codebase rather than inventing a new, overly specific one-off phrase for
+        this session alone — prefer the more general, more likely-to-recur name when in doubt.
 
         FACTS is 2-5 short, atomic, standalone facts pulled out of this memory — each one must
         make sense read on its own, with no surrounding narrative, since it is shown when a

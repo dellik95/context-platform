@@ -364,6 +364,10 @@ namespace Context.Infrastructure.Migrations
                         .HasMaxLength(512)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Topic")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("Type")
                         .HasColumnType("INTEGER");
 
@@ -372,6 +376,8 @@ namespace Context.Infrastructure.Migrations
                     b.HasIndex("CreatedFromSessionId");
 
                     b.HasIndex("SupersededById");
+
+                    b.HasIndex("ProjectId", "Topic");
 
                     b.HasIndex("ProjectId", "Type");
 

@@ -9,6 +9,11 @@ public class Memory
     public MemoryType Type { get; set; }
     public required string Title { get; set; }
     public required string Body { get; set; }
+    // Short (2-5 word), reusable phrase naming the feature/subsystem/component this memory is
+    // about (e.g. "Auth middleware", "Embedding pipeline concurrency") — distinct from Title
+    // (which is specific to this one memory) so that memories about the same subject, extracted
+    // across different sessions, share the same Topic and can be found/grouped together.
+    public string? Topic { get; set; }
     public string? FactsJson { get; set; }
     // JSON array drawn from a fixed taxonomy: how-it-works, why-it-exists, what-changed,
     // problem-solution, gotcha, pattern, trade-off — lets a future agent filter memories by kind

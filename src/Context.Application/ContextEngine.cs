@@ -90,9 +90,9 @@ public sealed class ContextEngine(
         return await graphTraversal.BlastRadiusAsync(symbolId, maxHops, ct).ConfigureAwait(false);
     }
 
-    public async Task<IReadOnlyList<Context.Domain.Entities.Memory>> SearchMemoryAsync(Guid projectId, string query, bool includeSuperseded, CancellationToken ct)
+    public async Task<IReadOnlyList<Context.Domain.Entities.Memory>> SearchMemoryAsync(Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null)
     {
-        var results = await memoryRepository.SearchAsync(projectId, query, includeSuperseded, ct).ConfigureAwait(false);
+        var results = await memoryRepository.SearchAsync(projectId, query, includeSuperseded, ct, topic).ConfigureAwait(false);
         var now = DateTimeOffset.UtcNow;
 
         return [.. results.OrderByDescending(m => RelevanceOf(m, now))];
@@ -244,7 +244,16 @@ public sealed class ContextEngine(
             DecayCalculator.ComputeRelevanceMultiplier(memory.Confidence, memory.LastReinforcedAt, memory.Pinned, now),
             memory.Type);
 
-    private static string FormatMemoryNote(Context.Domain.Entities.Memory memory) => $"[{memory.Type}] {memory.Title}: {memory.Body}";
+    /// <summary>
+    /// Prefixes the memory's <see cref="Context.Domain.Entities.Memory.Topic"/> in its own bracket
+    /// when set, e.g. "[Decision][Auth middleware] ..." — otherwise unchanged from the pre-Topic
+    /// format so existing notes without a topic (and any consumer/test asserting on that exact
+    /// string) are unaffected.
+    /// </summary>
+    private static string FormatMemoryNote(Context.Domain.Entities.Memory memory) =>
+        string.IsNullOrWhiteSpace(memory.Topic)
+            ? $"[{memory.Type}] {memory.Title}: {memory.Body}"
+            : $"[{memory.Type}][{memory.Topic}] {memory.Title}: {memory.Body}";
 
     /// <summary>
     /// Concrete shape of the session-scoped delivery cache described in the task brief §3: any
