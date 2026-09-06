@@ -27,10 +27,25 @@ public sealed class OllamaEmbeddingGeneratorDecorator(IEmbeddingGenerator<string
     private const int MaxConcurrentRequests = 2;
     private static readonly SemaphoreSlim Gate = new(MaxConcurrentRequests, MaxConcurrentRequests);
 
+    /// <summary>
+    /// Set on <see cref="EmbeddingGenerationOptions.AdditionalProperties"/> (to any value) by a
+    /// caller embedding a live user query (<c>EmbeddingLookupAdapter.EmbedAsync</c>, the only path
+    /// <c>HybridSearchEngine</c> uses) to skip <see cref="Gate"/> entirely. A single interactive
+    /// query is infrequent and bounded -- unlike the sustained, high-volume EmbedChunk backlog the
+    /// gate exists to tame, so it's cheaper to let it through immediately than to make a user's
+    /// search sit in line behind thousands of background embedding calls it has nothing to do with.
+    /// </summary>
+    public const string InteractiveRequestKey = "ContextPlatform.InteractiveEmbeddingRequest";
+
     public override async Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(
         IEnumerable<string> values, EmbeddingGenerationOptions? options = null, CancellationToken ct = default)
     {
-        await Gate.WaitAsync(ct).ConfigureAwait(false);
+        var isInteractive = options?.AdditionalProperties?.ContainsKey(InteractiveRequestKey) == true;
+        if (!isInteractive)
+        {
+            await Gate.WaitAsync(ct).ConfigureAwait(false);
+        }
+
         try
         {
             return await base.GenerateAsync(values, options, ct).ConfigureAwait(false);
@@ -44,7 +59,10 @@ public sealed class OllamaEmbeddingGeneratorDecorator(IEmbeddingGenerator<string
         }
         finally
         {
-            Gate.Release();
+            if (!isInteractive)
+            {
+                Gate.Release();
+            }
         }
     }
 
