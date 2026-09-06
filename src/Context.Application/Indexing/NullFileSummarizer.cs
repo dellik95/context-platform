@@ -1,3 +1,5 @@
+using Context.Indexing.Abstractions;
+
 namespace Context.Application.Indexing;
 
 /// <summary>
@@ -13,6 +15,6 @@ public sealed class NullFileSummarizer : IFileSummarizer
     {
     }
 
-    public Task<string?> SummarizeAsync(Guid projectId, string relativePath, IReadOnlyList<string> symbolNames, CancellationToken ct) =>
+    public Task<string?> SummarizeAsync(Guid projectId, string relativePath, IReadOnlyList<SymbolDraft> symbols, CancellationToken ct) =>
         Task.FromResult<string?>(null);
 }

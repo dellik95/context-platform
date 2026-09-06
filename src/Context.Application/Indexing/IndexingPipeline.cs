@@ -353,7 +353,7 @@ public sealed class IndexingPipeline(
         // as every symbol chunk above, just keyed by FileId instead of SymbolId (see
         // IndexUnparsedFileAsync's whole-file chunk for the same SymbolId == null precedent).
         var summary = await _fileSummarizer
-            .SummarizeAsync(projectId, fileEntity.RelativePath, [.. currentDrafts.Select(d => d.Name)], ct)
+            .SummarizeAsync(projectId, fileEntity.RelativePath, currentDrafts, ct)
             .ConfigureAwait(false);
 
         Chunk? summaryChunk = null;
