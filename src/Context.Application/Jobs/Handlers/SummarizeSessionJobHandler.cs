@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Context.Application.Memory.Triggers;
 using Context.Application.Notifications;
 using Context.Application.Settings;
 using Context.Domain.Entities;
@@ -6,6 +7,7 @@ using Context.Domain.Enums;
 using Context.Infrastructure.Abstractions;
 using Context.Memory.Abstractions;
 using Context.Memory.Summarization;
+using Microsoft.Extensions.Logging;
 
 namespace Context.Application.Jobs.Handlers;
 
@@ -15,9 +17,20 @@ public sealed class SummarizeSessionJobHandler(
     ISessionRepository sessionRepository,
     IJobQueue jobQueue,
     IProjectSettingsService settingsService,
-    IProjectActivityNotifier? activityNotifier = null) : IJobHandler
+    IProjectActivityNotifier? activityNotifier = null,
+    IEnumerable<IMemoryExtractionTrigger>? extractionTriggers = null,
+    ILogger<SummarizeSessionJobHandler>? logger = null) : IJobHandler
 {
+    // Mirrors production DI registration (ServiceCollectionExtensions.AddContextApplication) so a
+    // caller that constructs this handler directly - e.g. existing unit tests predating this
+    // trigger abstraction - gets the exact same two triggers, and therefore the exact same
+    // behavior, without having to know about IMemoryExtractionTrigger at all.
+    private static readonly IReadOnlyList<IMemoryExtractionTrigger> DefaultExtractionTriggers =
+        [new EventThresholdExtractionTrigger(), new ConversationEndExtractionTrigger()];
+
     private readonly IProjectActivityNotifier _activityNotifier = activityNotifier ?? NullProjectActivityNotifier.Instance;
+    private readonly IReadOnlyList<IMemoryExtractionTrigger> _extractionTriggers =
+        extractionTriggers is null ? DefaultExtractionTriggers : [.. extractionTriggers];
 
     public JobType Type => JobType.SummarizeSession;
 
@@ -86,8 +99,24 @@ public sealed class SummarizeSessionJobHandler(
             ? settings.MinEventsForMemoryExtraction
             : 0;
 
-        if (payload.IsSessionEnd || savedChunk.EventCount >= minEventsForExtraction)
+        // §E.1: each registered IMemoryExtractionTrigger independently justifies running
+        // extraction for this chunk - fires once ANY of them returns true (today: event-threshold
+        // OR session-end, the same two conditions the old inline `if` ORed together). The
+        // no-session -> threshold-0 rule above is folded into the settings snapshot handed to the
+        // triggers rather than special-cased here, so EventThresholdExtractionTrigger stays a pure
+        // comparison against Settings.MinEventsForMemoryExtraction.
+        var triggerContext = new MemoryExtractionTriggerContext(
+            payload.IsSessionEnd,
+            savedChunk.EventCount,
+            settings with { MinEventsForMemoryExtraction = minEventsForExtraction });
+        var firedTrigger = _extractionTriggers.FirstOrDefault(t => t.ShouldFire(triggerContext));
+
+        if (firedTrigger is not null)
         {
+            logger?.LogInformation(
+                "Memory extraction triggered by {Trigger} for session {SessionId} ({EventCount} events).",
+                firedTrigger.Name, payload.SessionId, savedChunk.EventCount);
+
             await jobQueue.EnqueueAsync(
                 JobType.ExtractMemory,
                 new ExtractMemoryPayload(payload.SessionId, savedChunk.Id),

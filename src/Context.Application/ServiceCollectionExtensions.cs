@@ -3,6 +3,7 @@ using Context.Application.Adapters;
 using Context.Application.Indexing;
 using Context.Application.Jobs;
 using Context.Application.Jobs.Handlers;
+using Context.Application.Memory.Triggers;
 using Context.Application.Providers;
 using Context.Application.Scheduling;
 using Context.Application.Settings;
@@ -65,6 +66,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProviderResolver, ProjectProviderResolver>();
 
         AddSeamAdapters(services, dbPath);
+        AddMemoryExtractionTriggers(services);
         AddJobHandlers(services);
         AddJobDispatcher(services);
         AddIndexingPipeline(services);
@@ -139,6 +141,19 @@ public static class ServiceCollectionExtensions
         // notes/open issues - this registration resolves both to the exact same instance rather
         // than constructing (or requiring callers to register) a second one.
         services.AddSingleton(sp => (ContextPackBuilder)sp.GetRequiredService<IContextPackBuilder>());
+    }
+
+    /// <summary>
+    /// Registers the in-pipeline <see cref="IMemoryExtractionTrigger"/>s that
+    /// <see cref="SummarizeSessionJobHandler"/> fires a just-produced chunk's extraction against
+    /// (§E.1 of MEMORY_PIPELINE_PLAN.md) - a plain collection registration, since
+    /// <see cref="SummarizeSessionJobHandler"/> ORs every registered trigger via
+    /// <c>FirstOrDefault</c> rather than depending on registration order.
+    /// </summary>
+    private static void AddMemoryExtractionTriggers(IServiceCollection services)
+    {
+        services.AddSingleton<IMemoryExtractionTrigger, EventThresholdExtractionTrigger>();
+        services.AddSingleton<IMemoryExtractionTrigger, ConversationEndExtractionTrigger>();
     }
 
     /// <summary>
