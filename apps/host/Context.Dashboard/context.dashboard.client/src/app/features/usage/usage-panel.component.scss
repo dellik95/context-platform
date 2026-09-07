@@ -26,6 +26,31 @@
   font-size: 0.85rem;
 }
 
+// Marks a tile/column as a counterfactual estimate rather than measured spend -- a dashed border
+// (not a color change) keeps it distinguishable without implying "warning"/"error".
+.stat-card--estimate {
+  border: 1px dashed var(--mat-sys-outline-variant);
+}
+
+.estimate-tag {
+  font-size: 0.65em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--mat-sys-on-surface-variant);
+  opacity: 0.8;
+}
+
+.stat-hint {
+  color: var(--mat-sys-on-surface-variant);
+  font-size: 0.7rem;
+  opacity: 0.8;
+}
+
+.stat-value--negative {
+  color: var(--mat-sys-error);
+}
+
 .empty-state {
   padding: 20px;
   display: flex;
@@ -120,4 +145,8 @@
   tr:last-child td {
     border-bottom: none;
   }
+}
+
+.saved-cell {
+  color: var(--mat-sys-on-surface-variant);
 }

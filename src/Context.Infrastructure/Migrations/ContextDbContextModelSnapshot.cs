@@ -765,6 +765,9 @@ namespace Context.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("SavedTokens")
+                        .HasColumnType("INTEGER");
+
                     b.Property<Guid?>("SessionId")
                         .HasColumnType("TEXT");
 

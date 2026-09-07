@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Security;
 using Context.Application;
 using Context.Domain.Enums;
 using Context.Graph.Abstractions;
@@ -8,6 +9,7 @@ using Context.Infrastructure.Abstractions;
 using Context.Retrieval.Abstractions;
 using Context.Shared;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 
 namespace Context.Dashboard.Server.Mcp;
@@ -41,7 +43,9 @@ public sealed class ContextMcpTools(
     IGraphTraversal graphTraversal,
     IGraphCacheProvider graphCacheProvider,
     IDbContextFactory<ContextDbContext> dbContextFactory,
-    CurrentProjectAccessor currentProject)
+    CurrentProjectAccessor currentProject,
+    IUsageRecorder usageRecorder,
+    ILogger<ContextMcpTools>? logger = null)
 {
     private const int DefaultCodeSearchLimit = 20;
     private const int DefaultSymbolSearchLimit = 20;
@@ -57,7 +61,16 @@ public sealed class ContextMcpTools(
         CancellationToken ct = default)
     {
         var searchQuery = new SearchQuery(currentProject.ProjectId, query, Scope: null, TokenBudget: budget);
-        return await engine.SearchContextAsync(searchQuery, ct).ConfigureAwait(false);
+        var pack = await engine.SearchContextAsync(searchQuery, ct).ConfigureAwait(false);
+
+        // pack.EstimatedTokens is already the same TokenEstimator-based figure computed over
+        // exactly this pack's content (see ContextEngine), so it doubles as "returnedTokens" here
+        // with no separate estimate needed.
+        await RecordSearchSavingsAsync(
+            "McpContextSearch", pack.EstimatedTokens, pack.PrimaryHits.Select(h => h.NodeId), ResolveFileForNodeAsync, ct)
+            .ConfigureAwait(false);
+
+        return pack;
     }
 
     [McpServerTool(Name = "context_expand")]
@@ -85,7 +98,13 @@ public sealed class ContextMcpTools(
     {
         var searchQuery = new SearchQuery(currentProject.ProjectId, query, scope);
         var hits = await searchEngine.SearchAsync(searchQuery, ct).ConfigureAwait(false);
-        return [.. hits.Take(Math.Max(1, limit))];
+        IReadOnlyList<SearchHit> limited = [.. hits.Take(Math.Max(1, limit))];
+
+        await RecordSearchSavingsAsync(
+            "McpCodeSearch", EstimateReturnedTokens(limited), limited.Select(h => h.NodeId), ResolveFileForNodeAsync, ct)
+            .ConfigureAwait(false);
+
+        return limited;
     }
 
     [McpServerTool(Name = "symbol_search")]
@@ -94,7 +113,15 @@ public sealed class ContextMcpTools(
         [Description("Substring/pattern to match against symbol names.")] string namePattern,
         [Description("Maximum symbols to return.")] int limit = DefaultSymbolSearchLimit,
         CancellationToken ct = default)
-        => await symbolRepository.SearchByNameAsync(currentProject.ProjectId, namePattern, Math.Max(1, limit), ct).ConfigureAwait(false);
+    {
+        var symbols = await symbolRepository.SearchByNameAsync(currentProject.ProjectId, namePattern, Math.Max(1, limit), ct).ConfigureAwait(false);
+
+        await RecordSearchSavingsAsync(
+            "McpSymbolSearch", EstimateReturnedTokens(symbols), symbols.Select(s => s.FileId), fileRepository.GetByIdAsync, ct)
+            .ConfigureAwait(false);
+
+        return symbols;
+    }
 
     [McpServerTool(Name = "memory_search")]
     [Description("Searches a project's persistent memories (decisions, discoveries, bug fixes, open issues, ...). Each memory carries a short reusable Topic tag (e.g. \"Auth middleware\") naming the feature/subsystem it's about, so memories on the same subject from different sessions can be found together via the topic filter.")]
@@ -247,18 +274,117 @@ public sealed class ContextMcpTools(
 
     private async Task<Guid?> ResolveProjectIdForNodeAsync(Guid nodeId, CancellationToken ct)
     {
+        var file = await ResolveFileForNodeAsync(nodeId, ct).ConfigureAwait(false);
+        return file?.ProjectId;
+    }
+
+    /// <summary>
+    /// Resolves a <see cref="SearchHit.NodeId"/> (a Symbol id, a File id, or occasionally a Chunk id
+    /// that neither repository recognizes - see <see cref="SearchHit"/>'s remarks) to the file it
+    /// belongs to: first as a symbol's owning file, falling back to treating the id as a file id
+    /// directly. Returns null for a node this can't map to a file (e.g. a Chunk id), which is fine
+    /// for both of this method's callers - <see cref="WarmGraphCacheForNodeAsync"/> just skips the
+    /// warm-up, and the MCP token-savings accounting just doesn't count that hit's file size.
+    /// </summary>
+    private async Task<Context.Domain.Entities.File?> ResolveFileForNodeAsync(Guid nodeId, CancellationToken ct)
+    {
         var symbol = await symbolRepository.GetByIdAsync(nodeId, ct).ConfigureAwait(false);
         if (symbol is not null)
         {
             var owningFile = await fileRepository.GetByIdAsync(symbol.FileId, ct).ConfigureAwait(false);
             if (owningFile is not null)
             {
-                return owningFile.ProjectId;
+                return owningFile;
             }
         }
 
-        var file = await fileRepository.GetByIdAsync(nodeId, ct).ConfigureAwait(false);
-        return file?.ProjectId;
+        return await fileRepository.GetByIdAsync(nodeId, ct).ConfigureAwait(false);
+    }
+
+    private static int EstimateReturnedTokens(IEnumerable<SearchHit> hits) =>
+        hits.Sum(h => TokenEstimator.Estimate(h.Label) + TokenEstimator.Estimate(h.Snippet ?? string.Empty));
+
+    private static int EstimateReturnedTokens(IEnumerable<Context.Domain.Entities.Symbol> symbols) =>
+        symbols.Sum(s => TokenEstimator.Estimate(s.QualifiedName) + TokenEstimator.Estimate(s.DocComment ?? string.Empty));
+
+    /// <summary>
+    /// Records the estimated token savings (a companion, counterfactual metric to the real LLM-spend
+    /// rows <see cref="Context.Memory.Summarization.LlmSessionSummarizer"/>/
+    /// <see cref="Context.Memory.Extraction.LlmMemoryExtractor"/> record - see
+    /// <see cref="Context.Domain.Entities.UsageRecord.SavedTokens"/> for the exact methodology) of one
+    /// search-style MCP tool call: <paramref name="returnedTokens"/> is what the call actually sent
+    /// back (already estimated by the caller with the same <see cref="TokenEstimator"/> heuristic
+    /// used everywhere else in the platform); <paramref name="ids"/> + <paramref name="resolveFile"/>
+    /// identify the distinct files behind the results, whose sizes stand in for what reading them in
+    /// full would have cost. Best-effort: recording a savings estimate must never break the tool
+    /// call that already produced its real result, so every exception (other than cancellation) here
+    /// is logged and swallowed.
+    /// </summary>
+    private async Task RecordSearchSavingsAsync(
+        string purpose,
+        int returnedTokens,
+        IEnumerable<Guid> ids,
+        Func<Guid, CancellationToken, Task<Context.Domain.Entities.File?>> resolveFile,
+        CancellationToken ct)
+    {
+        try
+        {
+            var files = new Dictionary<Guid, Context.Domain.Entities.File>();
+            foreach (var id in ids.Distinct())
+            {
+                var file = await resolveFile(id, ct).ConfigureAwait(false);
+                if (file is not null)
+                {
+                    files[file.Id] = file;
+                }
+            }
+
+            if (files.Count == 0)
+            {
+                return;
+            }
+
+            var fullFileTokens = files.Values.Sum(EstimateFileTokens);
+            var savedTokens = Math.Max(0, fullFileTokens - returnedTokens);
+
+            await usageRecorder.RecordAsync(new Context.Domain.Entities.UsageRecord
+            {
+                ProjectId = currentProject.ProjectId,
+                Purpose = purpose,
+                Provider = string.Empty,
+                SavedTokens = savedTokens,
+                CreatedAt = DateTimeOffset.UtcNow
+            }, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogWarning(ex, "Failed to record MCP search-tool token savings for {Purpose}.", purpose);
+        }
+    }
+
+    /// <summary>
+    /// Estimates a file's full-read token cost from its indexed <see cref="Context.Domain.Entities.File.SizeBytes"/>
+    /// without reading it, falling back to an on-disk stat (against the project's RootPath +
+    /// RelativePath) for the rare file whose indexed size isn't known - so a read/permission error
+    /// on that fallback (the file was moved/deleted since indexing, etc.) just prices it at zero
+    /// rather than failing the whole savings estimate.
+    /// </summary>
+    private int EstimateFileTokens(Context.Domain.Entities.File file)
+    {
+        if (file.SizeBytes > 0)
+        {
+            return TokenEstimator.EstimateFromByteLength(file.SizeBytes);
+        }
+
+        try
+        {
+            var fullPath = Path.Combine(currentProject.Project.RootPath, file.RelativePath);
+            return TokenEstimator.EstimateFromByteLength(new FileInfo(fullPath).Length);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException)
+        {
+            return 0;
+        }
     }
 }
 

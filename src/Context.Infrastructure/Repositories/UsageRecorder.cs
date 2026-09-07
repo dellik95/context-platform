@@ -34,19 +34,28 @@ public class UsageRecorder(ContextDbContext db) : IUsageRecorder
 
         var byPurpose = records
             .GroupBy(u => u.Purpose)
-            .Select(g => new UsagePurposeSummary(g.Key, g.Sum(u => (long)(u.TotalTokens ?? 0)), g.LongCount()))
+            .Select(g => new UsagePurposeSummary(
+                g.Key,
+                g.Sum(u => (long)(u.TotalTokens ?? 0)),
+                g.LongCount(),
+                g.Sum(u => (long)(u.SavedTokens ?? 0))))
             .OrderByDescending(p => p.Tokens)
             .ToList();
 
         var byDay = records
             .GroupBy(u => DateOnly.FromDateTime(u.CreatedAt.UtcDateTime))
-            .Select(g => new UsageDaySummary(g.Key, g.Sum(u => (long)(u.TotalTokens ?? 0)), g.LongCount()))
+            .Select(g => new UsageDaySummary(
+                g.Key,
+                g.Sum(u => (long)(u.TotalTokens ?? 0)),
+                g.LongCount(),
+                g.Sum(u => (long)(u.SavedTokens ?? 0))))
             .OrderBy(d => d.Day)
             .ToList();
 
         return new UsageSummary(
             records.Sum(u => (long)(u.TotalTokens ?? 0)),
             records.Count,
+            records.Sum(u => (long)(u.SavedTokens ?? 0)),
             byPurpose,
             byDay);
     }

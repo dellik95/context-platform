@@ -264,26 +264,37 @@ export interface LogTailDto {
   filePath: string | null;
 }
 
-// Mirrors apps/host/Context.Host/Api/UsageEndpoints.cs's UsagePurposeDto record.
+// Mirrors apps/host/Context.Host/Api/UsageEndpoints.cs's UsagePurposeDto record. `tokens` is real
+// LLM-call spend; `estimatedSavedTokens` is the counterfactual MCP search-tool savings estimate
+// (max(0, fullFileTokens - returnedTokens), see UsageRecord.SavedTokens) -- the two are never the
+// same kind of number and must not be added together as if they were.
 export interface UsagePurposeDto {
   purpose: string;
   tokens: number;
   calls: number;
+  estimatedSavedTokens: number;
 }
 
 // Mirrors apps/host/Context.Host/Api/UsageEndpoints.cs's UsageDayDto record. day is an ISO-8601
 // date (yyyy-MM-dd, no time component) -- .NET's DateOnly serializes this way by default.
+// `estimatedSavedTokens` is a counterfactual estimate, not measured spend -- see UsagePurposeDto.
 export interface UsageDayDto {
   day: string;
   tokens: number;
   calls: number;
+  estimatedSavedTokens: number;
 }
 
 // Mirrors apps/host/Context.Host/Api/UsageEndpoints.cs's UsageSummaryDto record, returned by
-// GET /api/usage?projectId={id}&days={n=30}.
+// GET /api/usage?projectId={id}&days={n=30}. `totalTokens`/`totalCalls` are real spend;
+// `totalEstimatedSavedTokens` is the estimate described on UsagePurposeDto; `estimatedNetTokens`
+// is simply `totalEstimatedSavedTokens - totalTokens`, a convenience "profit" figure that mixes a
+// real number with an estimate.
 export interface UsageSummaryDto {
   totalTokens: number;
   totalCalls: number;
+  totalEstimatedSavedTokens: number;
+  estimatedNetTokens: number;
   byPurpose: UsagePurposeDto[];
   byDay: UsageDayDto[];
 }
