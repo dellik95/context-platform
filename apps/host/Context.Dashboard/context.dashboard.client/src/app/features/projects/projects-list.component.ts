@@ -11,7 +11,9 @@ import { MatInputModule } from '@angular/material/input';
 import { MatListModule } from '@angular/material/list';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { ApiService } from '../../core/api.service';
+import { ProjectDto } from '../../core/models';
 import { ProjectTokenService } from '../../core/project-token.service';
 import { FolderPickerDialogComponent } from '../../shared/folder-picker/folder-picker-dialog.component';
 import { ProjectTokenDialogComponent } from './project-token-dialog.component';
@@ -30,6 +32,7 @@ import { ProjectTokenDialogComponent } from './project-token-dialog.component';
     MatInputModule,
     MatProgressBarModule,
     MatDialogModule,
+    MatTooltipModule,
   ],
   templateUrl: './projects-list.component.html',
   styleUrl: './projects-list.component.scss',
@@ -46,6 +49,7 @@ export class ProjectsListComponent {
   protected readonly loading = this.resource.isLoading;
   protected readonly creating = signal(false);
   protected readonly showCreateForm = signal(false);
+  protected readonly deletingId = signal<string | null>(null);
 
   protected readonly createModel = signal({ name: '', rootPath: '' });
   protected readonly createForm = form(this.createModel, (path) => {
@@ -111,6 +115,33 @@ export class ProjectsListComponent {
         this.creating.set(false);
         const message = err?.status === 409 ? 'A project already exists at that path.' : 'Failed to create project.';
         this.snackBar.open(message, 'Dismiss');
+      },
+    });
+  }
+
+  /** Row is a routerLink `<a>`, so the click needs to stop navigation as well as propagation. */
+  protected deleteProject(project: ProjectDto, event: Event): void {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (
+      !confirm(
+        `Delete project "${project.name}"? This removes it from Context Platform (files, index, memories, sessions) but does not touch its files on disk.`,
+      )
+    ) {
+      return;
+    }
+
+    this.deletingId.set(project.id);
+    this.api.deleteProject(project.id).subscribe({
+      next: () => {
+        this.deletingId.set(null);
+        this.resource.update((current) => (current ?? []).filter((p) => p.id !== project.id));
+        this.snackBar.open(`Deleted project "${project.name}".`, 'Dismiss', { duration: 3000 });
+      },
+      error: () => {
+        this.deletingId.set(null);
+        this.snackBar.open(`Failed to delete project "${project.name}".`, 'Dismiss');
       },
     });
   }

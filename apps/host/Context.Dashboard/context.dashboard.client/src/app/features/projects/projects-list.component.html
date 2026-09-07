@@ -44,6 +44,16 @@
           <mat-icon matListItemIcon>folder</mat-icon>
           <span matListItemTitle>{{ project.name }}</span>
           <span matListItemLine class="root-path">{{ project.rootPath }}</span>
+          <button
+            mat-icon-button
+            matListItemMeta
+            color="warn"
+            matTooltip="Delete project"
+            [disabled]="deletingId() === project.id"
+            (click)="deleteProject(project, $event)"
+          >
+            <mat-icon>delete</mat-icon>
+          </button>
         </a>
       }
     </mat-nav-list>
