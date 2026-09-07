@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Context.Application.Abstractions;
 using Context.Application.Indexing;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
@@ -8,6 +9,7 @@ using Context.Application.Jobs;
 using Context.Providers.Abstractions;
 using Context.Providers.Embeddings;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using FluentAssertions;
 using Moq;
 using DomainFile = Context.Domain.Entities.File;
@@ -39,6 +41,7 @@ public sealed class IndexingPipelineTests : IDisposable
     private readonly Mock<IJobQueue> _jobQueue = new();
     private readonly Mock<IIndexingProgressReporter> _progressReporter = new();
     private readonly List<ReindexProgressDto> _reportedProgress = [];
+    private readonly object _reportedProgressLock = new();
 
     public IndexingPipelineTests()
     {
@@ -76,8 +79,49 @@ public sealed class IndexingPipelineTests : IDisposable
 
         _progressReporter
             .Setup(r => r.ReportAsync(It.IsAny<ReindexProgressDto>(), It.IsAny<CancellationToken>()))
-            .Callback<ReindexProgressDto, CancellationToken>((dto, _) => _reportedProgress.Add(dto))
+            .Callback<ReindexProgressDto, CancellationToken>((dto, _) =>
+            {
+                // Files now index concurrently (see IndexingPipeline.ReindexProjectAsync's
+                // Parallel.ForEachAsync), so more than one file's progress callback can land here at
+                // once -- List<T>.Add isn't safe for that without a lock.
+                lock (_reportedProgressLock)
+                {
+                    _reportedProgress.Add(dto);
+                }
+            })
             .Returns(Task.CompletedTask);
+    }
+
+    /// <summary>
+    /// <see cref="IndexingPipeline.ReindexProjectAsync"/> now indexes each file inside its own
+    /// freshly-resolved <see cref="IIndexingPipeline"/> (a real per-unit-of-work DI scope, matching
+    /// production -- see that method's own remarks), so a bare <c>new IndexingPipeline(...)</c> with
+    /// no backing container can no longer exercise it: the per-file scope's
+    /// <c>GetRequiredService&lt;IIndexingPipeline&gt;()</c> would have nothing to resolve. This
+    /// builds a real (tiny) <see cref="ServiceProvider"/> wired to the exact same mocks/fakes the
+    /// tests already set up, registers <see cref="IIndexingPipeline"/> the same way
+    /// ServiceCollectionExtensions.AddIndexingPipeline does (Scoped), and resolves the pipeline
+    /// under test from it -- so every nested per-file scope resolves an equally-mocked pipeline.
+    /// </summary>
+    private IIndexingPipeline BuildPipeline(ILanguageParser parser)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(_projectRepository.Object);
+        services.AddSingleton(_fileRepository.Object);
+        services.AddSingleton(_symbolRepository.Object);
+        services.AddSingleton(_chunkRepository.Object);
+        services.AddSingleton(_embeddingRepository.Object);
+        services.AddSingleton(_providerResolver.Object);
+        services.AddSingleton(_fileScanner.Object);
+        services.AddSingleton<Func<string, IIgnoreMatcher>>(_ => Mock.Of<IIgnoreMatcher>());
+        services.AddSingleton(parser);
+        services.AddSingleton(_hasher.Object);
+        services.AddSingleton(_jobQueue.Object);
+        services.AddSingleton(_progressReporter.Object);
+        services.AddScoped<IIndexingPipeline, IndexingPipeline>();
+
+        var provider = services.BuildServiceProvider();
+        return provider.GetRequiredService<IIndexingPipeline>();
     }
 
     [Fact]
@@ -118,21 +162,7 @@ public sealed class IndexingPipelineTests : IDisposable
             .Setup(s => s.ScanAsync(_root, It.IsAny<IIgnoreMatcher>(), It.IsAny<CancellationToken>()))
             .Returns(ToAsyncEnumerable(scanned));
 
-        var pipeline = new IndexingPipeline(
-            _projectRepository.Object,
-            _fileRepository.Object,
-            _symbolRepository.Object,
-            _chunkRepository.Object,
-            _embeddingRepository.Object,
-            _providerResolver.Object,
-            _fileScanner.Object,
-            ignoreFactory: _ => Mock.Of<IIgnoreMatcher>(),
-            parsers: [new ThrowingFakeParser()],
-            hasher: _hasher.Object,
-            jobQueue: _jobQueue.Object,
-            logger: null,
-            progressReporter: _progressReporter.Object,
-            fileSummarizer: null);
+        var pipeline = BuildPipeline(new ThrowingFakeParser());
 
         // Must not throw: bad.fake's parser failure is isolated, not propagated out of the pass.
         await pipeline.ReindexProjectAsync(projectId, full: false, CancellationToken.None);
@@ -191,23 +221,9 @@ public sealed class IndexingPipelineTests : IDisposable
             .Setup(s => s.ScanAsync(_root, It.IsAny<IIgnoreMatcher>(), It.IsAny<CancellationToken>()))
             .Returns(CancelAfterFirstAsyncEnumerable(scanned, cts));
 
-        var pipeline = new IndexingPipeline(
-            _projectRepository.Object,
-            _fileRepository.Object,
-            _symbolRepository.Object,
-            _chunkRepository.Object,
-            _embeddingRepository.Object,
-            _providerResolver.Object,
-            _fileScanner.Object,
-            ignoreFactory: _ => Mock.Of<IIgnoreMatcher>(),
-            parsers: [new ThrowingFakeParser()],
-            hasher: _hasher.Object,
-            jobQueue: _jobQueue.Object,
-            logger: null,
-            progressReporter: _progressReporter.Object,
-            fileSummarizer: null);
+        var pipeline = BuildPipeline(new ThrowingFakeParser());
 
-var act = () => pipeline.ReindexProjectAsync(projectId, full: false, cts.Token);
+        var act = () => pipeline.ReindexProjectAsync(projectId, full: false, cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
 

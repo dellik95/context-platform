@@ -18,6 +18,14 @@ public interface IIndexingPipeline
     Task IndexFileAsync(Guid projectId, string relativePath, CancellationToken ct);
 
     /// <summary>
+    /// Same as <see cref="IndexFileAsync(Guid, string, CancellationToken)"/>, but when
+    /// <paramref name="forceReprocess"/> is true the content-hash skip is bypassed and the file is
+    /// reprocessed regardless — the per-file primitive <see cref="ReindexProjectAsync"/> uses for a
+    /// <c>full</c> rebuild.
+    /// </summary>
+    Task IndexFileAsync(Guid projectId, string relativePath, bool forceReprocess, CancellationToken ct);
+
+    /// <summary>
     /// Rescans the whole project tree via <c>IFileScanner</c>/<c>IIgnoreMatcher</c>, indexes every
     /// discovered file, and marks any previously-indexed file no longer found on disk as deleted.
     /// When <paramref name="full"/> is true, every file is reprocessed regardless of content hash

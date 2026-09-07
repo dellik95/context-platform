@@ -8,6 +8,7 @@ using Context.Infrastructure.Abstractions;
 using Context.Providers;
 using Context.Providers.Abstractions;
 using Context.Shared;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using DomainFile = Context.Domain.Entities.File;
@@ -28,6 +29,8 @@ namespace Context.Application.Indexing;
 /// <item><c>UpdateGraph</c> is only enqueued when something about the file's symbol set actually
 /// changed (or on first index).</item>
 /// </list>
+/// <see cref="ReindexProjectAsync"/> processes files concurrently (bounded by machine core count),
+/// each inside its own DI scope — see that method's own remarks.
 /// </summary>
 /// <remarks>
 /// <see cref="Symbol"/> only persists <see cref="Symbol.BodyHash"/> (a hash of raw body text
@@ -55,6 +58,7 @@ public sealed class IndexingPipeline(
     IEnumerable<ILanguageParser> parsers,
     IContentHasher hasher,
     IJobQueue jobQueue,
+    IServiceScopeFactory scopeFactory,
     ILogger<IndexingPipeline>? logger = null,
     IIndexingProgressReporter? progressReporter = null,
     IFileSummarizer? fileSummarizer = null) : IIndexingPipeline
@@ -62,12 +66,20 @@ public sealed class IndexingPipeline(
     /// <summary>Safety cap on a single chunk's text so one pathological symbol/file can't blow up storage/search.</summary>
     private const int MaxChunkChars = 20_000;
 
+    /// <summary>Bounds how many files this process indexes at once during
+    /// <see cref="ReindexProjectAsync"/> -- same core-count sizing JobDispatcher uses for its own
+    /// concurrency gate.</summary>
+    private static readonly int MaxReindexParallelism = Math.Max(1, Environment.ProcessorCount);
+
     private readonly ILogger<IndexingPipeline> _logger = logger ?? NullLogger<IndexingPipeline>.Instance;
     private readonly IIndexingProgressReporter _progressReporter = progressReporter ?? NullIndexingProgressReporter.Instance;
     private readonly IFileSummarizer _fileSummarizer = fileSummarizer ?? NullFileSummarizer.Instance;
 
     public Task IndexFileAsync(Guid projectId, string relativePath, CancellationToken ct) =>
         IndexFileInternalAsync(projectId, relativePath, forceReprocess: false, ct);
+
+    public Task IndexFileAsync(Guid projectId, string relativePath, bool forceReprocess, CancellationToken ct) =>
+        IndexFileInternalAsync(projectId, relativePath, forceReprocess, ct);
 
     public async Task ReindexProjectAsync(Guid projectId, bool full, CancellationToken ct)
     {
@@ -86,39 +98,62 @@ public sealed class IndexingPipeline(
             scannedFiles.Add(scanned);
         }
 
+        // Pure string bookkeeping, no I/O -- cheap enough to do in one sequential pass up front so
+        // the parallel loop below doesn't need a lock around a shared HashSet.
+        foreach (var scanned in scannedFiles)
+        {
+            scannedPaths.Add(NormalizePath(scanned.RelativePath));
+        }
+
         var filesTotal = scannedFiles.Count;
         var filesProcessed = 0;
         var filesFailed = 0;
 
-        foreach (var scanned in scannedFiles)
-        {
-            scannedPaths.Add(NormalizePath(scanned.RelativePath));
+        // Each file is indexed inside its own freshly-created DI scope -- fresh IIndexingPipeline,
+        // fresh repositories, fresh pooled ContextDbContext -- rather than sharing this method's
+        // own scoped repositories: EF Core's DbContext isn't safe to use from more than one thread
+        // at once, so concurrent files can't share one. Same per-unit-of-work-scope pattern as
+        // JobDispatcher.ProcessClaimedJobAsync. Safe to run genuinely concurrently against the same
+        // SQLite file because ContextDbContext.SqlitePragmaConnectionInterceptor already turns on
+        // WAL journaling (readers don't block writers) plus a 10s busy_timeout for the rare
+        // writer-vs-writer collision.
+        await Parallel.ForEachAsync(
+            scannedFiles,
+            new ParallelOptions { MaxDegreeOfParallelism = MaxReindexParallelism, CancellationToken = ct },
+            async (scanned, token) =>
+            {
+                // A single file that throws during parsing/indexing (malformed syntax, an
+                // unreadable file, ...) must not abort the whole pass -- it would otherwise take
+                // down the deleted-file cleanup and the completion signal below for every OTHER
+                // file too. Log it, count it, and move on; the file self-heals on the next
+                // scheduled pass (its ContentHash never advanced, so it's retried from scratch).
+                try
+                {
+                    using var scope = scopeFactory.CreateScope();
+                    var scopedPipeline = scope.ServiceProvider.GetRequiredService<IIndexingPipeline>();
+                    await scopedPipeline.IndexFileAsync(projectId, scanned.RelativePath, forceReprocess: full, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref filesFailed);
+                    _logger.LogError(
+                        ex, "Failed to index {RelativePath} in project {ProjectId} during reindex; skipping it for this pass.",
+                        scanned.RelativePath, projectId);
+                }
 
-            // A single file that throws during parsing/indexing (malformed syntax, an
-            // unreadable file, ...) must not abort the whole pass -- it would otherwise take
-            // down the deleted-file cleanup and the completion signal below for every OTHER
-            // file too. Log it, count it, and move on; the file self-heals on the next
-            // scheduled pass (its ContentHash never advanced, so it's retried from scratch).
-            try
-            {
-                await IndexFileInternalAsync(projectId, scanned.RelativePath, forceReprocess: full, ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                filesFailed++;
-                _logger.LogError(
-                    ex, "Failed to index {RelativePath} in project {ProjectId} during reindex; skipping it for this pass.",
-                    scanned.RelativePath, projectId);
-            }
-
-            filesProcessed++;
-            await ReportProgressAsync(new ReindexProgressDto(projectId, filesProcessed, filesTotal, Completed: false, filesFailed), ct)
-                .ConfigureAwait(false);
-        }
+                // Files can finish out of order under concurrency, so this count -- and the
+                // progress events it drives -- only converges monotonically to filesTotal, it
+                // doesn't necessarily arrive in scan order. Harmless: nothing downstream depends on
+                // strict ordering, only on the final Completed:true event (sent after this loop, see
+                // below) actually being last.
+                Interlocked.Increment(ref filesProcessed);
+                await ReportProgressAsync(new ReindexProgressDto(projectId, filesProcessed, filesTotal, Completed: false, filesFailed), token)
+                    .ConfigureAwait(false);
+            }).ConfigureAwait(false);
 
         // Anything still on record for this project but not found by this scan has been deleted
         // (or moved out from under an ignore rule) since the last reindex. This must still run
