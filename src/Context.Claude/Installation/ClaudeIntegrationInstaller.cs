@@ -90,16 +90,10 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         // ever handed back, so reusing whatever was on disk here instead would silently keep
         // authenticating with a token the host never actually minted for it.
         var localConfigPath = Path.Combine(claudeDir, LocalConfigFileName);
-        var existingToken = await TryReadExistingTokenAsync(localConfigPath, ct).ConfigureAwait(false);
-        var resolvedToken = bearerToken ?? existingToken ?? BearerTokenGenerator.Generate();
+        var resolvedToken = await ResolveTokenAsync(localConfigPath, bearerToken, ct).ConfigureAwait(false);
 
         // 3) .mcp.json — merge the Context.Dashboard.Server MCP server entry.
-        var mcpPath = Path.Combine(projectRoot, ".mcp.json");
-        BackupIfExists(mcpPath, projectRoot, backupRoot);
-        var mcpConfig = await ReadOrCreateJsonObjectAsync(mcpPath, ct).ConfigureAwait(false);
-        var mcpUrl = $"http://127.0.0.1:{_options.HostPort}{_options.McpPath}";
-        SettingsJsonMerger.MergeMcpServer(mcpConfig, mcpUrl, resolvedToken);
-        await WriteJsonAsync(mcpPath, mcpConfig, ct).ConfigureAwait(false);
+        await WriteMcpJsonAsync(projectRoot, backupRoot, resolvedToken, ct).ConfigureAwait(false);
 
         // 4) .claude-plugin/plugin.json manifest.
         var pluginPath = Path.Combine(pluginDir, "plugin.json");
@@ -107,6 +101,75 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         await WriteJsonAsync(pluginPath, BuildPluginManifest(), ct).ConfigureAwait(false);
 
         // 5) Bearer token + local config.
+        await WriteLocalConfigAsync(projectId, localConfigPath, projectRoot, backupRoot, resolvedToken, ct).ConfigureAwait(false);
+
+        // 6) .gitignore — make sure the local secret + data dir are never committed.
+        await EnsureGitignoreEntriesAsync(projectRoot, backupRoot, ct).ConfigureAwait(false);
+
+        _logger.LogInformation(
+            "Installed Claude Code integration for project {ProjectId} at {ProjectRoot}", projectId, projectRoot);
+    }
+
+    /// <summary>
+    /// The narrow "just register MCP" path used automatically by <c>POST /api/projects</c> at
+    /// project-creation time — see <see cref="IClaudeIntegrationInstaller.InstallMcpOnlyAsync"/>'s
+    /// remarks for why this is deliberately not <see cref="InstallAsync"/>. Reuses exactly steps 3
+    /// and 5 of <see cref="InstallAsync"/> above (<see cref="WriteMcpJsonAsync"/> and
+    /// <see cref="WriteLocalConfigAsync"/>, via the same <see cref="ResolveTokenAsync"/> token
+    /// precedence), plus the same backup-before-overwrite/directory-creation behavior those rely on.
+    /// Deliberately skips hook scripts, <c>.claude/settings.json</c>, <c>.claude-plugin/plugin.json</c>,
+    /// the skill doc, and <c>.gitignore</c> — none of those are created by this method.
+    /// </summary>
+    public async Task InstallMcpOnlyAsync(Guid projectId, string projectRoot, CancellationToken ct, string? bearerToken = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
+        projectRoot = Path.GetFullPath(projectRoot);
+        Directory.CreateDirectory(projectRoot);
+
+        var claudeDir = Path.Combine(projectRoot, ".claude");
+        Directory.CreateDirectory(claudeDir);
+
+        var backupRoot = Path.Combine(
+            claudeDir, ".backup", DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ", CultureInfo.InvariantCulture));
+
+        var localConfigPath = Path.Combine(claudeDir, LocalConfigFileName);
+        var resolvedToken = await ResolveTokenAsync(localConfigPath, bearerToken, ct).ConfigureAwait(false);
+
+        await WriteMcpJsonAsync(projectRoot, backupRoot, resolvedToken, ct).ConfigureAwait(false);
+        await WriteLocalConfigAsync(projectId, localConfigPath, projectRoot, backupRoot, resolvedToken, ct).ConfigureAwait(false);
+
+        _logger.LogInformation(
+            "Registered MCP-only Claude Code integration for project {ProjectId} at {ProjectRoot}", projectId, projectRoot);
+    }
+
+    /// <summary>
+    /// Token precedence shared by <see cref="InstallAsync"/> and <see cref="InstallMcpOnlyAsync"/>: a
+    /// caller-supplied <paramref name="bearerToken"/> always wins (the one moment a *new* raw token
+    /// is ever available), then whatever is already on disk in <c>context-platform.local.json</c>
+    /// (so re-running either install doesn't invalidate a host that already has it), then a freshly
+    /// generated one.
+    /// </summary>
+    private static async Task<string> ResolveTokenAsync(string localConfigPath, string? bearerToken, CancellationToken ct)
+    {
+        var existingToken = await TryReadExistingTokenAsync(localConfigPath, ct).ConfigureAwait(false);
+        return bearerToken ?? existingToken ?? BearerTokenGenerator.Generate();
+    }
+
+    /// <summary>.mcp.json — merge the Context.Dashboard.Server MCP server entry. Shared by <see cref="InstallAsync"/>'s step 3 and <see cref="InstallMcpOnlyAsync"/>.</summary>
+    private async Task WriteMcpJsonAsync(string projectRoot, string backupRoot, string resolvedToken, CancellationToken ct)
+    {
+        var mcpPath = Path.Combine(projectRoot, ".mcp.json");
+        BackupIfExists(mcpPath, projectRoot, backupRoot);
+        var mcpConfig = await ReadOrCreateJsonObjectAsync(mcpPath, ct).ConfigureAwait(false);
+        var mcpUrl = $"http://127.0.0.1:{_options.HostPort}{_options.McpPath}";
+        SettingsJsonMerger.MergeMcpServer(mcpConfig, mcpUrl, resolvedToken);
+        await WriteJsonAsync(mcpPath, mcpConfig, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Bearer token + local config file. Shared by <see cref="InstallAsync"/>'s step 5 and <see cref="InstallMcpOnlyAsync"/>.</summary>
+    private async Task WriteLocalConfigAsync(
+        Guid projectId, string localConfigPath, string projectRoot, string backupRoot, string resolvedToken, CancellationToken ct)
+    {
         BackupIfExists(localConfigPath, projectRoot, backupRoot);
         var localConfig = new JsonObject
         {
@@ -116,12 +179,6 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
             ["generatedAt"] = DateTimeOffset.UtcNow.ToString("O"),
         };
         await WriteJsonAsync(localConfigPath, localConfig, ct).ConfigureAwait(false);
-
-        // 6) .gitignore — make sure the local secret + data dir are never committed.
-        await EnsureGitignoreEntriesAsync(projectRoot, backupRoot, ct).ConfigureAwait(false);
-
-        _logger.LogInformation(
-            "Installed Claude Code integration for project {ProjectId} at {ProjectRoot}", projectId, projectRoot);
     }
 
     public async Task InstallSkillAsync(Guid projectId, string projectRoot, CancellationToken ct)

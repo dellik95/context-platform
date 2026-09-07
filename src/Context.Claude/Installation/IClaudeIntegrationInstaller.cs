@@ -21,6 +21,27 @@ public interface IClaudeIntegrationInstaller
     Task InstallAsync(Guid projectId, string projectRoot, CancellationToken ct, string? bearerToken = null);
 
     /// <summary>
+    /// The narrow "just register MCP" path: merges only <c>.mcp.json</c> (the Context.Dashboard.Server MCP
+    /// server entry) and writes only <c>.claude/context-platform.local.json</c> (the per-project bearer
+    /// token + port). Nothing else — no hook scripts, no <c>.claude/settings.json</c> edits, no
+    /// <c>.claude-plugin/plugin.json</c>, no skill doc, no <c>.gitignore</c> entries.
+    /// <para/>
+    /// This is what <c>POST /api/projects</c> calls automatically at project-creation time, so a
+    /// freshly-created project's MCP tools work immediately without a separate manual step. It is
+    /// deliberately NOT <see cref="InstallAsync"/>: that method is the full six-artifact install
+    /// used by the explicit, user-initiated "Install Claude integration" action, and stays the
+    /// method to call there. Use this one only when MCP registration alone is what's needed; use
+    /// <see cref="InstallAsync"/> whenever the caller wants the complete integration (hooks included).
+    /// <para/>
+    /// Same token-resolution precedence as <see cref="InstallAsync"/>: reuse an existing token
+    /// already on disk in <c>context-platform.local.json</c> if present, otherwise use
+    /// <paramref name="bearerToken"/> if supplied, otherwise generate a fresh one. Same
+    /// backup-before-overwrite convention (<c>.claude/.backup/&lt;timestamp&gt;/</c>) for any
+    /// pre-existing file this touches.
+    /// </summary>
+    Task InstallMcpOnlyAsync(Guid projectId, string projectRoot, CancellationToken ct, string? bearerToken = null);
+
+    /// <summary>
     /// Writes <c>.claude/skills/context-memory/SKILL.md</c> (frontmatter: name: context-memory,
     /// description: one line) — a skill document teaching Claude Code to proactively call this
     /// project's registered MCP tools (context_search, code_search, symbol_search, memory_search,

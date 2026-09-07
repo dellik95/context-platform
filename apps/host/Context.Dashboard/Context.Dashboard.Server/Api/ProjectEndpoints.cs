@@ -1,6 +1,7 @@
 using Context.Application;
 using Context.Application.Abstractions;
 using Context.Application.Indexing;
+using Context.Claude.Installation;
 using Context.Domain.Entities;
 using Context.Dashboard.Server.BackgroundServices;
 using Context.Dashboard.Server.Security;
@@ -73,10 +74,20 @@ public static class ProjectEndpoints
         return await next(ctx).ConfigureAwait(false);
     }
 
-    private static async Task<IResult> CreateAsync(
+    /// <summary>
+    /// Exposed as <c>internal</c> (see <c>InternalsVisibleTo</c> in Context.Dashboard.Server.csproj),
+    /// the same pattern <see cref="Context.Dashboard.Server.Hooks.HookEndpoints.PostToolUseAsync"/>
+    /// already uses, so Context.IntegrationTests can invoke this Minimal API handler directly with a
+    /// mock <see cref="IClaudeIntegrationInstaller"/> and assert the auto MCP-registration call and
+    /// its failure handling — without going through real HTTP routing/DI just to reach a plain
+    /// static method.
+    /// </summary>
+    internal static async Task<IResult> CreateAsync(
         CreateProjectRequest request,
         IProjectRepository projects,
         ProjectFileWatcherManager fileWatcherManager,
+        IClaudeIntegrationInstaller claudeInstaller,
+        ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(request.RootPath))
@@ -112,6 +123,26 @@ public static class ProjectEndpoints
         // restart — ProjectFileWatcherManager.StartAsync only sweeps projects that already existed
         // when the host itself started.
         fileWatcherManager.StartWatching(project);
+
+        // Registers this project's MCP server (.mcp.json + context-platform.local.json) right away
+        // so its MCP tools work the moment the project exists, without the separate manual "Install
+        // Claude integration" step -- that full six-artifact install (hooks, settings.json,
+        // plugin.json, skill doc, .gitignore) stays exactly as-is, still reachable via the explicit
+        // POST /{id}/claude/install action. Reuses `rawToken` above rather than minting a second one:
+        // the .mcp.json entry and Project.BearerTokenHash must reference the same raw token.
+        // Best-effort -- a filesystem failure here (e.g. an unwritable root path) must not undo the
+        // DB row that already exists, so it's logged and swallowed rather than propagated.
+        try
+        {
+            await claudeInstaller.InstallMcpOnlyAsync(project.Id, project.RootPath, ct, bearerToken: rawToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            loggerFactory.CreateLogger("Context.Dashboard.Server.CreateProject").LogWarning(
+                ex,
+                "Failed to auto-register the MCP integration for project {ProjectId} at {RootPath}; the project was still created and can be installed manually later.",
+                project.Id, project.RootPath);
+        }
 
         return Results.Created($"/api/projects/{project.Id}", ProjectDto.FromEntity(project) with { Token = rawToken });
     }
