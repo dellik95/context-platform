@@ -62,6 +62,66 @@ public class LlmMemoryExtractorTests
         logger.Messages.Should().NotContain(m => m.Contains("SECRET_BODY_57f3d2", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// MEMORY_PIPELINE_PLAN.md §H case #7: provider unavailable → app continues. Distinct from the
+    /// existing <c>IsNoOp()</c> offline-fallback path (<see cref="FakeChatClient"/> reports a
+    /// non-"noop" provider, so <c>ExtractAsync</c> takes the real LLM path) — here the chat client
+    /// itself throws mid-call, and <see cref="LlmMemoryExtractor.ExtractCandidatesViaLlmAsync"/>'s
+    /// own catch block (moved verbatim from Phase 1) must swallow it: no exception propagates, the
+    /// extraction result is empty, and the consolidator is never invoked.
+    /// </summary>
+    [Fact]
+    public async Task ExtractAsync_swallows_an_exception_from_the_chat_client_and_returns_no_memories()
+    {
+        var projectId = Guid.NewGuid();
+        var chunk = MakeChunk();
+
+        var store = new Mock<IMemoryStore>();
+        var consolidator = new Mock<IMemoryConsolidator>();
+        var resolver = new FakeProviderResolver(new ThrowingChatClient());
+        var logger = new CapturingLogger<LlmMemoryExtractor>();
+        var sut = new LlmMemoryExtractor(store.Object, consolidator.Object, resolver, new FakeUsageRecorder(), logger);
+
+        var result = await sut.ExtractAsync(projectId, chunk, CancellationToken.None);
+
+        result.Should().BeEmpty();
+        consolidator.Verify(
+            c => c.ConsolidateAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        logger.WarningMessages.Should().Contain(m => m.Contains("failed to extract candidate memories", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// MEMORY_PIPELINE_PLAN.md §H case #8: invalid LLM response → no malformed memory stored,
+    /// proven end-to-end through <see cref="LlmMemoryExtractor.ExtractAsync"/> rather than only at
+    /// the <see cref="MemoryCandidateParser"/> unit level (already covered by
+    /// <c>MemoryCandidateParserTests</c>). A response that matches none of the
+    /// TYPE:/TITLE:/BODY:/... block format must parse to zero candidates, so extraction returns no
+    /// memories and never reaches the consolidator.
+    /// </summary>
+    [Theory]
+    [InlineData("This is just some unrelated prose the model returned instead of the expected block format.")]
+    [InlineData("")]
+    public async Task ExtractAsync_stores_no_memories_when_the_llm_response_is_unparseable(string garbageResponse)
+    {
+        var projectId = Guid.NewGuid();
+        var chunk = MakeChunk();
+
+        var store = new Mock<IMemoryStore>();
+        var consolidator = new Mock<IMemoryConsolidator>();
+        var resolver = new FakeProviderResolver(new FakeChatClient(garbageResponse));
+        var logger = new CapturingLogger<LlmMemoryExtractor>();
+        var sut = new LlmMemoryExtractor(store.Object, consolidator.Object, resolver, new FakeUsageRecorder(), logger);
+
+        var result = await sut.ExtractAsync(projectId, chunk, CancellationToken.None);
+
+        result.Should().BeEmpty();
+        consolidator.Verify(
+            c => c.ConsolidateAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        store.Verify(s => s.GetExistingWithEmbeddingsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     private static string CandidateResponse() =>
         $"""
         TYPE: Decision
@@ -134,17 +194,51 @@ public class LlmMemoryExtractorTests
         public Task RecordAsync(UsageRecord record, CancellationToken ct) => Task.CompletedTask;
     }
 
+    /// <summary>Always throws from <see cref="GetResponseAsync"/>, simulating a provider that is
+    /// unreachable/erroring mid-call (§H case #7) — distinct from <see cref="FakeChatClient"/>,
+    /// which always succeeds, and from the <c>IsNoOp()</c> fallback, which never calls the client
+    /// at all. Reports the same non-"noop" provider metadata so <c>ExtractAsync</c> takes the real
+    /// LLM path before hitting the failure.</summary>
+    private sealed class ThrowingChatClient : IChatClient
+    {
+        private static readonly ChatClientMetadata Metadata = new("fake", null, "fake-model");
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default) =>
+            throw new InvalidOperationException("Simulated provider failure.");
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public object? GetService(Type serviceType, object? serviceKey = null) =>
+            serviceType == typeof(ChatClientMetadata) ? Metadata : null;
+
+        public void Dispose()
+        {
+        }
+    }
+
     /// <summary>Captures every formatted message logged through it, so a test can assert on log
     /// *content* directly instead of only on structured state/message templates.</summary>
     private sealed class CapturingLogger<T> : ILogger<T>
     {
         public List<string> Messages { get; } = [];
 
+        public List<string> WarningMessages { get; } = [];
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
-            Messages.Add(formatter(state, exception));
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            var message = formatter(state, exception);
+            Messages.Add(message);
+            if (logLevel == LogLevel.Warning)
+            {
+                WarningMessages.Add(message);
+            }
+        }
     }
 }

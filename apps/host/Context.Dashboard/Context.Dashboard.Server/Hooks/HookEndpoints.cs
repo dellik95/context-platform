@@ -83,7 +83,15 @@ public static class HookEndpoints
         return Results.Ok(new HookOutput(additionalContext));
     }
 
-    private static async Task<IResult> PostToolUseAsync(
+    /// <summary>
+    /// MEMORY_PIPELINE_PLAN.md §H case #11 ("hooks contain no memory business logic"): exposed as
+    /// <c>internal</c> (see <c>InternalsVisibleTo</c> in Context.Dashboard.Server.csproj), the same
+    /// pattern already used by <see cref="FormatContextPack"/>/<see cref="WrapAsRetrievedData"/>
+    /// below, so Context.IntegrationTests can invoke this Minimal API handler directly with a mock
+    /// <see cref="IContextEngine"/> and assert its only side effect is <c>RecordEventAsync</c> —
+    /// without going through real HTTP routing/DI just to reach a plain static method.
+    /// </summary>
+    internal static async Task<IResult> PostToolUseAsync(
         PostToolUseInput input,
         IContextEngine engine,
         CurrentProjectAccessor project,
