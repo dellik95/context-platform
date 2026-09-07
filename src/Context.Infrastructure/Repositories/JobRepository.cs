@@ -92,9 +92,10 @@ public class JobRepository(ContextDbContext db) : IJobRepository
         return [.. jobs.OrderByDescending(j => j.Priority).ThenBy(j => j.CreatedAt)];
     }
 
-    public async Task<JobStatusCounts> CountByStatusAsync(CancellationToken ct)
+    public async Task<JobStatusCounts> CountByStatusAsync(Guid projectId, CancellationToken ct)
     {
         var counts = await db.Jobs.AsNoTracking()
+            .Where(j => j.ProjectId == projectId)
             .GroupBy(j => j.Status)
             .Select(g => new { g.Key, Count = g.Count() })
             .ToListAsync(ct);

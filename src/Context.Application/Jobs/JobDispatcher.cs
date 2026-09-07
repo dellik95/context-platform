@@ -96,21 +96,28 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     }
 
     /// <summary>
-    /// Re-queries the current (Pending, Running, Failed, Done) breakdown and pushes it via
-    /// <see cref="IJobCountsNotifier"/> — called after every point in this file where a job's
-    /// <see cref="JobStatus"/> actually changes, so the Dashboard's System tab can update its stat
-    /// tiles live instead of polling. A notifier failure (e.g. a transient SignalR hub error) must
-    /// never take job processing down with it, so every exception here is swallowed.
+    /// Re-queries <paramref name="projectId"/>'s (Pending, Running, Failed, Done) breakdown and
+    /// pushes it via <see cref="IJobCountsNotifier"/> — called after every point in this file where
+    /// a job's <see cref="JobStatus"/> actually changes, so the Dashboard's System tab can update
+    /// its stat tiles live instead of polling. A host-wide maintenance job (<paramref name="projectId"/>
+    /// is null) has no project tile to update, so this is a no-op for it. A notifier failure (e.g. a
+    /// transient SignalR hub error) must never take job processing down with it, so every exception
+    /// here is swallowed.
     /// </summary>
-    private async Task PublishJobCountsAsync(CancellationToken ct)
+    private async Task PublishJobCountsAsync(Guid? projectId, CancellationToken ct)
     {
+        if (projectId is not { } id)
+        {
+            return;
+        }
+
         try
         {
             using var scope = _scopeFactory.CreateScope();
             var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
-            var counts = await jobRepository.CountByStatusAsync(ct).ConfigureAwait(false);
+            var counts = await jobRepository.CountByStatusAsync(id, ct).ConfigureAwait(false);
             await _jobCountsNotifier.NotifyAsync(
-                new JobCounts(counts.Pending, counts.Running, counts.Failed, counts.Done), ct).ConfigureAwait(false);
+                id, new JobCounts(counts.Pending, counts.Running, counts.Failed, counts.Done), ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -139,7 +146,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         }
 
         await _jobSignal.PublishAsync(ct).ConfigureAwait(false);
-        await PublishJobCountsAsync(ct).ConfigureAwait(false);
+        await PublishJobCountsAsync(projectId, ct).ConfigureAwait(false);
         return job.Id;
     }
 
@@ -174,7 +181,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         _logger.LogInformation("Job {JobId} ({JobType}) manually requeued after permanent failure.", job.Id, job.Type);
 
         await _jobSignal.PublishAsync(ct).ConfigureAwait(false);
-        await PublishJobCountsAsync(ct).ConfigureAwait(false);
+        await PublishJobCountsAsync(job.ProjectId, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -332,7 +339,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
                 job.FinishedAt = DateTimeOffset.UtcNow;
                 await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
                 _logger.LogError("No handler registered for job type {JobType} (job {JobId}); marking Failed.", job.Type, job.Id);
-                await PublishJobCountsAsync(ct).ConfigureAwait(false);
+                await PublishJobCountsAsync(job.ProjectId, ct).ConfigureAwait(false);
                 return;
             }
 
@@ -345,7 +352,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
                 job.LastError = null;
                 job.NextRetryAt = null;
                 await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
-                await PublishJobCountsAsync(ct).ConfigureAwait(false);
+                await PublishJobCountsAsync(job.ProjectId, ct).ConfigureAwait(false);
 
                 // This job finishing just freed a concurrency-gate slot; wake the drain loop
                 // immediately rather than leaving anything already waiting for that slot to sit
@@ -365,7 +372,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
                 job.Attempts = Math.Max(0, job.Attempts - 1);
                 job.StartedAt = null;
                 await jobRepository.UpdateAsync(job, CancellationToken.None).ConfigureAwait(false);
-                await PublishJobCountsAsync(CancellationToken.None).ConfigureAwait(false);
+                await PublishJobCountsAsync(job.ProjectId, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -399,7 +406,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
             _logger.LogError(ex,
                 "Job {JobId} ({JobType}) failed permanently after {Attempts}/{MaxAttempts} attempts.",
                 job.Id, job.Type, job.Attempts, maxAttempts);
-            await PublishJobCountsAsync(ct).ConfigureAwait(false);
+            await PublishJobCountsAsync(job.ProjectId, ct).ConfigureAwait(false);
             return;
         }
 
@@ -416,7 +423,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
             "Job {JobId} ({JobType}) failed (attempt {Attempts}/{MaxAttempts}); retrying at {NextRetryAt:O}.",
             job.Id, job.Type, job.Attempts, maxAttempts, job.NextRetryAt);
 
-        await PublishJobCountsAsync(ct).ConfigureAwait(false);
+        await PublishJobCountsAsync(job.ProjectId, ct).ConfigureAwait(false);
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)

@@ -30,10 +30,10 @@ public sealed class IndexingHubNotifier(IHubContext<IndexingHub> hub)
     public Task ProjectActivityAsync(Guid projectId, Context.Application.Notifications.ProjectActivityKind kind, CancellationToken ct) =>
         hub.Clients.Group(IndexingHub.GroupName(projectId)).SendAsync("ProjectActivity", new { projectId, kind = kind.ToString() }, ct);
 
-    /// <summary>Host-wide (not per-project group) push of the job queue's status breakdown — see
-    /// <see cref="Context.Application.Notifications.IJobCountsNotifier"/>. Broadcasts to every
-    /// connected client rather than a single project's group because the counts themselves are
-    /// host-wide, matching <c>GET /api/system/status</c>'s own (unscoped) job counts.</summary>
-    public Task JobCountsChangedAsync(Context.Application.Notifications.JobCounts counts, CancellationToken ct) =>
-        hub.Clients.All.SendAsync("JobCountsChanged", counts, ct);
+    /// <summary>Per-project push of the job queue's status breakdown — see
+    /// <see cref="Context.Application.Notifications.IJobCountsNotifier"/>. Broadcasts to just that
+    /// project's group, matching <c>GET /api/system/status</c>'s own (now project-scoped) job
+    /// counts.</summary>
+    public Task JobCountsChangedAsync(Guid projectId, Context.Application.Notifications.JobCounts counts, CancellationToken ct) =>
+        hub.Clients.Group(IndexingHub.GroupName(projectId)).SendAsync("JobCountsChanged", counts, ct);
 }

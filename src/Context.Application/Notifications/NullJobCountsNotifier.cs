@@ -7,5 +7,5 @@ public sealed class NullJobCountsNotifier : IJobCountsNotifier
 
     private NullJobCountsNotifier() { }
 
-    public Task NotifyAsync(JobCounts counts, CancellationToken ct) => Task.CompletedTask;
+    public Task NotifyAsync(Guid projectId, JobCounts counts, CancellationToken ct) => Task.CompletedTask;
 }

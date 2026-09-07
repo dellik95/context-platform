@@ -119,11 +119,15 @@ public static class JobsEndpoints
 
         var removed = await jobs.DeleteByStatusAsync(effectiveStatus, projectId, ct).ConfigureAwait(false);
 
-        // Same host-wide counts push JobDispatcher does after every status change -- otherwise the
+        // Same per-project counts push JobDispatcher does after every status change -- otherwise the
         // System tab's stat tiles stay stale (showing the pre-cleanup count) until its next slow
-        // reconciliation poll.
-        var counts = await jobs.CountByStatusAsync(ct).ConfigureAwait(false);
-        await jobCountsNotifier.NotifyAsync(new JobCounts(counts.Pending, counts.Running, counts.Failed, counts.Done), ct).ConfigureAwait(false);
+        // reconciliation poll. A host-wide cleanup (no projectId) has no single project tile to push
+        // to, so it's skipped -- same as JobDispatcher.PublishJobCountsAsync for a null ProjectId.
+        if (projectId is { } pid)
+        {
+            var counts = await jobs.CountByStatusAsync(pid, ct).ConfigureAwait(false);
+            await jobCountsNotifier.NotifyAsync(pid, new JobCounts(counts.Pending, counts.Running, counts.Failed, counts.Done), ct).ConfigureAwait(false);
+        }
 
         return Results.Ok(new { removed, status = effectiveStatus });
     }

@@ -21,11 +21,13 @@ public interface IJobRepository
     /// host-wide maintenance jobs) — the pre-filtering, host-wide behavior.</summary>
     Task<IReadOnlyList<Job>> ListByStatusAsync(JobStatus status, Guid? projectId, CancellationToken ct);
 
-    /// <summary>Host-wide (not project-scoped -- jobs aren't queried per project anywhere else
-    /// either) breakdown of how many jobs currently sit in each <see cref="JobStatus"/>. Backs
-    /// both <c>GET /api/system/status</c>'s four jobsXxx fields and <c>JobDispatcher</c>'s
-    /// SignalR push of the same figures, so both stay computed exactly one way.</summary>
-    Task<JobStatusCounts> CountByStatusAsync(CancellationToken ct);
+    /// <summary>Breakdown of how many jobs currently sit in each <see cref="JobStatus"/>, scoped to
+    /// <paramref name="projectId"/> (a host-wide maintenance job with no <see cref="Job.ProjectId"/>
+    /// is excluded, same as <see cref="ListByStatusAsync"/>'s exact-match behavior with a non-null
+    /// <paramref name="projectId"/>). Backs both <c>GET /api/system/status</c>'s four jobsXxx fields
+    /// and <c>JobDispatcher</c>'s SignalR push of the same figures, so both stay computed exactly
+    /// one way.</summary>
+    Task<JobStatusCounts> CountByStatusAsync(Guid projectId, CancellationToken ct);
 
     /// <summary>
     /// Bulk-deletes every job row in <paramref name="status"/> (optionally scoped to one project),

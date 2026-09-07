@@ -41,10 +41,10 @@ public static class SystemEndpoints
         // if this handler is executing, the MCP transport is necessarily reachable too.
         const bool mcpAlive = true;
 
-        // Shared with JobDispatcher's own SignalR "JobCountsChanged" push (see
-        // IJobRepository.CountByStatusAsync) so the REST snapshot and the live push are always
-        // computed exactly the same way.
-        var counts = await jobs.CountByStatusAsync(ct).ConfigureAwait(false);
+        // Scoped to the bearer token's own project (same as JobDispatcher's SignalR
+        // "JobCountsChanged" push -- see IJobRepository.CountByStatusAsync) so the Dashboard's stat
+        // tiles reflect only the project currently open, not every project's jobs.
+        var counts = await jobs.CountByStatusAsync(currentProject.ProjectId, ct).ConfigureAwait(false);
 
         var uptimeSeconds = (DateTimeOffset.UtcNow - startTime.Value).TotalSeconds;
 
