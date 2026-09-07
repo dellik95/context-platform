@@ -98,6 +98,7 @@
 }
 
 .stat-card {
+  position: relative;
   padding: 20px;
   display: flex;
   flex-direction: column;
@@ -111,6 +112,15 @@
       color: var(--mat-sys-error);
     }
   }
+}
+
+// Overlaid on the card rather than laid out inline, so a card that has one (Pending/Done) stays
+// the same size/shape as its siblings that don't (Running/Failed) -- keeps the stat-grid's row
+// visually aligned instead of only the cards with an action growing taller.
+.stat-card-action {
+  position: absolute;
+  top: 4px;
+  right: 4px;
 }
 
 .stat-value {

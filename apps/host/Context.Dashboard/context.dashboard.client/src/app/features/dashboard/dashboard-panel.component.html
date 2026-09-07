@@ -97,6 +97,19 @@
       <mat-card class="stat-card">
         <span class="stat-value">{{ hostStatus.jobsPending }}</span>
         <span class="stat-label">Pending</span>
+        @if (hostStatus.jobsPending > 0) {
+          <button
+            mat-icon-button
+            type="button"
+            class="stat-card-action"
+            color="warn"
+            (click)="cleanupPending()"
+            [disabled]="cleaningUpPending()"
+            matTooltip="Delete every currently Pending job (discards queued work that hasn't run yet)"
+          >
+            <mat-icon>delete_forever</mat-icon>
+          </button>
+        }
       </mat-card>
       <mat-card class="stat-card">
         <span class="stat-value">{{ hostStatus.jobsRunning }}</span>
@@ -109,6 +122,18 @@
       <mat-card class="stat-card">
         <span class="stat-value">{{ hostStatus.jobsDone }}</span>
         <span class="stat-label">Done</span>
+        @if (hostStatus.jobsDone > 0) {
+          <button
+            mat-icon-button
+            type="button"
+            class="stat-card-action"
+            (click)="cleanupCompleted()"
+            [disabled]="cleaningUpDone()"
+            matTooltip="Remove finished (Done) jobs from the queue"
+          >
+            <mat-icon>delete_sweep</mat-icon>
+          </button>
+        }
       </mat-card>
     </div>
   } @else {
@@ -137,27 +162,6 @@
           Retry all
         </button>
       }
-      <button
-        mat-stroked-button
-        type="button"
-        (click)="cleanupCompleted()"
-        [disabled]="cleaningUpDone()"
-        matTooltip="Remove finished (Done) jobs from the queue"
-      >
-        <mat-icon>delete_sweep</mat-icon>
-        Clean up completed
-      </button>
-      <button
-        mat-stroked-button
-        type="button"
-        color="warn"
-        (click)="cleanupPending()"
-        [disabled]="cleaningUpPending()"
-        matTooltip="Delete every currently Pending job (discards queued work that hasn't run yet)"
-      >
-        <mat-icon>delete_forever</mat-icon>
-        Clear pending
-      </button>
       @if (jobsLoading() && !initialJobsLoading()) {
         <mat-progress-bar mode="indeterminate" class="inline-progress" />
       }
