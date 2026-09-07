@@ -146,10 +146,27 @@ public sealed class ContextMcpTools(
     [McpServerTool(Name = "memory_remember")]
     [Description("Explicitly stores something the user just asked to be remembered, bypassing the normal " +
         "N-event/session-end extraction triggers. Call this the moment a user says things like 'remember " +
-        "that...', 'note for later...', or gives a standing instruction — do not wait for enough events to accumulate.")]
+        "that...', 'note for later...', or gives a standing instruction — do not wait for enough events to " +
+        "accumulate. You already have the full context, so fill in facts/topic/concepts/files yourself " +
+        "rather than leaving this an unstructured narrative dump — the same structured shape the automatic " +
+        "session-summary extraction produces, so this memory is just as useful when it resurfaces later.")]
     public async Task<Context.Domain.Entities.Memory> MemoryRememberAsync(
-        [Description("What to remember, in the user's own words or lightly cleaned up.")] string content,
+        [Description("The memory's main content: 2-5 self-contained sentences naming the SPECIFIC files (by path), " +
+            "classes/functions/symbols (by name), and config keys actually involved — never a generic stand-in " +
+            "('a service', 'some files'). State the actual mechanism/reasoning, not just that something happened.")] string content,
         [Description("One of Decision, Discovery, BugFix, Feature, Refactor, Change, Exploration, Architecture, Issue, Instruction. Defaults to Instruction.")] string? type = null,
+        [Description("Short one-line title (under 100 chars), outcome-focused (what changed/was learned, not what you did to find out). " +
+            "Omit to auto-derive one from the first sentence of content.")] string? title = null,
+        [Description("Short 2-5 word phrase naming the feature/subsystem/component this memory is about (e.g. \"Auth middleware\", " +
+            "\"Job dispatcher retry logic\") — reuse an existing name for that area rather than inventing a one-off phrase, so memories " +
+            "about the same subject from different sessions share it and can be found together via memory_search's topic filter.")] string? topic = null,
+        [Description("2-5 short, atomic, standalone facts pulled out of content — each must make sense read on its own with no " +
+            "surrounding narrative (shown when a search result needs to say something useful in very few tokens). Reuse concrete " +
+            "names from content (a file path, a symbol, a number, a config key) rather than a vaguer paraphrase.")] string[]? facts = null,
+        [Description("1-3 tags naming what KIND of knowledge this is, chosen ONLY from this fixed list: how-it-works, why-it-exists, " +
+            "what-changed, problem-solution, gotcha, pattern, trade-off. Omit if none clearly apply.")] string[]? concepts = null,
+        [Description("Specific files this memory is about that were read/examined but not changed. Omit if not applicable.")] string[]? filesRead = null,
+        [Description("Specific files this memory is about that were actually edited because of it. Omit if not applicable.")] string[]? filesModified = null,
         CancellationToken ct = default)
     {
         var settings = await projectSettingsService.GetAsync(currentProject.ProjectId, ct).ConfigureAwait(false);
@@ -162,7 +179,9 @@ public sealed class ContextMcpTools(
                 "memory_remember is disabled for this project (ExplicitRememberEnabled is false in project settings).");
         }
 
-        return await engine.RememberExplicitlyAsync(currentProject.ProjectId, content, ParseMemoryType(type), ct).ConfigureAwait(false);
+        return await engine.RememberExplicitlyAsync(
+            currentProject.ProjectId, content, ParseMemoryType(type), ct,
+            title, topic, facts, concepts, filesRead, filesModified).ConfigureAwait(false);
     }
 
     [McpServerTool(Name = "graph_neighbors")]
@@ -209,7 +228,9 @@ public sealed class ContextMcpTools(
         => await engine.GraphImpactAsync(symbolId, maxHops, ct).ConfigureAwait(false);
 
     [McpServerTool(Name = "session_search")]
-    [Description("Lists recent Claude Code sessions for a project, optionally filtered by a substring of the Claude session id.")]
+    [Description("Lists recent Claude Code sessions for a project, optionally filtered by a substring of the Claude session id. " +
+        "Excludes sessions with nothing worth surfacing: a session that ended but never got a summary generated for it, and a " +
+        "session that consists only of tool calls with no actual user prompt in it.")]
     public async Task<IReadOnlyList<SessionSummaryDto>> SessionSearchAsync(
         [Description("Optional substring filter over the Claude session id.")] string? query = null,
         [Description("Maximum sessions to return.")] int limit = DefaultSessionSearchLimit,
@@ -229,6 +250,17 @@ public sealed class ContextMcpTools(
         {
             sessions = sessions.Where(s => s.ClaudeSessionId != null && s.ClaudeSessionId.Contains(query));
         }
+
+        // A still-Active session naturally has no SessionSummary yet (that only runs on
+        // session-end) so it stays included; an Ended one with none means summarization either
+        // never ran or produced nothing -- there's no title/content for this list to show, so drop it.
+        sessions = sessions.Where(s =>
+            s.Status != SessionStatus.Ended || db.SessionSummaries.Any(sm => sm.SessionId == s.Id));
+
+        // A session with zero Prompt events is pure tool-call/automation noise -- nothing the user
+        // actually asked for -- and clutters this list with entries that have nothing to search for.
+        sessions = sessions.Where(s =>
+            db.SessionEvents.Any(e => e.SessionId == s.Id && e.Type == SessionEventType.Prompt));
 
         return await sessions
             .OrderByDescending(s => s.StartedAt)

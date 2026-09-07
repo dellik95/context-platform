@@ -193,27 +193,37 @@ public sealed class ContextEngine(
 
     /// <summary>
     /// See <see cref="IContextEngine.RememberExplicitlyAsync"/>. Builds a single
-    /// <see cref="MemoryCandidate"/> directly from <paramref name="content"/> (no LLM candidate
-    /// generation - the user already gave the content) and hands it straight to
-    /// <see cref="IMemoryConsolidator.ConsolidateAsync"/>, the same decision logic
-    /// <c>LlmMemoryExtractor</c> uses for the periodic extraction path - zero dependency on event
-    /// counts, <see cref="Context.Domain.Entities.SessionSummaryChunk"/> state, or a session at all
-    /// (<c>sessionId: null</c>, since an MCP-originated remember has no session in scope).
+    /// <see cref="MemoryCandidate"/> directly from <paramref name="content"/> and the caller's own
+    /// structured fields (no LLM candidate generation - the caller already has the context) and
+    /// hands it straight to <see cref="IMemoryConsolidator.ConsolidateAsync"/>, the same decision
+    /// logic <c>LlmMemoryExtractor</c> uses for the periodic extraction path - zero dependency on
+    /// event counts, <see cref="Context.Domain.Entities.SessionSummaryChunk"/> state, or a session
+    /// at all (<c>sessionId: null</c>, since an MCP-originated remember has no session in scope).
     /// </summary>
-    public async Task<Context.Domain.Entities.Memory> RememberExplicitlyAsync(Guid projectId, string content, MemoryType? type, CancellationToken ct)
+    public async Task<Context.Domain.Entities.Memory> RememberExplicitlyAsync(
+        Guid projectId,
+        string content,
+        MemoryType? type,
+        CancellationToken ct,
+        string? title = null,
+        string? topic = null,
+        IReadOnlyList<string>? facts = null,
+        IReadOnlyList<string>? concepts = null,
+        IReadOnlyList<string>? filesRead = null,
+        IReadOnlyList<string>? filesModified = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(content);
 
         var candidate = new MemoryCandidate(
             Type: type ?? MemoryType.Instruction,
-            Title: BuildExplicitRememberTitle(content),
+            Title: string.IsNullOrWhiteSpace(title) ? BuildExplicitRememberTitle(content) : title.Trim(),
             Body: content,
             Confidence: ExplicitRememberConfidence,
-            Facts: [],
-            Concepts: [],
-            FilesRead: [],
-            FilesModified: [],
-            Topic: null);
+            Facts: facts ?? [],
+            Concepts: concepts ?? [],
+            FilesRead: filesRead ?? [],
+            FilesModified: filesModified ?? [],
+            Topic: string.IsNullOrWhiteSpace(topic) ? null : topic.Trim());
 
         var existing = (await memoryStore.GetExistingWithEmbeddingsAsync(projectId, ct).ConfigureAwait(false)).ToList();
         var result = await memoryConsolidator.ConsolidateAsync(projectId, sessionId: null, candidate, existing, ct).ConfigureAwait(false);

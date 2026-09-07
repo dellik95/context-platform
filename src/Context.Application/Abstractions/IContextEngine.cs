@@ -39,6 +39,26 @@ public interface IContextEngine
     /// <paramref name="type"/> to <see cref="Context.Domain.Enums.MemoryType.Instruction"/> when null) and
     /// hands it directly to <see cref="Context.Memory.Abstractions.IMemoryConsolidator"/>, the same
     /// dedup/reinforce/supersede decision the periodic extraction path uses.
+    /// <para/>
+    /// <paramref name="title"/>/<paramref name="topic"/>/<paramref name="facts"/>/<paramref name="concepts"/>/
+    /// <paramref name="filesRead"/>/<paramref name="filesModified"/> let the caller (an agent that
+    /// already has the full context, not a second LLM re-deriving structure from prose) supply the
+    /// same structured shape <c>LlmMemoryExtractor</c>'s periodic path produces instead of leaving
+    /// this an unstructured narrative dump — see <c>MemoryExtractionPromptBuilder</c> for the exact
+    /// TOPIC/FACTS/CONCEPTS semantics and the fixed CONCEPTS taxonomy. All optional and trailing
+    /// (after <paramref name="ct"/>, matching <see cref="SearchMemoryAsync"/>'s own precedent) so
+    /// every existing positional call site keeps compiling; omitted ones fall back to today's
+    /// behavior (title auto-derived from <paramref name="content"/>, everything else empty/null).
     /// </summary>
-    Task<Context.Domain.Entities.Memory> RememberExplicitlyAsync(Guid projectId, string content, Context.Domain.Enums.MemoryType? type, CancellationToken ct);
+    Task<Context.Domain.Entities.Memory> RememberExplicitlyAsync(
+        Guid projectId,
+        string content,
+        Context.Domain.Enums.MemoryType? type,
+        CancellationToken ct,
+        string? title = null,
+        string? topic = null,
+        IReadOnlyList<string>? facts = null,
+        IReadOnlyList<string>? concepts = null,
+        IReadOnlyList<string>? filesRead = null,
+        IReadOnlyList<string>? filesModified = null);
 }
