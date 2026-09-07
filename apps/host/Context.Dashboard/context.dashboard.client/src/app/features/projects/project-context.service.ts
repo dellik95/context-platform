@@ -8,9 +8,9 @@ import { ReindexProgressEvent } from '../../core/models';
 
 /**
  * Scoped to the /projects/:id route subtree — see ProjectDetailComponent's `providers` array.
- * Every panel routed under it (overview/search/memories/sessions/graph) injects this instead of
+ * Every panel routed under it (dashboard/search/memories/sessions/graph) injects this instead of
  * re-reading the route param and re-fetching status independently. Auto-refreshes on the
- * IndexingHub's ProjectStatusChanged push, so a reindex triggered from the Overview tab updates
+ * IndexingHub's ProjectStatusChanged push, so a reindex triggered from the Dashboard tab updates
  * everything without a manual reload.
  */
 @Injectable()

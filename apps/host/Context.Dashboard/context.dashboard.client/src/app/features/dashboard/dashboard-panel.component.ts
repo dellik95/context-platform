@@ -33,17 +33,26 @@ const PROGRESS_HIDE_DELAY_MS = 2000;
 const PROGRESS_IDLE_TIMEOUT_MS = 15000;
 
 /**
- * System/health tab (CONTRACTS.md §12): host liveness from GET /api/system/status (fetched once,
- * then only reconciled on a slow fallback interval — see STATUS_RECONCILE_INTERVAL_MS), job queue
- * depth updated live via the IndexingHub's "JobCountsChanged" SignalR push (patched into the
+ * Per-project Dashboard tab (CONTRACTS.md §12; merged with the former Overview tab): project-level
+ * stats and reindex trigger buttons (GET /api/projects/{id}/status plus triggerIndex/cancelIndex,
+ * both via ProjectContextService), alongside host liveness from GET /api/system/status (fetched
+ * once, then only reconciled on a slow fallback interval — see STATUS_RECONCILE_INTERVAL_MS), job
+ * queue depth updated live via the IndexingHub's "JobCountsChanged" SignalR push (patched into the
  * existing statusResource value in place — no refetch, no loading flicker), and a live reindex
  * progress bar fed by the "ReindexProgress" SignalR event for the current project. Also hosts
  * operational drill-down that the live counts above don't provide: a Failed jobs table
  * (GET /api/jobs, scoped to the current project; POST /api/jobs/{id}/retry) and an on-demand host
  * log tail (GET /api/logs/tail, host-wide) — loaded independently of the status above.
+ *
+ * The reindex progress card below is this component's own SignalR-driven tracker rather than
+ * ctx.reindexing()/ctx.reindexProgress() -- ctx only flips reindexing=true when *this* browser
+ * session called triggerIndex(), so it can't reflect a reindex started elsewhere (another tab,
+ * another user), while this component's tracker reacts to any ReindexProgress event for the
+ * project regardless of who started it. ctx.reindexing() is still used below to disable the
+ * trigger buttons, since that part genuinely is about this session's own in-flight request.
  */
 @Component({
-  selector: 'app-system-panel',
+  selector: 'app-dashboard-panel',
   imports: [
     CommonModule,
     MatButtonModule,
@@ -53,10 +62,10 @@ const PROGRESS_IDLE_TIMEOUT_MS = 15000;
     MatProgressBarModule,
     MatTooltipModule,
   ],
-  templateUrl: './system-panel.component.html',
-  styleUrl: './system-panel.component.scss',
+  templateUrl: './dashboard-panel.component.html',
+  styleUrl: './dashboard-panel.component.scss',
 })
-export class SystemPanelComponent {
+export class DashboardPanelComponent {
   private readonly api = inject(ApiService);
   private readonly signalr = inject(SignalrService);
   private readonly snackBar = inject(MatSnackBar);
@@ -175,6 +184,14 @@ export class SystemPanelComponent {
         this.snackBar.open('Failed to load log tail — is Context.Host running?', 'Dismiss');
       }
     });
+  }
+
+  protected reindex(full: boolean): void {
+    this.ctx.triggerIndex(full);
+  }
+
+  protected cancelIndex(): void {
+    this.ctx.cancelIndex();
   }
 
   protected formatUptime(seconds: number): string {

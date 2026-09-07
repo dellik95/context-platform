@@ -10,11 +10,11 @@ export const routes: Routes = [
     path: 'projects/:id',
     loadComponent: () => import('./features/projects/project-detail.component').then((m) => m.ProjectDetailComponent),
     children: [
-      { path: '', pathMatch: 'full', redirectTo: 'overview' },
+      { path: '', pathMatch: 'full', redirectTo: 'dashboard' },
       {
-        path: 'overview',
+        path: 'dashboard',
         loadComponent: () =>
-          import('./features/projects/project-overview.component').then((m) => m.ProjectOverviewComponent),
+          import('./features/dashboard/dashboard-panel.component').then((m) => m.DashboardPanelComponent),
       },
       {
         path: 'search',
@@ -39,11 +39,6 @@ export const routes: Routes = [
         path: 'settings',
         loadComponent: () =>
           import('./features/settings/settings-panel.component').then((m) => m.SettingsPanelComponent),
-      },
-      {
-        path: 'system',
-        loadComponent: () =>
-          import('./features/system/system-panel.component').then((m) => m.SystemPanelComponent),
       },
       {
         path: 'usage',

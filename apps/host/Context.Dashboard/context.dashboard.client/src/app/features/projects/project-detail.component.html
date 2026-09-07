@@ -7,8 +7,8 @@
   </header>
 
   <nav class="project-tabs" mat-tab-nav-bar [tabPanel]="panel">
-    <a mat-tab-link routerLink="overview" routerLinkActive #overview="routerLinkActive" [active]="overview.isActive">
-      Overview
+    <a mat-tab-link routerLink="dashboard" routerLinkActive #dashboard="routerLinkActive" [active]="dashboard.isActive">
+      Dashboard
     </a>
     <a mat-tab-link routerLink="search" routerLinkActive #search="routerLinkActive" [active]="search.isActive">
       Search
@@ -24,9 +24,6 @@
     </a>
     <a mat-tab-link routerLink="settings" routerLinkActive #settings="routerLinkActive" [active]="settings.isActive">
       Settings
-    </a>
-    <a mat-tab-link routerLink="system" routerLinkActive #system="routerLinkActive" [active]="system.isActive">
-      System
     </a>
     <a mat-tab-link routerLink="usage" routerLinkActive #usage="routerLinkActive" [active]="usage.isActive">
       Usage
