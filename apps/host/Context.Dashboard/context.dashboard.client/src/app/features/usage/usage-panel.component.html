@@ -19,13 +19,13 @@
     @if (usage.totalCalls === 0) {
       <mat-card class="empty-state">
         <mat-icon>bar_chart</mat-icon>
-        <p>No LLM usage recorded in the last {{ days() }} days.</p>
+        <p>No usage recorded in the last {{ days() }} days.</p>
       </mat-card>
     } @else {
       <div class="stat-grid">
         <mat-card class="stat-card">
           <span class="stat-value">{{ usage.totalTokens | number }}</span>
-          <span class="stat-label">Total tokens</span>
+          <span class="stat-label">Total tokens spent</span>
         </mat-card>
         <mat-card class="stat-card">
           <span class="stat-value">{{ usage.totalCalls | number }}</span>
@@ -34,6 +34,18 @@
         <mat-card class="stat-card">
           <span class="stat-value">{{ avgTokensPerCall() | number }}</span>
           <span class="stat-label">Avg tokens / call</span>
+        </mat-card>
+        <mat-card class="stat-card stat-card--estimate">
+          <span class="stat-value">{{ estimatedSavedTokens() | number }}</span>
+          <span class="stat-label">Tokens saved <span class="estimate-tag">est.</span></span>
+          <span class="stat-hint">via MCP search tools instead of full-file reads</span>
+        </mat-card>
+        <mat-card class="stat-card stat-card--estimate">
+          <span class="stat-value" [class.stat-value--negative]="estimatedNetTokens() < 0">
+            {{ estimatedNetTokens() > 0 ? '+' : '' }}{{ estimatedNetTokens() | number }}
+          </span>
+          <span class="stat-label">Net tokens <span class="estimate-tag">est.</span></span>
+          <span class="stat-hint">saved minus spent — a rough "profit" figure</span>
         </mat-card>
       </div>
 
@@ -68,6 +80,7 @@
                 <th>Purpose</th>
                 <th>Tokens</th>
                 <th>Calls</th>
+                <th>Saved <span class="estimate-tag">est.</span></th>
               </tr>
             </thead>
             <tbody>
@@ -76,6 +89,7 @@
                   <td>{{ p.purpose }}</td>
                   <td>{{ p.tokens | number }}</td>
                   <td>{{ p.calls | number }}</td>
+                  <td class="saved-cell">{{ p.estimatedSavedTokens > 0 ? (p.estimatedSavedTokens | number) : '—' }}</td>
                 </tr>
               }
             </tbody>

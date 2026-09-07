@@ -60,4 +60,24 @@ public class TokenEstimatorTests
             previous = current;
         }
     }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void EstimateFromByteLength_UnknownOrEmptyLength_ReturnsZero(long byteLength)
+    {
+        TokenEstimator.EstimateFromByteLength(byteLength).Should().Be(0);
+    }
+
+    [Fact]
+    public void EstimateFromByteLength_ShortLength_IsFlooredAtOne()
+    {
+        TokenEstimator.EstimateFromByteLength(1).Should().Be(1);
+    }
+
+    [Fact]
+    public void EstimateFromByteLength_UsesApproximatelyFourBytesPerToken()
+    {
+        TokenEstimator.EstimateFromByteLength(400).Should().Be(100);
+    }
 }

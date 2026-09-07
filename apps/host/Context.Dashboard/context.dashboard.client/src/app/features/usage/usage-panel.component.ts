@@ -76,10 +76,21 @@ function buildChart(byDay: UsageDayDto[]): UsageChart | null {
 }
 
 /**
- * Usage tab (BACKLOG-27 dashboard follow-up): aggregated LLM token-usage stats for the project,
- * from GET /api/usage — totals, a by-purpose breakdown table, and a hand-rolled inline-SVG bar
- * chart of the by-day time series. No charting library: package.json has none to reuse (vis-network
- * is graph-only) and one bar chart doesn't justify adding a dependency for.
+ * Usage tab (BACKLOG-27 dashboard follow-up): aggregated token stats for the project, from
+ * GET /api/usage — totals, a by-purpose breakdown table, and a hand-rolled inline-SVG bar chart of
+ * the by-day spend time series. No charting library: package.json has none to reuse (vis-network is
+ * graph-only) and one bar chart doesn't justify adding a dependency for.
+ *
+ * Two different kinds of numbers are shown side by side, and must stay visually distinct:
+ *  - Real spend: totalTokens/totalCalls, from actual LLM calls (SessionSummary, MemoryExtraction,
+ *    MemoryConsistencyCheck).
+ *  - Estimated savings: totalEstimatedSavedTokens, a counterfactual estimate of tokens *not* spent
+ *    because an MCP search tool (context_search/code_search/symbol_search) returned targeted
+ *    results instead of the caller reading whole files — max(0, fullFileTokens - returnedTokens)
+ *    per call, both sides estimated with the same TokenEstimator heuristic used everywhere else on
+ *    the platform (see UsageRecord.SavedTokens). estimatedNetTokens is just
+ *    totalEstimatedSavedTokens - totalTokens, offered as a "profit" figure — it mixes a real number
+ *    with an estimate, so it's labeled as an estimate too rather than presented as audited.
  *
  * No prompt/completion split is shown even though UsageRecord has PromptTokens/CompletionTokens —
  * UsageRecorder.GetSummaryAsync (the only aggregation this endpoint exposes) sums TotalTokens only,
@@ -109,6 +120,9 @@ export class UsagePanelComponent {
     }
     return Math.round(summary.totalTokens / summary.totalCalls);
   });
+
+  protected readonly estimatedSavedTokens = computed(() => this.summary()?.totalEstimatedSavedTokens ?? 0);
+  protected readonly estimatedNetTokens = computed(() => this.summary()?.estimatedNetTokens ?? 0);
 
   protected readonly chart = computed(() => buildChart(this.summary()?.byDay ?? []));
 
