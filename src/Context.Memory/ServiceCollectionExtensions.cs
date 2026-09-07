@@ -8,7 +8,8 @@ namespace Context.Memory;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers <see cref="ISessionSummarizer"/> and <see cref="IMemoryExtractor"/>.
+    /// Registers <see cref="ISessionSummarizer"/>, <see cref="IMemoryConsolidator"/>, and
+    /// <see cref="IMemoryExtractor"/>.
     /// Callers must separately register <c>IChatClient</c>/<c>IEmbeddingGenerator&lt;string, Embedding&lt;float&gt;&gt;</c>
     /// (e.g. via <c>Context.Providers.AddContextProviders</c>) and the
     /// <see cref="ISessionEventSource"/> / <see cref="IMemoryStore"/> seam implementations
@@ -17,6 +18,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddContextMemory(this IServiceCollection services)
     {
         services.AddScoped<ISessionSummarizer, LlmSessionSummarizer>();
+        services.AddScoped<IMemoryConsolidator, MemoryConsolidator>();
         services.AddScoped<IMemoryExtractor, LlmMemoryExtractor>();
         return services;
     }

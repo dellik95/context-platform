@@ -13,7 +13,7 @@ namespace Context.Memory.Extraction;
 /// <see cref="MemoryExtractionPromptBuilder"/>'s CONCEPTS documentation) — e.g. "gotcha", "pattern".</param>
 /// <param name="FilesRead">Files this specific memory is about but that weren't modified (read for context/investigation).</param>
 /// <param name="FilesModified">Files this specific memory is about that were actually changed.</param>
-internal sealed record MemoryCandidate(
+public sealed record MemoryCandidate(
     MemoryType Type,
     string Title,
     string Body,
