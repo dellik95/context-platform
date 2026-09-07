@@ -30,4 +30,15 @@ public interface IContextEngine
     Task EndSessionAsync(Guid projectId, Guid sessionId, CancellationToken ct);
 
     Task<object> ProjectInfoAsync(Guid projectId, CancellationToken ct);
+
+    /// <summary>
+    /// Explicit-remember (docs/architecture/MEMORY_PIPELINE_PLAN.md §F): stores <paramref name="content"/>
+    /// as a memory right now, bypassing the normal N-event/session-end extraction triggers entirely -
+    /// no <see cref="Context.Domain.Entities.SessionSummaryChunk"/>, no LLM candidate generation. Builds
+    /// one <see cref="Context.Memory.Extraction.MemoryCandidate"/> from the raw content (defaulting
+    /// <paramref name="type"/> to <see cref="Context.Domain.Enums.MemoryType.Instruction"/> when null) and
+    /// hands it directly to <see cref="Context.Memory.Abstractions.IMemoryConsolidator"/>, the same
+    /// dedup/reinforce/supersede decision the periodic extraction path uses.
+    /// </summary>
+    Task<Context.Domain.Entities.Memory> RememberExplicitlyAsync(Guid projectId, string content, Context.Domain.Enums.MemoryType? type, CancellationToken ct);
 }

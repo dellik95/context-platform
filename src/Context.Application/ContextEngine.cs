@@ -5,7 +5,9 @@ using Context.Domain.Entities;
 using Context.Domain.Enums;
 using Context.Graph.Abstractions;
 using Context.Infrastructure.Abstractions;
+using Context.Memory.Abstractions;
 using Context.Memory.Decay;
+using Context.Memory.Extraction;
 using Context.Retrieval;
 using Context.Retrieval.Abstractions;
 using Context.Retrieval.Scoring;
@@ -44,9 +46,15 @@ public sealed class ContextEngine(
     IMemoryRepository memoryRepository,
     ISessionRepository sessionRepository,
     SessionDeliveryCache deliveryCache,
-    IProjectSettingsService projectSettingsService) : IContextEngine
+    IProjectSettingsService projectSettingsService,
+    IMemoryStore memoryStore,
+    IMemoryConsolidator memoryConsolidator) : IContextEngine
 {
     private const int SummaryCharLimit = 800;
+    private const int ExplicitRememberTitleCharLimit = 80;
+    // The user explicitly asked for this to be remembered - high confidence by construction,
+    // not LLM-judged (see docs/architecture/MEMORY_PIPELINE_PLAN.md §F).
+    private const double ExplicitRememberConfidence = 0.95;
 
     public async Task<ContextPack> SearchContextAsync(SearchQuery query, CancellationToken ct)
     {
@@ -181,6 +189,51 @@ public sealed class ContextEngine(
             SymbolsIndexed: symbolCount,
             MemoriesCount: activeMemories.Count,
             LastIndexedAt: lastIndexedAt);
+    }
+
+    /// <summary>
+    /// See <see cref="IContextEngine.RememberExplicitlyAsync"/>. Builds a single
+    /// <see cref="MemoryCandidate"/> directly from <paramref name="content"/> (no LLM candidate
+    /// generation - the user already gave the content) and hands it straight to
+    /// <see cref="IMemoryConsolidator.ConsolidateAsync"/>, the same decision logic
+    /// <c>LlmMemoryExtractor</c> uses for the periodic extraction path - zero dependency on event
+    /// counts, <see cref="Context.Domain.Entities.SessionSummaryChunk"/> state, or a session at all
+    /// (<c>sessionId: null</c>, since an MCP-originated remember has no session in scope).
+    /// </summary>
+    public async Task<Context.Domain.Entities.Memory> RememberExplicitlyAsync(Guid projectId, string content, MemoryType? type, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(content);
+
+        var candidate = new MemoryCandidate(
+            Type: type ?? MemoryType.Instruction,
+            Title: BuildExplicitRememberTitle(content),
+            Body: content,
+            Confidence: ExplicitRememberConfidence,
+            Facts: [],
+            Concepts: [],
+            FilesRead: [],
+            FilesModified: [],
+            Topic: null);
+
+        var existing = (await memoryStore.GetExistingWithEmbeddingsAsync(projectId, ct).ConfigureAwait(false)).ToList();
+        return await memoryConsolidator.ConsolidateAsync(projectId, sessionId: null, candidate, existing, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>First sentence of <paramref name="content"/>, or its first ~<see cref="ExplicitRememberTitleCharLimit"/>
+    /// characters when no sentence-ending punctuation appears early enough - same spirit as the
+    /// TITLE guidance <c>MemoryExtractionPromptBuilder</c> gives the LLM for the periodic path.</summary>
+    private static string BuildExplicitRememberTitle(string content)
+    {
+        var trimmed = content.Trim();
+        var sentenceEnd = trimmed.IndexOfAny(['.', '!', '?']);
+        if (sentenceEnd > 0 && sentenceEnd < ExplicitRememberTitleCharLimit)
+        {
+            return trimmed[..(sentenceEnd + 1)];
+        }
+
+        return trimmed.Length <= ExplicitRememberTitleCharLimit
+            ? trimmed
+            : string.Concat(trimmed.AsSpan(0, ExplicitRememberTitleCharLimit), "…");
     }
 
     /// <summary>

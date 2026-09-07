@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Security;
 using Context.Application;
+using Context.Application.Settings;
 using Context.Domain.Enums;
 using Context.Graph.Abstractions;
 using Context.Dashboard.Server.Security;
@@ -17,14 +18,16 @@ namespace Context.Dashboard.Server.Mcp;
 /// <summary>
 /// The MCP tools named in the Context.Dashboard.Server task brief: <c>context_search</c>, <c>context_expand</c>,
 /// <c>context_get</c>, <c>code_search</c>, <c>symbol_search</c>, <c>memory_search</c>,
-/// <c>memory_get</c>, <c>graph_neighbors</c>, <c>graph_neighborhood</c>, <c>graph_path</c>,
-/// <c>graph_impact</c>, <c>session_search</c>, <c>session_get</c>, <c>project_info</c>. Every tool
-/// that has a direct <see cref="IContextEngine"/> method (CONTRACTS.md §10) is a thin wrapper over
-/// it; the others (<c>code_search</c>, <c>symbol_search</c>, <c>memory_get</c>,
-/// <c>graph_neighbors</c>, <c>graph_neighborhood</c>, <c>graph_path</c>, <c>session_search</c>,
-/// <c>session_get</c>) call directly into an
+/// <c>memory_get</c>, <c>memory_remember</c>, <c>graph_neighbors</c>, <c>graph_neighborhood</c>,
+/// <c>graph_path</c>, <c>graph_impact</c>, <c>session_search</c>, <c>session_get</c>,
+/// <c>project_info</c>. Every tool that has a direct <see cref="IContextEngine"/> method
+/// (CONTRACTS.md §10) is a thin wrapper over it; the others (<c>code_search</c>,
+/// <c>symbol_search</c>, <c>memory_get</c>, <c>graph_neighbors</c>, <c>graph_neighborhood</c>,
+/// <c>graph_path</c>, <c>session_search</c>, <c>session_get</c>) call directly into an
 /// already-registered repository/service, per the task brief's explicit allowance for tools with no
-/// 1:1 engine method.
+/// 1:1 engine method. <c>memory_remember</c> (docs/architecture/MEMORY_PIPELINE_PLAN.md §F) is the
+/// one exception with its own gating check (<c>ProjectSettingsDto.ExplicitRememberEnabled</c>)
+/// before it delegates to <see cref="IContextEngine.RememberExplicitlyAsync"/>.
 /// </summary>
 /// <remarks>
 /// Registered via <c>WithToolsFromAssembly()</c> in Program.cs, which — per the official MCP C#
@@ -45,6 +48,7 @@ public sealed class ContextMcpTools(
     IDbContextFactory<ContextDbContext> dbContextFactory,
     CurrentProjectAccessor currentProject,
     IUsageRecorder usageRecorder,
+    IProjectSettingsService projectSettingsService,
     ILogger<ContextMcpTools>? logger = null)
 {
     private const int DefaultCodeSearchLimit = 20;
@@ -138,6 +142,28 @@ public sealed class ContextMcpTools(
         [Description("Memory id.")] Guid memoryId,
         CancellationToken ct = default)
         => await memoryRepository.GetByIdAsync(memoryId, ct).ConfigureAwait(false);
+
+    [McpServerTool(Name = "memory_remember")]
+    [Description("Explicitly stores something the user just asked to be remembered, bypassing the normal " +
+        "N-event/session-end extraction triggers. Call this the moment a user says things like 'remember " +
+        "that...', 'note for later...', or gives a standing instruction — do not wait for enough events to accumulate.")]
+    public async Task<Context.Domain.Entities.Memory> MemoryRememberAsync(
+        [Description("What to remember, in the user's own words or lightly cleaned up.")] string content,
+        [Description("One of Decision, Discovery, BugFix, Feature, Refactor, Change, Exploration, Architecture, Issue, Instruction. Defaults to Instruction.")] string? type = null,
+        CancellationToken ct = default)
+    {
+        var settings = await projectSettingsService.GetAsync(currentProject.ProjectId, ct).ConfigureAwait(false);
+        if (!settings.ExplicitRememberEnabled)
+        {
+            logger?.LogInformation(
+                "memory_remember was called for project {ProjectId} but ExplicitRememberEnabled is false; rejecting.",
+                currentProject.ProjectId);
+            throw new InvalidOperationException(
+                "memory_remember is disabled for this project (ExplicitRememberEnabled is false in project settings).");
+        }
+
+        return await engine.RememberExplicitlyAsync(currentProject.ProjectId, content, ParseMemoryType(type), ct).ConfigureAwait(false);
+    }
 
     [McpServerTool(Name = "graph_neighbors")]
     [Description("Lists the graph nodes reachable from a node within a number of hops, optionally filtered by edge kind.")]
@@ -240,6 +266,27 @@ public sealed class ContextMcpTools(
 
     private static DisclosureLevel ParseLevel(string level) =>
         Enum.TryParse<DisclosureLevel>(level, ignoreCase: true, out var parsed) ? parsed : DisclosureLevel.L1_Summary;
+
+    /// <summary>
+    /// Case-insensitive parse of a <see cref="MemoryType"/> name for the agent-facing
+    /// <c>memory_remember</c> tool - a bad/unrecognized string from the caller must fail soft to
+    /// the default rather than throw (an agent passing a slightly-wrong type name shouldn't 500).
+    /// </summary>
+    private MemoryType ParseMemoryType(string? type)
+    {
+        if (string.IsNullOrWhiteSpace(type))
+        {
+            return MemoryType.Instruction;
+        }
+
+        if (Enum.TryParse<MemoryType>(type, ignoreCase: true, out var parsed))
+        {
+            return parsed;
+        }
+
+        logger?.LogInformation("memory_remember received an unrecognized MemoryType {Type}; defaulting to Instruction.", type);
+        return MemoryType.Instruction;
+    }
 
     private static GraphEdgeKind[]? ParseEdgeKinds(string[]? kinds)
     {

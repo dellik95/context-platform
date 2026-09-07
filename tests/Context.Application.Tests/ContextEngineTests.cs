@@ -3,6 +3,8 @@ using Context.Domain.Entities;
 using Context.Domain.Enums;
 using Context.Graph.Abstractions;
 using Context.Infrastructure.Abstractions;
+using Context.Memory.Abstractions;
+using Context.Memory.Extraction;
 using Context.Retrieval;
 using Context.Retrieval.Abstractions;
 using Context.Application.Settings;
@@ -32,6 +34,8 @@ public sealed class ContextEngineTests
     private readonly Mock<IMemoryRepository> _memoryRepository = new();
     private readonly Mock<ISessionRepository> _sessionRepository = new();
     private readonly Mock<IProjectSettingsService> _projectSettingsService = new();
+    private readonly Mock<IMemoryStore> _memoryStore = new();
+    private readonly Mock<IMemoryConsolidator> _memoryConsolidator = new();
     private readonly SessionDeliveryCache _deliveryCache = new();
     private readonly ContextEngine _sut;
 
@@ -51,7 +55,9 @@ public sealed class ContextEngineTests
             _memoryRepository.Object,
             _sessionRepository.Object,
             _deliveryCache,
-            _projectSettingsService.Object);
+            _projectSettingsService.Object,
+            _memoryStore.Object,
+            _memoryConsolidator.Object);
 
         // Neutral defaults so tests only need to configure what they actually exercise.
         _symbolRepository.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
@@ -501,5 +507,80 @@ public sealed class ContextEngineTests
         var act = () => _sut.ProjectInfoAsync(projectId, CancellationToken.None);
 
         await act.Should().ThrowAsync<KeyNotFoundException>();
+    }
+
+    // ---- 7. RememberExplicitlyAsync (MEMORY_PIPELINE_PLAN.md §F/§H test #10): explicit-remember
+    // bypasses the N-event/session-end extraction pipeline entirely - it builds one MemoryCandidate
+    // from the raw content and hands it straight to IMemoryConsolidator, with zero dependency on
+    // event counts, chunk state, or IJobQueue/ISessionRepository/IMemoryRepository. ----
+
+    [Fact]
+    public async Task RememberExplicitlyAsync_calls_the_consolidator_directly_with_zero_dependency_on_event_count_or_chunk_state()
+    {
+        var projectId = Guid.NewGuid();
+        var existingWithEmbeddings = new List<ExistingMemoryWithEmbedding>();
+        var consolidated = MakeMemory(projectId, MemoryType.Instruction, "Title", "Body");
+
+        _memoryStore.Setup(s => s.GetExistingWithEmbeddingsAsync(projectId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ExistingMemoryWithEmbedding>)existingWithEmbeddings);
+        _memoryConsolidator
+            .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), existingWithEmbeddings, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(consolidated);
+
+        var result = await _sut.RememberExplicitlyAsync(projectId, "Always use tabs, not spaces.", type: null, CancellationToken.None);
+
+        result.Should().BeSameAs(consolidated);
+        _memoryConsolidator.Verify(
+            c => c.ConsolidateAsync(
+                projectId,
+                null,
+                It.Is<MemoryCandidate>(cand =>
+                    cand.Type == MemoryType.Instruction &&
+                    cand.Body == "Always use tabs, not spaces." &&
+                    cand.Confidence == 0.95 &&
+                    cand.Facts.Count == 0 && cand.Concepts.Count == 0 &&
+                    cand.FilesRead.Count == 0 && cand.FilesModified.Count == 0 &&
+                    cand.Topic == null),
+                existingWithEmbeddings,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        // Bypasses the normal trigger/chunk pipeline entirely - no job enqueued, no session or
+        // memory-repository read, unlike the periodic SummarizeSession -> ExtractMemory path.
+        _jobQueue.Verify(q => q.EnqueueAsync(It.IsAny<JobType>(), It.IsAny<object>(), It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        _sessionRepository.Verify(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+        _memoryRepository.Verify(r => r.ListByProjectAsync(It.IsAny<Guid>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RememberExplicitlyAsync_defaults_to_MemoryType_Instruction_when_no_type_is_given()
+    {
+        var projectId = Guid.NewGuid();
+        _memoryStore.Setup(s => s.GetExistingWithEmbeddingsAsync(projectId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ExistingMemoryWithEmbedding>)[]);
+        _memoryConsolidator
+            .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid _, Guid? _, MemoryCandidate cand, List<ExistingMemoryWithEmbedding> _, CancellationToken _) =>
+                MakeMemory(projectId, cand.Type, cand.Title, cand.Body));
+
+        var result = await _sut.RememberExplicitlyAsync(projectId, "Remember this.", type: null, CancellationToken.None);
+
+        result.Type.Should().Be(MemoryType.Instruction);
+    }
+
+    [Fact]
+    public async Task RememberExplicitlyAsync_honors_an_explicit_type_when_given()
+    {
+        var projectId = Guid.NewGuid();
+        _memoryStore.Setup(s => s.GetExistingWithEmbeddingsAsync(projectId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ExistingMemoryWithEmbedding>)[]);
+        _memoryConsolidator
+            .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid _, Guid? _, MemoryCandidate cand, List<ExistingMemoryWithEmbedding> _, CancellationToken _) =>
+                MakeMemory(projectId, cand.Type, cand.Title, cand.Body));
+
+        var result = await _sut.RememberExplicitlyAsync(projectId, "Use SQLite for the cache.", MemoryType.Decision, CancellationToken.None);
+
+        result.Type.Should().Be(MemoryType.Decision);
     }
 }

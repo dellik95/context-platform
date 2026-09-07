@@ -161,6 +161,7 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         - `symbol_search` - finds symbols (classes, functions, methods, ...) by name pattern.
         - `memory_search` - searches persistent memories (decisions, discoveries, bug fixes, open issues, ...).
         - `memory_get` - fetches one memory by id.
+        - `memory_remember` - explicitly stores something right now, bypassing the normal extraction triggers.
         - `graph_neighbors` - lists graph nodes reachable from a node within N hops, optionally filtered by edge kind.
         - `graph_path` - finds the shortest path between two graph nodes.
         - `graph_impact` - blast-radius analysis for a symbol: transitive callers, implementers, and covering tests.
@@ -173,6 +174,7 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         - Prefer `context_search` or `code_search` over re-reading files from scratch when looking for how something in the codebase works.
         - Check `memory_search` for prior decisions, bugfixes, or discoveries before re-investigating a question that may already be answered from an earlier session.
         - Call `graph_impact` on a symbol before changing it, to see its blast radius (callers, implementers, tests).
+        - When the user explicitly says something like "remember that...", "note for later...", or gives a standing instruction, call `memory_remember` right away instead of waiting for enough activity to accumulate for the normal extraction pipeline to pick it up on its own.
         """;
 
     private JsonObject BuildPluginManifest() => new()

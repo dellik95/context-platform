@@ -33,4 +33,8 @@ public sealed record ProjectSettingsDto(
     // only triggers memory extraction (LLM candidate generation + embedding + dedup - real work,
     // unlike a summary pass) once it covers at least this many events. Bypassed entirely when the
     // session is actually ending, since every chunk must be processed then regardless of size.
-    int MinEventsForMemoryExtraction = 20);
+    int MinEventsForMemoryExtraction = 20,
+    // Lets a project opt out of the memory_remember MCP tool entirely if its owner doesn't want
+    // agent-initiated memory writes outside the normal extraction pipeline. Defaults to enabled
+    // since the tool only ever fires on an explicit agent tool call, never automatically.
+    bool ExplicitRememberEnabled = true);
