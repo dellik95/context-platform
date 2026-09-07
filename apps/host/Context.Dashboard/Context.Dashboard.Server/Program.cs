@@ -167,8 +167,15 @@ try
             .AllowCredentials()));
     }
 
+    // Stateless: tool-call dispatch (RunSessionAsync) runs outside the HTTP request that carried
+    // the JSON-RPC message, so IHttpContextAccessor.HttpContext is null by the time a tool method
+    // runs — CurrentProjectAccessor would throw "used outside an HTTP request" for every tool that
+    // reads it. Stateless mode round-trips session state via the mcp-session-id header instead of
+    // in-memory, so each request (including tool calls) carries its own HttpContext through
+    // RequireBearerTokenFilter. Costs: no /sse endpoint, no server-to-client requests/sampling/roots
+    // — none of which this project's tools use.
     builder.Services.AddMcpServer()
-        .WithHttpTransport()
+        .WithHttpTransport(options => options.Stateless = true)
         .WithToolsFromAssembly();
 
     var app = builder.Build();
