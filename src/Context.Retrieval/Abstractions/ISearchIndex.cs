@@ -1,3 +1,5 @@
+using Context.Domain.Enums;
+
 namespace Context.Retrieval.Abstractions;
 
 /// <summary>
@@ -12,16 +14,20 @@ public interface ISearchIndex
     /// <summary>
     /// SQLite FTS5 / BM25 lexical search scoped to a project. Each result identifies a chunk and,
     /// where resolvable, the symbol/file it belongs to (<c>SymbolId</c> and/or <c>FileId</c> may be
-    /// null for chunks that are not attached to a resolved symbol).
+    /// null for chunks that are not attached to a resolved symbol). <c>SymbolKind</c> is the
+    /// resolved symbol's actual kind (Class, Method, Function, ...) when <c>SymbolId</c> is set, so
+    /// callers can report what a hit actually is instead of the generic "it's a symbol" — null when
+    /// <c>SymbolId</c> is null.
     /// </summary>
-    Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double BM25Score)>> LexicalSearchAsync(
+    Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score)>> LexicalSearchAsync(
         Guid projectId, string text, CancellationToken ct);
 
     /// <summary>
     /// Vector-similarity search scoped to a project, using a pre-computed query embedding.
     /// <c>CosineScore</c> is the cosine similarity between the query embedding and the chunk's
-    /// stored embedding, typically in [-1, 1].
+    /// stored embedding, typically in [-1, 1]. <c>SymbolKind</c> is the resolved symbol's actual
+    /// kind — see <see cref="LexicalSearchAsync"/>'s remarks.
     /// </summary>
-    Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double CosineScore)>> VectorSearchAsync(
+    Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore)>> VectorSearchAsync(
         Guid projectId, float[] queryEmbedding, CancellationToken ct);
 }

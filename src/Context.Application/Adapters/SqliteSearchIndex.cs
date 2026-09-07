@@ -1,6 +1,7 @@
 using System.Data.Common;
 using System.Text;
 using Context.Application.Abstractions;
+using Context.Domain.Enums;
 using Context.Infrastructure;
 using Context.Providers;
 using Context.Providers.Abstractions;
@@ -46,7 +47,7 @@ public sealed class SqliteSearchIndex(
     private readonly SemaphoreSlim _initGate = new(1, 1);
     private volatile bool _ftsInitialized;
 
-    public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double BM25Score)>> LexicalSearchAsync(
+    public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score)>> LexicalSearchAsync(
         Guid projectId, string text, CancellationToken ct)
     {
         var matchExpression = BuildMatchExpression(text);
@@ -66,10 +67,11 @@ public sealed class SqliteSearchIndex(
         // a higher value here always means "more relevant" — the convention HybridSearchEngine's
         // min-max normalization assumes for every raw signal it merges.
         command.CommandText = """
-            SELECT c."Id", c."FileId", c."SymbolId", substr(c."Text", 1, @snippetLength) AS Snippet, -bm25(chunks_fts) AS Score
+            SELECT c."Id", c."FileId", c."SymbolId", sy."Kind", substr(c."Text", 1, @snippetLength) AS Snippet, -bm25(chunks_fts) AS Score
             FROM chunks_fts
             JOIN "Chunks" c ON c."rowid" = chunks_fts."rowid"
             JOIN "Files" f ON f."Id" = c."FileId"
+            LEFT JOIN "Symbols" sy ON sy."Id" = c."SymbolId"
             WHERE chunks_fts MATCH @match AND f."ProjectId" = @projectId AND f."IsDeleted" = 0
             ORDER BY bm25(chunks_fts)
             LIMIT @limit;
@@ -86,7 +88,7 @@ public sealed class SqliteSearchIndex(
         AddParameter(command, "@snippetLength", SnippetLength);
         AddParameter(command, "@limit", LexicalLimit);
 
-        var results = new List<(Guid, Guid?, Guid?, string, double)>();
+        var results = new List<(Guid, Guid?, Guid?, SymbolKind?, string, double)>();
 
         try
         {
@@ -97,8 +99,9 @@ public sealed class SqliteSearchIndex(
                     ReadGuid(reader, 0),
                     ReadNullableGuid(reader, 1),
                     ReadNullableGuid(reader, 2),
-                    reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
-                    reader.GetDouble(4)));
+                    ReadNullableSymbolKind(reader, 3),
+                    reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
+                    reader.GetDouble(5)));
             }
         }
         catch (DbException)
@@ -112,7 +115,7 @@ public sealed class SqliteSearchIndex(
         return results;
     }
 
-    public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double CosineScore)>> VectorSearchAsync(
+    public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore)>> VectorSearchAsync(
         Guid projectId, float[] queryEmbedding, CancellationToken ct)
     {
         var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
@@ -135,17 +138,19 @@ public sealed class SqliteSearchIndex(
         var rows = await (
             from c in db.Chunks.AsNoTracking()
             join f in db.Files.AsNoTracking() on c.FileId equals f.Id
+            join sy in db.Symbols.AsNoTracking() on c.SymbolId equals (Guid?)sy.Id into symbolJoin
+            from sy in symbolJoin.DefaultIfEmpty()
             where chunkIds.Contains(c.Id) && f.ProjectId == projectId && !f.IsDeleted
-            select new { c.Id, c.FileId, c.SymbolId, c.Text }
+            select new { c.Id, c.FileId, c.SymbolId, Kind = (SymbolKind?)sy.Kind, c.Text }
         ).ToListAsync(ct).ConfigureAwait(false);
 
         var scored = rows
             .Select(row =>
             {
                 var snippet = row.Text.Length > SnippetLength ? row.Text[..SnippetLength] : row.Text;
-                return (row.Id, (Guid?)row.FileId, row.SymbolId, snippet, scoreByChunkId[row.Id]);
+                return (row.Id, (Guid?)row.FileId, row.SymbolId, row.Kind, snippet, scoreByChunkId[row.Id]);
             })
-            .OrderByDescending(r => r.Item5)
+            .OrderByDescending(r => r.Item6)
             .ToList();
 
         return scored;
@@ -286,4 +291,9 @@ public sealed class SqliteSearchIndex(
 
     private static Guid? ReadNullableGuid(DbDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : Guid.Parse(reader.GetString(ordinal));
+
+    // Symbols."Kind" has no HasConversion<string>() in SymbolConfiguration, so EF persists the enum
+    // as its default underlying INTEGER (ordinal) -- read it the same way here on the raw connection.
+    private static SymbolKind? ReadNullableSymbolKind(DbDataReader reader, int ordinal) =>
+        reader.IsDBNull(ordinal) ? null : (SymbolKind)reader.GetInt64(ordinal);
 }

@@ -15,8 +15,8 @@ public sealed class HybridSearchEngineTests
         var lexicalNode = Guid.NewGuid();
         var vectorNode = Guid.NewGuid();
         var searchIndex = new FakeSearchIndex(
-            lexical: [(Guid.NewGuid(), (Guid?)null, lexicalNode, "lexical-snippet", 10.0), (Guid.NewGuid(), (Guid?)null, vectorNode, "vector-snippet", 1.0)],
-            vector: [(Guid.NewGuid(), (Guid?)null, lexicalNode, "lexical-snippet", 0.0), (Guid.NewGuid(), (Guid?)null, vectorNode, "vector-snippet", 0.9)]);
+            lexical: [(Guid.NewGuid(), (Guid?)null, lexicalNode, (SymbolKind?)null, "lexical-snippet", 10.0), (Guid.NewGuid(), (Guid?)null, vectorNode, (SymbolKind?)null, "vector-snippet", 1.0)],
+            vector: [(Guid.NewGuid(), (Guid?)null, lexicalNode, (SymbolKind?)null, "lexical-snippet", 0.0), (Guid.NewGuid(), (Guid?)null, vectorNode, (SymbolKind?)null, "vector-snippet", 0.9)]);
 
         var scorer = new HybridScorer(new HybridScoringOptions
         {
@@ -53,8 +53,8 @@ public sealed class HybridSearchEngineTests
         var lexicalNode = Guid.NewGuid();
         var vectorNode = Guid.NewGuid();
         var searchIndex = new FakeSearchIndex(
-            lexical: [(Guid.NewGuid(), (Guid?)null, lexicalNode, "lexical-snippet", 10.0), (Guid.NewGuid(), (Guid?)null, vectorNode, "vector-snippet", 1.0)],
-            vector: [(Guid.NewGuid(), (Guid?)null, lexicalNode, "lexical-snippet", 0.0), (Guid.NewGuid(), (Guid?)null, vectorNode, "vector-snippet", 0.9)]);
+            lexical: [(Guid.NewGuid(), (Guid?)null, lexicalNode, (SymbolKind?)null, "lexical-snippet", 10.0), (Guid.NewGuid(), (Guid?)null, vectorNode, (SymbolKind?)null, "vector-snippet", 1.0)],
+            vector: [(Guid.NewGuid(), (Guid?)null, lexicalNode, (SymbolKind?)null, "lexical-snippet", 0.0), (Guid.NewGuid(), (Guid?)null, vectorNode, (SymbolKind?)null, "vector-snippet", 0.9)]);
 
         var scorer = new HybridScorer(new HybridScoringOptions
         {
@@ -90,8 +90,8 @@ public sealed class HybridSearchEngineTests
     {
         var lexicalNode = Guid.NewGuid();
         var searchIndex = new FakeSearchIndex(
-            lexical: [(Guid.NewGuid(), (Guid?)null, lexicalNode, "lexical-snippet", 10.0)],
-            vector: [(Guid.NewGuid(), (Guid?)null, Guid.NewGuid(), "unreachable-vector-snippet", 0.9)]);
+            lexical: [(Guid.NewGuid(), (Guid?)null, lexicalNode, (SymbolKind?)null, "lexical-snippet", 10.0)],
+            vector: [(Guid.NewGuid(), (Guid?)null, Guid.NewGuid(), (SymbolKind?)null, "unreachable-vector-snippet", 0.9)]);
 
         var scorer = new HybridScorer(new HybridScoringOptions
         {
@@ -126,13 +126,13 @@ public sealed class HybridSearchEngineTests
     }
 
     private sealed class FakeSearchIndex(
-        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double BM25Score)> lexical,
-        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double CosineScore)> vector) : ISearchIndex
+        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score)> lexical,
+        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore)> vector) : ISearchIndex
     {
-        public Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double BM25Score)>> LexicalSearchAsync(
+        public Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score)>> LexicalSearchAsync(
             Guid projectId, string text, CancellationToken ct) => Task.FromResult(lexical);
 
-        public Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double CosineScore)>> VectorSearchAsync(
+        public Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore)>> VectorSearchAsync(
             Guid projectId, float[] queryEmbedding, CancellationToken ct) => Task.FromResult(vector);
     }
 

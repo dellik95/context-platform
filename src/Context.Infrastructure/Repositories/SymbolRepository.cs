@@ -18,13 +18,32 @@ public class SymbolRepository(ContextDbContext db) : ISymbolRepository
     public async Task<IReadOnlyList<Symbol>> SearchByNameAsync(Guid projectId, string namePattern, int limit, CancellationToken ct)
     {
         var pattern = $"%{namePattern}%";
-        return await (
+        var matches = await (
             from s in db.Symbols.AsNoTracking()
             join f in db.Files.AsNoTracking() on s.FileId equals f.Id
             where f.ProjectId == projectId && !f.IsDeleted && EF.Functions.Like(s.QualifiedName, pattern)
-            orderby s.QualifiedName
             select s
-        ).Take(limit).ToListAsync(ct);
+        ).ToListAsync(ct);
+
+        // Ordered by match quality, not alphabetically (SQLite's EF Core provider can't translate
+        // this ranking, same as MemoryRepository.SearchAsync's own client-side ORDER BY -- see its
+        // remarks): an exact/prefix/substring hit on the symbol's own short Name ranks above one
+        // that only matched somewhere in QualifiedName's namespace/parent prefix, so searching
+        // "AuthMiddleware" surfaces the class itself before an unrelated symbol that merely lives in
+        // a namespace containing "Auth".
+        return [.. matches
+            .OrderBy(s => MatchRank(s.Name, namePattern))
+            .ThenBy(s => s.QualifiedName.Length)
+            .ThenBy(s => s.QualifiedName, StringComparer.Ordinal)
+            .Take(limit)];
+    }
+
+    private static int MatchRank(string name, string namePattern)
+    {
+        if (string.Equals(name, namePattern, StringComparison.OrdinalIgnoreCase)) return 0;
+        if (name.StartsWith(namePattern, StringComparison.OrdinalIgnoreCase)) return 1;
+        if (name.Contains(namePattern, StringComparison.OrdinalIgnoreCase)) return 2;
+        return 3; // matched only via QualifiedName's namespace/parent prefix
     }
 
     public async Task<IReadOnlySet<string>> GetAllNamesAsync(Guid projectId, CancellationToken ct)

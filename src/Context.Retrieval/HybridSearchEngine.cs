@@ -1,4 +1,5 @@
 using Context.Domain.Entities;
+using Context.Domain.Enums;
 using Context.Graph.Abstractions;
 using Context.Retrieval.Abstractions;
 using Context.Retrieval.Scoring;
@@ -100,15 +101,15 @@ public sealed class HybridSearchEngine : ISearchEngine
     }
 
     private static Dictionary<Guid, CandidateAccumulator> MergeCandidates(
-        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double BM25Score)> lexical,
-        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, string Snippet, double CosineScore)> vector)
+        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score)> lexical,
+        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore)> vector)
     {
         var map = new Dictionary<Guid, CandidateAccumulator>();
 
         foreach (var r in lexical)
         {
             var key = r.SymbolId ?? r.FileId ?? r.ChunkId;
-            var c = GetOrAdd(map, key, r.ChunkId, r.FileId, r.SymbolId);
+            var c = GetOrAdd(map, key, r.ChunkId, r.FileId, r.SymbolId, r.SymbolKind);
             c.LexicalRaw = Math.Max(c.LexicalRaw, r.BM25Score);
             c.Snippet ??= r.Snippet;
         }
@@ -116,7 +117,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         foreach (var r in vector)
         {
             var key = r.SymbolId ?? r.FileId ?? r.ChunkId;
-            var c = GetOrAdd(map, key, r.ChunkId, r.FileId, r.SymbolId);
+            var c = GetOrAdd(map, key, r.ChunkId, r.FileId, r.SymbolId, r.SymbolKind);
             c.VectorRaw = Math.Max(c.VectorRaw, r.CosineScore);
             c.Snippet ??= r.Snippet;
         }
@@ -125,12 +126,16 @@ public sealed class HybridSearchEngine : ISearchEngine
     }
 
     private static CandidateAccumulator GetOrAdd(
-        Dictionary<Guid, CandidateAccumulator> map, Guid key, Guid chunkId, Guid? fileId, Guid? symbolId)
+        Dictionary<Guid, CandidateAccumulator> map, Guid key, Guid chunkId, Guid? fileId, Guid? symbolId, SymbolKind? symbolKind)
     {
         if (!map.TryGetValue(key, out var c))
         {
-            c = new CandidateAccumulator(key) { ChunkId = chunkId, FileId = fileId, SymbolId = symbolId };
+            c = new CandidateAccumulator(key) { ChunkId = chunkId, FileId = fileId, SymbolId = symbolId, SymbolKind = symbolKind };
             map[key] = c;
+        }
+        else
+        {
+            c.SymbolKind ??= symbolKind;
         }
 
         return c;
@@ -271,6 +276,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         public Guid? ChunkId { get; set; }
         public Guid? FileId { get; set; }
         public Guid? SymbolId { get; set; }
+        public SymbolKind? SymbolKind { get; set; }
         public string? Snippet { get; set; }
         public string? GraphKind { get; set; }
         public string? GraphLabel { get; set; }
@@ -281,15 +287,21 @@ public sealed class HybridSearchEngine : ISearchEngine
 
         public SearchHit ToSearchHit()
         {
-            var kind = GraphKind ?? (SymbolId is not null ? "Symbol" : FileId is not null ? "File" : "Chunk");
+            var kind = GraphKind ?? DefaultKind();
             var label = GraphLabel ?? DeriveLabel();
             return new SearchHit(NodeId, kind, label, Score, Snippet);
         }
 
+        // SymbolKind (Class/Method/Function/...) when this hit resolved to a symbol -- falls back to
+        // the generic "Symbol" only for the rare case a chunk has a SymbolId but that symbol's row
+        // wasn't found by the Kind join (e.g. deleted between search and this candidate being built).
+        private string DefaultKind() =>
+            SymbolId is not null ? (SymbolKind?.ToString() ?? "Symbol") : FileId is not null ? "File" : "Chunk";
+
         private string DeriveLabel()
         {
             if (string.IsNullOrWhiteSpace(Snippet))
-                return $"{(SymbolId is not null ? "Symbol" : FileId is not null ? "File" : "Chunk")} {NodeId}";
+                return $"{DefaultKind()} {NodeId}";
 
             var firstLine = Snippet.AsSpan().TrimStart();
             var newline = firstLine.IndexOfAny('\r', '\n');
