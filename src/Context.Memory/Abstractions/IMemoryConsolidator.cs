@@ -17,8 +17,12 @@ public interface IMemoryConsolidator
     /// the thresholds documented on <see cref="Context.Memory.Extraction.MemoryConsolidator"/>.
     /// When a new memory is inserted, it is appended to <paramref name="existing"/> so subsequent
     /// calls sharing the same list (e.g. later candidates in the same extraction batch) see it.
+    /// The returned <see cref="ConsolidationResult.Outcome"/> tells the caller which branch fired,
+    /// for structured observability (MEMORY_PIPELINE_PLAN.md §D.5/Gap #5) — a superseding insert
+    /// and a fresh insert both return "a new Memory row" and are otherwise indistinguishable from
+    /// the outside.
     /// </summary>
-    Task<Context.Domain.Entities.Memory> ConsolidateAsync(
+    Task<ConsolidationResult> ConsolidateAsync(
         Guid projectId,
         Guid? sessionId,
         Context.Memory.Extraction.MemoryCandidate candidate,

@@ -30,6 +30,11 @@ public sealed class LlmMemoryExtractor(
             ? MemoryCandidateHeuristics.FromSummary(chunk)
             : await ExtractCandidatesViaLlmAsync(chunk, projectId, chatClient, ct).ConfigureAwait(false);
 
+        // IDs/counts only, never candidate Title/Body text (MEMORY_PIPELINE_PLAN.md §D.5/Gap #5) -
+        // matches the discipline already used by this class's LogWarning calls below.
+        logger?.LogInformation(
+            "Extracted {CandidateCount} candidate memories for session {SessionId}.", candidates.Count, chunk.SessionId);
+
         if (candidates.Count == 0)
         {
             return [];
@@ -37,13 +42,24 @@ public sealed class LlmMemoryExtractor(
 
         var existing = (await memoryStore.GetExistingWithEmbeddingsAsync(projectId, ct).ConfigureAwait(false)).ToList();
         var results = new List<Context.Domain.Entities.Memory>();
+        int created = 0, reinforced = 0, superseded = 0;
 
         foreach (var candidate in candidates)
         {
             ct.ThrowIfCancellationRequested();
             var result = await consolidator.ConsolidateAsync(projectId, chunk.SessionId, candidate, existing, ct).ConfigureAwait(false);
-            results.Add(result);
+            results.Add(result.Memory);
+            switch (result.Outcome)
+            {
+                case ConsolidationOutcome.Created: created++; break;
+                case ConsolidationOutcome.Reinforced: reinforced++; break;
+                case ConsolidationOutcome.Superseded: superseded++; break;
+            }
         }
+
+        logger?.LogInformation(
+            "Memory consolidation for session {SessionId}: {Created} created, {Reinforced} reinforced, {Superseded} superseded.",
+            chunk.SessionId, created, reinforced, superseded);
 
         return results;
     }

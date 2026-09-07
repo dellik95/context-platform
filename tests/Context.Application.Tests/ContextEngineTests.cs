@@ -525,7 +525,7 @@ public sealed class ContextEngineTests
             .ReturnsAsync((IReadOnlyList<ExistingMemoryWithEmbedding>)existingWithEmbeddings);
         _memoryConsolidator
             .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), existingWithEmbeddings, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(consolidated);
+            .ReturnsAsync(new ConsolidationResult(consolidated, ConsolidationOutcome.Created));
 
         var result = await _sut.RememberExplicitlyAsync(projectId, "Always use tabs, not spaces.", type: null, CancellationToken.None);
 
@@ -561,7 +561,7 @@ public sealed class ContextEngineTests
         _memoryConsolidator
             .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Guid _, Guid? _, MemoryCandidate cand, List<ExistingMemoryWithEmbedding> _, CancellationToken _) =>
-                MakeMemory(projectId, cand.Type, cand.Title, cand.Body));
+                new ConsolidationResult(MakeMemory(projectId, cand.Type, cand.Title, cand.Body), ConsolidationOutcome.Created));
 
         var result = await _sut.RememberExplicitlyAsync(projectId, "Remember this.", type: null, CancellationToken.None);
 
@@ -577,7 +577,7 @@ public sealed class ContextEngineTests
         _memoryConsolidator
             .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Guid _, Guid? _, MemoryCandidate cand, List<ExistingMemoryWithEmbedding> _, CancellationToken _) =>
-                MakeMemory(projectId, cand.Type, cand.Title, cand.Body));
+                new ConsolidationResult(MakeMemory(projectId, cand.Type, cand.Title, cand.Body), ConsolidationOutcome.Created));
 
         var result = await _sut.RememberExplicitlyAsync(projectId, "Use SQLite for the cache.", MemoryType.Decision, CancellationToken.None);
 

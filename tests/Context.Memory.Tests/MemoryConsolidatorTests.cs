@@ -32,10 +32,11 @@ public class MemoryConsolidatorTests
 
         var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, CancellationToken.None);
 
-        result.Id.Should().NotBe(oldMemory.Id);
-        result.Tier.Should().Be(MemoryTier.Working);
-        result.ReinforcementCount.Should().Be(0);
-        store.Saved.Should().ContainSingle(s => s.Memory.Id == result.Id && s.Embedding != null);
+        result.Outcome.Should().Be(ConsolidationOutcome.Created);
+        result.Memory.Id.Should().NotBe(oldMemory.Id);
+        result.Memory.Tier.Should().Be(MemoryTier.Working);
+        result.Memory.ReinforcementCount.Should().Be(0);
+        store.Saved.Should().ContainSingle(s => s.Memory.Id == result.Memory.Id && s.Embedding != null);
         store.Superseded.Should().BeEmpty();
         existing.Should().HaveCount(2);
     }
@@ -51,9 +52,10 @@ public class MemoryConsolidatorTests
 
         var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, CancellationToken.None);
 
-        result.Id.Should().Be(oldMemory.Id);
-        result.ReinforcementCount.Should().Be(1);
-        result.Tier.Should().Be(MemoryTier.Working); // one reinforcement, below the promotion threshold
+        result.Outcome.Should().Be(ConsolidationOutcome.Reinforced);
+        result.Memory.Id.Should().Be(oldMemory.Id);
+        result.Memory.ReinforcementCount.Should().Be(1);
+        result.Memory.Tier.Should().Be(MemoryTier.Working); // one reinforcement, below the promotion threshold
         store.Saved.Should().ContainSingle(s => s.Memory.Id == oldMemory.Id && s.Embedding == null);
         store.Superseded.Should().BeEmpty();
         existing.Should().HaveCount(1); // reinforcement doesn't grow the dedup set
@@ -70,9 +72,10 @@ public class MemoryConsolidatorTests
 
         var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, CancellationToken.None);
 
-        result.Id.Should().NotBe(oldMemory.Id);
-        store.Saved.Should().ContainSingle(s => s.Memory.Id == result.Id && s.Embedding != null);
-        store.Superseded.Should().ContainSingle(s => s.OldId == oldMemory.Id && s.NewId == result.Id);
+        result.Outcome.Should().Be(ConsolidationOutcome.Superseded);
+        result.Memory.Id.Should().NotBe(oldMemory.Id);
+        store.Saved.Should().ContainSingle(s => s.Memory.Id == result.Memory.Id && s.Embedding != null);
+        store.Superseded.Should().ContainSingle(s => s.OldId == oldMemory.Id && s.NewId == result.Memory.Id);
         existing.Should().HaveCount(2); // old memory kept (not deleted), new one appended
     }
 
@@ -87,8 +90,9 @@ public class MemoryConsolidatorTests
 
         var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, CancellationToken.None);
 
-        result.Id.Should().Be(oldMemory.Id);
-        result.ReinforcementCount.Should().Be(1);
+        result.Outcome.Should().Be(ConsolidationOutcome.Reinforced);
+        result.Memory.Id.Should().Be(oldMemory.Id);
+        result.Memory.ReinforcementCount.Should().Be(1);
         store.Saved.Should().ContainSingle(s => s.Memory.Id == oldMemory.Id && s.Embedding == null);
         store.Superseded.Should().BeEmpty();
         existing.Should().HaveCount(1);
@@ -108,9 +112,10 @@ public class MemoryConsolidatorTests
 
         var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, CancellationToken.None);
 
-        result.Id.Should().NotBe(oldMemory.Id);
-        result.ReinforcementCount.Should().Be(0);
-        store.Saved.Should().ContainSingle(s => s.Memory.Id == result.Id && s.Embedding != null);
+        result.Outcome.Should().Be(ConsolidationOutcome.Created);
+        result.Memory.Id.Should().NotBe(oldMemory.Id);
+        result.Memory.ReinforcementCount.Should().Be(0);
+        store.Saved.Should().ContainSingle(s => s.Memory.Id == result.Memory.Id && s.Embedding != null);
         store.Superseded.Should().BeEmpty();
         existing.Should().HaveCount(2);
     }
@@ -126,8 +131,8 @@ public class MemoryConsolidatorTests
 
         var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, CancellationToken.None);
 
-        result.ReinforcementCount.Should().Be(2);
-        result.Tier.Should().Be(MemoryTier.LongTerm);
+        result.Memory.ReinforcementCount.Should().Be(2);
+        result.Memory.Tier.Should().Be(MemoryTier.LongTerm);
     }
 
     [Fact]
@@ -141,8 +146,8 @@ public class MemoryConsolidatorTests
 
         var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, CancellationToken.None);
 
-        result.ReinforcementCount.Should().Be(1); // below the 2-reinforcement threshold on its own
-        result.Tier.Should().Be(MemoryTier.LongTerm); // promoted anyway because Pinned
+        result.Memory.ReinforcementCount.Should().Be(1); // below the 2-reinforcement threshold on its own
+        result.Memory.Tier.Should().Be(MemoryTier.LongTerm); // promoted anyway because Pinned
     }
 
     /// <summary>Unit vector at exact cosine similarity <paramref name="similarity"/> to

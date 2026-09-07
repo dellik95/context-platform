@@ -35,7 +35,10 @@ public sealed class ExtractMemoryJobHandler(
                 $"No SessionSummaryChunk {payload.SummaryChunkId} found for session {payload.SessionId}; ExtractMemory must run after SummarizeSession.");
 
         // IMemoryExtractor.ExtractAsync writes new/reinforced/superseded memories itself via
-        // IMemoryStore - nothing further to persist here.
+        // IMemoryStore - nothing further to persist here. Reprocessing this same chunk (a retried
+        // job) is safe against duplicate memories only as a side effect of MemoryConsolidator's
+        // >0.92 similarity reinforce path (MEMORY_PIPELINE_PLAN.md §D.6/Gap #6) - not a designed
+        // idempotency guarantee, so don't assume it survives an unrelated change to that threshold.
         await extractor.ExtractAsync(projectId, chunk, ct).ConfigureAwait(false);
 
         // SessionSummaryChunk carries no ProjectId of its own - the owning Session is the only path to it.

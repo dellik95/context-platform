@@ -216,7 +216,8 @@ public sealed class ContextEngine(
             Topic: null);
 
         var existing = (await memoryStore.GetExistingWithEmbeddingsAsync(projectId, ct).ConfigureAwait(false)).ToList();
-        return await memoryConsolidator.ConsolidateAsync(projectId, sessionId: null, candidate, existing, ct).ConfigureAwait(false);
+        var result = await memoryConsolidator.ConsolidateAsync(projectId, sessionId: null, candidate, existing, ct).ConfigureAwait(false);
+        return result.Memory;
     }
 
     /// <summary>First sentence of <paramref name="content"/>, or its first ~<see cref="ExplicitRememberTitleCharLimit"/>

@@ -25,6 +25,10 @@ namespace Context.Memory.Extraction;
 /// (without superseding anything — nothing in this band was judged to contradict it);</item>
 /// <item>no match at or above 0.80 → insert as a new Working-tier memory.</item>
 /// </list>
+/// Retry-safety note (MEMORY_PIPELINE_PLAN.md §D.6/Gap #6): the &gt;0.92 reinforce path is why
+/// reprocessing the same chunk twice doesn't duplicate memories — but that's a side effect of the
+/// similarity threshold, not a designed idempotency guarantee. Don't tighten these thresholds
+/// without checking whether anything still relies on this.
 /// </summary>
 public sealed class MemoryConsolidator(
     IMemoryStore memoryStore,
@@ -37,7 +41,7 @@ public sealed class MemoryConsolidator(
     private const int PromotionReinforcementThreshold = 2;
     private const int TopKForDedup = 3;
 
-    public async Task<Context.Domain.Entities.Memory> ConsolidateAsync(
+    public async Task<ConsolidationResult> ConsolidateAsync(
         Guid projectId,
         Guid? sessionId,
         MemoryCandidate candidate,
@@ -66,14 +70,14 @@ public sealed class MemoryConsolidator(
             if (consistent)
             {
                 await ReinforceAsync(oldMemory, now, ct).ConfigureAwait(false);
-                return oldMemory;
+                return new ConsolidationResult(oldMemory, ConsolidationOutcome.Reinforced);
             }
 
             var superseding = NewMemory(candidate, projectId, sessionId, now);
             await memoryStore.SaveAsync(superseding, embedding, ct).ConfigureAwait(false);
             await memoryStore.MarkSupersededAsync(oldMemory.Id, superseding.Id, ct).ConfigureAwait(false);
             existing.Add(new ExistingMemoryWithEmbedding(superseding, embedding));
-            return superseding;
+            return new ConsolidationResult(superseding, ConsolidationOutcome.Superseded);
         }
 
         if (bestMatch is { Similarity: >= LowSimilarityThreshold })
@@ -87,14 +91,14 @@ public sealed class MemoryConsolidator(
             if (restated is not null)
             {
                 await ReinforceAsync(restated, now, ct).ConfigureAwait(false);
-                return restated;
+                return new ConsolidationResult(restated, ConsolidationOutcome.Reinforced);
             }
         }
 
         var fresh = NewMemory(candidate, projectId, sessionId, now);
         await memoryStore.SaveAsync(fresh, embedding, ct).ConfigureAwait(false);
         existing.Add(new ExistingMemoryWithEmbedding(fresh, embedding));
-        return fresh;
+        return new ConsolidationResult(fresh, ConsolidationOutcome.Created);
     }
 
     /// <summary>Walks <paramref name="matches"/> nearest-first, checking each candidate in the
