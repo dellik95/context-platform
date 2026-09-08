@@ -18,16 +18,17 @@ namespace Context.Dashboard.Server.Mcp;
 /// <summary>
 /// The MCP tools named in the Context.Dashboard.Server task brief: <c>context_search</c>, <c>context_expand</c>,
 /// <c>context_get</c>, <c>code_search</c>, <c>symbol_search</c>, <c>memory_search</c>,
-/// <c>memory_get</c>, <c>memory_remember</c>, <c>graph_neighbors</c>, <c>graph_neighborhood</c>,
-/// <c>graph_path</c>, <c>graph_impact</c>, <c>session_search</c>, <c>session_get</c>,
-/// <c>project_info</c>. Every tool that has a direct <see cref="IContextEngine"/> method
-/// (CONTRACTS.md §10) is a thin wrapper over it; the others (<c>code_search</c>,
-/// <c>symbol_search</c>, <c>memory_get</c>, <c>graph_neighbors</c>, <c>graph_neighborhood</c>,
-/// <c>graph_path</c>, <c>session_search</c>, <c>session_get</c>) call directly into an
-/// already-registered repository/service, per the task brief's explicit allowance for tools with no
-/// 1:1 engine method. <c>memory_remember</c> (docs/architecture/MEMORY_PIPELINE_PLAN.md §F) is the
-/// one exception with its own gating check (<c>ProjectSettingsDto.ExplicitRememberEnabled</c>)
-/// before it delegates to <see cref="IContextEngine.RememberExplicitlyAsync"/>.
+/// <c>memory_get</c>, <c>memory_remember</c>, <c>memory_forget</c>, <c>graph_neighbors</c>,
+/// <c>graph_neighborhood</c>, <c>graph_path</c>, <c>graph_impact</c>, <c>session_search</c>,
+/// <c>session_get</c>, <c>project_info</c>. Every tool that has a direct <see cref="IContextEngine"/>
+/// method (CONTRACTS.md §10) is a thin wrapper over it; the others (<c>code_search</c>,
+/// <c>symbol_search</c>, <c>memory_get</c>, <c>memory_forget</c>, <c>graph_neighbors</c>,
+/// <c>graph_neighborhood</c>, <c>graph_path</c>, <c>session_search</c>, <c>session_get</c>) call
+/// directly into an already-registered repository/service, per the task brief's explicit allowance
+/// for tools with no 1:1 engine method. <c>memory_remember</c> (docs/architecture/MEMORY_PIPELINE_PLAN.md §F)
+/// and <c>memory_forget</c> are the two agent-initiated memory-write tools, both gated by the same
+/// <c>ProjectSettingsDto.ExplicitRememberEnabled</c> check (see <see cref="EnsureExplicitMemoryWritesEnabledAsync"/>)
+/// before <c>memory_remember</c> delegates to <see cref="IContextEngine.RememberExplicitlyAsync"/>.
 /// </summary>
 /// <remarks>
 /// Registered via <c>WithToolsFromAssembly()</c> in Program.cs, which — per the official MCP C#
@@ -169,19 +170,37 @@ public sealed class ContextMcpTools(
         [Description("Specific files this memory is about that were actually edited because of it. Omit if not applicable.")] string[]? filesModified = null,
         CancellationToken ct = default)
     {
-        var settings = await projectSettingsService.GetAsync(currentProject.ProjectId, ct).ConfigureAwait(false);
-        if (!settings.ExplicitRememberEnabled)
-        {
-            logger?.LogInformation(
-                "memory_remember was called for project {ProjectId} but ExplicitRememberEnabled is false; rejecting.",
-                currentProject.ProjectId);
-            throw new InvalidOperationException(
-                "memory_remember is disabled for this project (ExplicitRememberEnabled is false in project settings).");
-        }
+        await EnsureExplicitMemoryWritesEnabledAsync("memory_remember", ct).ConfigureAwait(false);
 
         return await engine.RememberExplicitlyAsync(
             currentProject.ProjectId, content, ParseMemoryType(type), ct,
             title, topic, facts, concepts, filesRead, filesModified).ConfigureAwait(false);
+    }
+
+    [McpServerTool(Name = "memory_forget")]
+    [Description("Permanently deletes one memory by id (from memory_search/memory_get) — there is no undo. Use when the user " +
+        "explicitly asks to forget/remove/delete something previously remembered, or when you find a memory that is now flatly " +
+        "wrong or obsolete (e.g. it describes an approach that has since been replaced) rather than leaving stale/misleading " +
+        "guidance for a future session. Prefer memory_remember for a memory that's merely outdated/incomplete — a fresh call " +
+        "about the same topic is deduped/reinforced/supersedes the old one automatically, which preserves history; reach for " +
+        "memory_forget only when the memory should not exist at all.")]
+    public async Task MemoryForgetAsync(
+        [Description("Id of the memory to delete.")] Guid memoryId,
+        CancellationToken ct = default)
+    {
+        await EnsureExplicitMemoryWritesEnabledAsync("memory_forget", ct).ConfigureAwait(false);
+
+        // IMemoryRepository.DeleteAsync takes a bare id with no project scoping (same as the REST
+        // DELETE /api/memories/{id} it backs) -- this existence+ownership check keeps the MCP tool
+        // from letting a caller authenticated for one project delete another project's memory by
+        // guessing/reusing an id, without needing to change that repository's own contract.
+        var memory = await memoryRepository.GetByIdAsync(memoryId, ct).ConfigureAwait(false);
+        if (memory is null || memory.ProjectId != currentProject.ProjectId)
+        {
+            return;
+        }
+
+        await memoryRepository.DeleteAsync(memoryId, ct).ConfigureAwait(false);
     }
 
     [McpServerTool(Name = "graph_neighbors")]
@@ -298,6 +317,25 @@ public sealed class ContextMcpTools(
 
     private static DisclosureLevel ParseLevel(string level) =>
         Enum.TryParse<DisclosureLevel>(level, ignoreCase: true, out var parsed) ? parsed : DisclosureLevel.L1_Summary;
+
+    /// <summary>
+    /// Shared gate for both agent-initiated memory-write tools (<c>memory_remember</c>,
+    /// <c>memory_forget</c>) - <see cref="ProjectSettingsDto.ExplicitRememberEnabled"/> lets a
+    /// project opt out of agent-initiated memory writes outside the normal extraction pipeline
+    /// entirely, covering creation and deletion alike.
+    /// </summary>
+    private async Task EnsureExplicitMemoryWritesEnabledAsync(string toolName, CancellationToken ct)
+    {
+        var settings = await projectSettingsService.GetAsync(currentProject.ProjectId, ct).ConfigureAwait(false);
+        if (!settings.ExplicitRememberEnabled)
+        {
+            logger?.LogInformation(
+                "{ToolName} was called for project {ProjectId} but ExplicitRememberEnabled is false; rejecting.",
+                toolName, currentProject.ProjectId);
+            throw new InvalidOperationException(
+                $"{toolName} is disabled for this project (ExplicitRememberEnabled is false in project settings).");
+        }
+    }
 
     /// <summary>
     /// Case-insensitive parse of a <see cref="MemoryType"/> name for the agent-facing
