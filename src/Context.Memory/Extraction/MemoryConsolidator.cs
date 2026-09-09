@@ -3,6 +3,7 @@ using Context.Domain.Enums;
 using Context.Memory.Abstractions;
 using Context.Providers;
 using Context.Providers.Abstractions;
+using Context.Providers.Embeddings;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -41,11 +42,20 @@ public sealed class MemoryConsolidator(
     private const int PromotionReinforcementThreshold = 2;
     private const int TopKForDedup = 3;
 
+    // Same pattern as EmbeddingLookupAdapter.InteractiveOptions: flags an interactive caller's
+    // embedding call so OllamaEmbeddingGeneratorDecorator skips its concurrency gate instead of
+    // queuing behind a background EmbedChunk backlog it has nothing to do with.
+    private static readonly EmbeddingGenerationOptions InteractiveOptions = new()
+    {
+        AdditionalProperties = new AdditionalPropertiesDictionary { [OllamaEmbeddingGeneratorDecorator.InteractiveRequestKey] = true }
+    };
+
     public async Task<ConsolidationResult> ConsolidateAsync(
         Guid projectId,
         Guid? sessionId,
         MemoryCandidate candidate,
         List<ExistingMemoryWithEmbedding> existing,
+        bool isInteractive,
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -55,7 +65,7 @@ public sealed class MemoryConsolidator(
         var now = DateTimeOffset.UtcNow;
 
         var embeddingResult = await embeddingGenerator
-            .GenerateAsync($"{candidate.Title}\n{candidate.Body}", cancellationToken: ct)
+            .GenerateAsync($"{candidate.Title}\n{candidate.Body}", isInteractive ? InteractiveOptions : null, ct)
             .ConfigureAwait(false);
         var embedding = embeddingResult.Vector.ToArray();
 

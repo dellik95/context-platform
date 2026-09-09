@@ -22,10 +22,19 @@ public interface IMemoryConsolidator
     /// and a fresh insert both return "a new Memory row" and are otherwise indistinguishable from
     /// the outside.
     /// </summary>
+    /// <param name="isInteractive">
+    /// True for a latency-sensitive, user-facing caller (<c>ContextEngine.RememberExplicitlyAsync</c>,
+    /// the <c>memory_remember</c> MCP tool) rather than periodic/background extraction
+    /// (<c>LlmMemoryExtractor</c>). Flags the embedding call the same way
+    /// <c>EmbeddingLookupAdapter.EmbedAsync</c> already flags live search queries, so it skips
+    /// <c>OllamaEmbeddingGeneratorDecorator</c>'s concurrency gate instead of queuing behind a
+    /// background EmbedChunk backlog that can hold the gate for minutes.
+    /// </param>
     Task<ConsolidationResult> ConsolidateAsync(
         Guid projectId,
         Guid? sessionId,
         Context.Memory.Extraction.MemoryCandidate candidate,
         List<ExistingMemoryWithEmbedding> existing,
+        bool isInteractive,
         CancellationToken ct);
 }

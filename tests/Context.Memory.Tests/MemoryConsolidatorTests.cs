@@ -30,7 +30,7 @@ public class MemoryConsolidatorTests
         var store = new FakeMemoryStore();
         var sut = new MemoryConsolidator(store, FakeResolver("CONSISTENT"), new FakeUsageRecorder());
 
-        var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, CancellationToken.None);
+        var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, isInteractive: false, CancellationToken.None);
 
         result.Outcome.Should().Be(ConsolidationOutcome.Created);
         result.Memory.Id.Should().NotBe(oldMemory.Id);
@@ -50,7 +50,7 @@ public class MemoryConsolidatorTests
         var store = new FakeMemoryStore();
         var sut = new MemoryConsolidator(store, FakeResolver("CONSISTENT"), new FakeUsageRecorder());
 
-        var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, CancellationToken.None);
+        var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, isInteractive: false, CancellationToken.None);
 
         result.Outcome.Should().Be(ConsolidationOutcome.Reinforced);
         result.Memory.Id.Should().Be(oldMemory.Id);
@@ -70,7 +70,7 @@ public class MemoryConsolidatorTests
         var store = new FakeMemoryStore();
         var sut = new MemoryConsolidator(store, FakeResolver("CONTRADICTORY"), new FakeUsageRecorder());
 
-        var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, CancellationToken.None);
+        var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, isInteractive: false, CancellationToken.None);
 
         result.Outcome.Should().Be(ConsolidationOutcome.Superseded);
         result.Memory.Id.Should().NotBe(oldMemory.Id);
@@ -88,7 +88,7 @@ public class MemoryConsolidatorTests
         var store = new FakeMemoryStore();
         var sut = new MemoryConsolidator(store, FakeResolver("CONSISTENT"), new FakeUsageRecorder());
 
-        var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, CancellationToken.None);
+        var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, isInteractive: false, CancellationToken.None);
 
         result.Outcome.Should().Be(ConsolidationOutcome.Reinforced);
         result.Memory.Id.Should().Be(oldMemory.Id);
@@ -110,7 +110,7 @@ public class MemoryConsolidatorTests
         var store = new FakeMemoryStore();
         var sut = new MemoryConsolidator(store, FakeResolver("CONTRADICTORY"), new FakeUsageRecorder());
 
-        var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, CancellationToken.None);
+        var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, isInteractive: false, CancellationToken.None);
 
         result.Outcome.Should().Be(ConsolidationOutcome.Created);
         result.Memory.Id.Should().NotBe(oldMemory.Id);
@@ -129,7 +129,7 @@ public class MemoryConsolidatorTests
         var store = new FakeMemoryStore();
         var sut = new MemoryConsolidator(store, FakeResolver("CONSISTENT"), new FakeUsageRecorder());
 
-        var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, CancellationToken.None);
+        var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, isInteractive: false, CancellationToken.None);
 
         result.Memory.ReinforcementCount.Should().Be(2);
         result.Memory.Tier.Should().Be(MemoryTier.LongTerm);
@@ -144,7 +144,7 @@ public class MemoryConsolidatorTests
         var store = new FakeMemoryStore();
         var sut = new MemoryConsolidator(store, FakeResolver("CONSISTENT"), new FakeUsageRecorder());
 
-        var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, CancellationToken.None);
+        var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, isInteractive: false, CancellationToken.None);
 
         result.Memory.ReinforcementCount.Should().Be(1); // below the 2-reinforcement threshold on its own
         result.Memory.Tier.Should().Be(MemoryTier.LongTerm); // promoted anyway because Pinned

@@ -37,6 +37,17 @@ public sealed class OllamaEmbeddingGeneratorDecorator(IEmbeddingGenerator<string
     /// </summary>
     public const string InteractiveRequestKey = "ContextPlatform.InteractiveEmbeddingRequest";
 
+    // Bounds ONLY an interactive call's real HTTP request -- background EmbedChunk calls keep
+    // relying on the caller's own timeout/retry (they can be re-enqueued; a hung one just occupies
+    // a Gate permit). An interactive caller (memory_remember, live search) has no retry and is
+    // already skipping the Gate to avoid queuing behind background work, so a genuinely-unreachable
+    // Ollama host must fail fast instead of hanging for however long the OS-level TCP connect
+    // timeout or the shared "llm-retry" resilience pipeline's own (much longer) timeout takes --
+    // both of which were observed exceeding the ~60s ambient cutoff an MCP tool call gets, which is
+    // exactly the ConsolidateAsync-embedding hang that motivated this. Long enough that a real but
+    // slow local Ollama (e.g. still loading the model into memory) has room to actually answer.
+    private static readonly TimeSpan InteractiveTimeout = TimeSpan.FromSeconds(45);
+
     public override async Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(
         IEnumerable<string> values, EmbeddingGenerationOptions? options = null, CancellationToken ct = default)
     {
@@ -46,9 +57,13 @@ public sealed class OllamaEmbeddingGeneratorDecorator(IEmbeddingGenerator<string
             await Gate.WaitAsync(ct).ConfigureAwait(false);
         }
 
+        using var timeoutCts = isInteractive ? CancellationTokenSource.CreateLinkedTokenSource(ct) : null;
+        timeoutCts?.CancelAfter(InteractiveTimeout);
+        var effectiveCt = timeoutCts?.Token ?? ct;
+
         try
         {
-            return await base.GenerateAsync(values, options, ct).ConfigureAwait(false);
+            return await base.GenerateAsync(values, options, effectiveCt).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException && IsContextLengthError(ex))
         {
@@ -56,6 +71,12 @@ public sealed class OllamaEmbeddingGeneratorDecorator(IEmbeddingGenerator<string
                 $"Ollama embeddings rejected this content as exceeding '{model}''s context window. " +
                 "It needs to be split into smaller chunks upstream, or embedded with a model that has a larger window.",
                 ex);
+        }
+        catch (OperationCanceledException) when (isInteractive && !ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(
+                $"Ollama embeddings ('{model}') did not respond within {InteractiveTimeout.TotalSeconds:0}s for this interactive request. " +
+                "The configured Ollama host is likely unreachable.");
         }
         finally
         {

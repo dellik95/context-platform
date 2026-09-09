@@ -240,7 +240,7 @@ public sealed class ContextEngine(
             Topic: string.IsNullOrWhiteSpace(topic) ? null : topic.Trim());
 
         var existing = (await memoryStore.GetExistingWithEmbeddingsAsync(projectId, ct).ConfigureAwait(false)).ToList();
-        var result = await memoryConsolidator.ConsolidateAsync(projectId, sessionId: null, candidate, existing, ct).ConfigureAwait(false);
+        var result = await memoryConsolidator.ConsolidateAsync(projectId, sessionId: null, candidate, existing, isInteractive: true, ct).ConfigureAwait(false);
         return result.Memory;
     }
 

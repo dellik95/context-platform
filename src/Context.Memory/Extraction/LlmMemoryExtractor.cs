@@ -47,7 +47,7 @@ public sealed class LlmMemoryExtractor(
         foreach (var candidate in candidates)
         {
             ct.ThrowIfCancellationRequested();
-            var result = await consolidator.ConsolidateAsync(projectId, chunk.SessionId, candidate, existing, ct).ConfigureAwait(false);
+            var result = await consolidator.ConsolidateAsync(projectId, chunk.SessionId, candidate, existing, isInteractive: false, ct).ConfigureAwait(false);
             results.Add(result.Memory);
             switch (result.Outcome)
             {

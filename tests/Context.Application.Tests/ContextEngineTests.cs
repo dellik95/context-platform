@@ -590,7 +590,7 @@ public sealed class ContextEngineTests
         _memoryStore.Setup(s => s.GetExistingWithEmbeddingsAsync(projectId, It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<ExistingMemoryWithEmbedding>)existingWithEmbeddings);
         _memoryConsolidator
-            .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), existingWithEmbeddings, It.IsAny<CancellationToken>()))
+            .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), existingWithEmbeddings, true, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ConsolidationResult(consolidated, ConsolidationOutcome.Created));
 
         var result = await _sut.RememberExplicitlyAsync(projectId, "Always use tabs, not spaces.", type: null, CancellationToken.None);
@@ -608,8 +608,13 @@ public sealed class ContextEngineTests
                     cand.FilesRead.Count == 0 && cand.FilesModified.Count == 0 &&
                     cand.Topic == null),
                 existingWithEmbeddings,
+                true,
                 It.IsAny<CancellationToken>()),
             Times.Once);
+
+        // RememberExplicitlyAsync is the interactive, latency-sensitive MCP path -- must flag its
+        // embedding call so it skips OllamaEmbeddingGeneratorDecorator's concurrency gate instead
+        // of queuing behind background EmbedChunk work.
 
         // Bypasses the normal trigger/chunk pipeline entirely - no job enqueued, no session or
         // memory-repository read, unlike the periodic SummarizeSession -> ExtractMemory path.
@@ -625,8 +630,8 @@ public sealed class ContextEngineTests
         _memoryStore.Setup(s => s.GetExistingWithEmbeddingsAsync(projectId, It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<ExistingMemoryWithEmbedding>)[]);
         _memoryConsolidator
-            .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Guid _, Guid? _, MemoryCandidate cand, List<ExistingMemoryWithEmbedding> _, CancellationToken _) =>
+            .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid _, Guid? _, MemoryCandidate cand, List<ExistingMemoryWithEmbedding> _, bool _, CancellationToken _) =>
                 new ConsolidationResult(MakeMemory(projectId, cand.Type, cand.Title, cand.Body), ConsolidationOutcome.Created));
 
         var result = await _sut.RememberExplicitlyAsync(projectId, "Remember this.", type: null, CancellationToken.None);
@@ -641,8 +646,8 @@ public sealed class ContextEngineTests
         _memoryStore.Setup(s => s.GetExistingWithEmbeddingsAsync(projectId, It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<ExistingMemoryWithEmbedding>)[]);
         _memoryConsolidator
-            .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Guid _, Guid? _, MemoryCandidate cand, List<ExistingMemoryWithEmbedding> _, CancellationToken _) =>
+            .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid _, Guid? _, MemoryCandidate cand, List<ExistingMemoryWithEmbedding> _, bool _, CancellationToken _) =>
                 new ConsolidationResult(MakeMemory(projectId, cand.Type, cand.Title, cand.Body), ConsolidationOutcome.Created));
 
         var result = await _sut.RememberExplicitlyAsync(projectId, "Use SQLite for the cache.", MemoryType.Decision, CancellationToken.None);

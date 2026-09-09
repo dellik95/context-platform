@@ -35,8 +35,8 @@ public class LlmMemoryExtractorTests
 
         var consolidator = new Mock<IMemoryConsolidator>();
         consolidator
-            .Setup(c => c.ConsolidateAsync(projectId, chunk.SessionId, It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Guid _, Guid? _, MemoryCandidate cand, List<ExistingMemoryWithEmbedding> _, CancellationToken _) =>
+            .Setup(c => c.ConsolidateAsync(projectId, chunk.SessionId, It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid _, Guid? _, MemoryCandidate cand, List<ExistingMemoryWithEmbedding> _, bool _, CancellationToken _) =>
                 new ConsolidationResult(MakeMemory(projectId, cand), ConsolidationOutcome.Created));
 
         var resolver = new FakeProviderResolver(new FakeChatClient(CandidateResponse()));
@@ -52,7 +52,7 @@ public class LlmMemoryExtractorTests
             c => c.ConsolidateAsync(
                 projectId, chunk.SessionId,
                 It.Is<MemoryCandidate>(cand => cand.Title == SecretTitle && cand.Body.Contains("SECRET_BODY_57f3d2", StringComparison.Ordinal)),
-                It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<CancellationToken>()),
+                It.IsAny<List<ExistingMemoryWithEmbedding>>(), false, It.IsAny<CancellationToken>()),
             Times.Once);
 
         logger.Messages.Should().HaveCountGreaterThanOrEqualTo(2);
@@ -86,7 +86,7 @@ public class LlmMemoryExtractorTests
 
         result.Should().BeEmpty();
         consolidator.Verify(
-            c => c.ConsolidateAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<CancellationToken>()),
+            c => c.ConsolidateAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Never);
         logger.WarningMessages.Should().Contain(m => m.Contains("failed to extract candidate memories", StringComparison.Ordinal));
     }
@@ -117,7 +117,7 @@ public class LlmMemoryExtractorTests
 
         result.Should().BeEmpty();
         consolidator.Verify(
-            c => c.ConsolidateAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<CancellationToken>()),
+            c => c.ConsolidateAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Never);
         store.Verify(s => s.GetExistingWithEmbeddingsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
