@@ -5,34 +5,26 @@ using Context.Domain.Enums;
 namespace Context.Memory.Summarization;
 
 /// <summary>
-/// Builds a templated, non-empty <see cref="SessionSummary"/> purely from event-type counts
-/// and simple pattern matching over payloads — no LLM call. Used when no LLM provider is
-/// configured (<c>NoOpLlmProvider</c>) and as a safety-net fallback if a real LLM's response
-/// doesn't parse into any of the expected sections.
+/// Builds a <see cref="SessionSummary"/> purely from simple pattern matching over payloads — no
+/// LLM call. Used when no LLM provider is configured (<c>NoOpLlmProvider</c>) and as a safety-net
+/// fallback if a real LLM's response doesn't parse into any of the expected sections. Only reports
+/// what's actually informative (files touched, errors); raw event-type counts aren't a useful
+/// summary on their own, so a session with nothing noteworthy gets a null/minimal result rather
+/// than a manufactured "N prompt(s), N tool call(s)..." line.
 /// </summary>
 internal static class HeuristicSessionSummaryBuilder
 {
     public static SessionSummary Build(Guid sessionId, IReadOnlyList<SessionEvent> events, DateTimeOffset now)
     {
-        var counts = events
-            .GroupBy(e => e.Type)
-            .ToDictionary(g => g.Key, g => g.Count());
-
         var editedFiles = PayloadFieldExtractor.ExtractDistinctPaths(events, SessionEventType.FileEdit);
         var readFiles = PayloadFieldExtractor.ExtractDistinctPaths(events, SessionEventType.FileRead);
         var errors = events.Where(e => e.Type == SessionEventType.Error).ToList();
-        var commands = counts.GetValueOrDefault(SessionEventType.Command);
-        var toolCalls = counts.GetValueOrDefault(SessionEventType.ToolCall);
-        var prompts = counts.GetValueOrDefault(SessionEventType.Prompt);
 
-        var completed = events.Count == 0
-            ? null
-            : BulletOrNone(
-            [
-                $"{prompts} prompt(s), {toolCalls} tool call(s) and {commands} command(s) processed",
-                editedFiles.Count > 0 ? $"{editedFiles.Count} file(s) edited" : null,
-                readFiles.Count > 0 ? $"{readFiles.Count} file(s) read for context" : null
-            ]);
+        var completed = BulletOrNone(
+        [
+            editedFiles.Count > 0 ? $"{editedFiles.Count} file(s) edited" : null,
+            readFiles.Count > 0 ? $"{readFiles.Count} file(s) read for context" : null
+        ]);
 
         var openIssues = errors.Count == 0
             ? null
@@ -40,7 +32,7 @@ internal static class HeuristicSessionSummaryBuilder
 
         var filesReadJson = JsonSerializer.Serialize(readFiles);
         var changedFilesJson = JsonSerializer.Serialize(editedFiles);
-        var title = DeriveTitle(editedFiles, prompts, toolCalls, commands, events.Count);
+        var title = DeriveTitle(editedFiles, readFiles, events.Count);
 
         return new SessionSummary
         {
@@ -59,7 +51,7 @@ internal static class HeuristicSessionSummaryBuilder
         };
     }
 
-    private static string DeriveTitle(List<string> editedFiles, int prompts, int toolCalls, int commands, int eventCount)
+    private static string DeriveTitle(List<string> editedFiles, List<string> readFiles, int eventCount)
     {
         if (editedFiles.Count > 0)
         {
@@ -68,12 +60,14 @@ internal static class HeuristicSessionSummaryBuilder
                 : $"Edited {editedFiles[0]} and {editedFiles.Count - 1} other file(s)";
         }
 
-        if (eventCount == 0)
+        if (readFiles.Count > 0)
         {
-            return "No activity recorded";
+            return readFiles.Count == 1
+                ? $"Read {readFiles[0]}"
+                : $"Read {readFiles[0]} and {readFiles.Count - 1} other file(s)";
         }
 
-        return $"{prompts} prompt(s), {toolCalls} tool call(s), {commands} command(s)";
+        return eventCount == 0 ? "No activity recorded" : "Session with no file changes";
     }
 
     private static string? BulletOrNone(IEnumerable<string?> lines)
