@@ -38,4 +38,9 @@ public sealed record ProjectSettingsDto(
     // doesn't want agent-initiated memory writes (creation or deletion) outside the normal
     // extraction pipeline. Defaults to enabled since both tools only ever fire on an explicit agent
     // tool call, never automatically.
-    bool ExplicitRememberEnabled = true);
+    bool ExplicitRememberEnabled = true,
+    // StaleSessionScheduler ends an Active session (same path as a real SessionEnd hook, reason
+    // "stale-timeout") once this many minutes have passed with no new SessionEvent. <= 0 disables
+    // cleanup for the project (today's only behavior: a killed CLI process leaves its Session row
+    // Active forever). Default 4h - long enough that a normal thinking pause never trips it.
+    int StaleSessionTimeoutMinutes = 240);

@@ -120,7 +120,10 @@ public sealed class ProjectSettingsService(
                 : 20,
             MinEventsForMemoryExtraction: int.TryParse(section?["MinEventsForMemoryExtraction"], out var minEventsForMemoryExtraction)
                 ? minEventsForMemoryExtraction
-                : 20);
+                : 20,
+            StaleSessionTimeoutMinutes: int.TryParse(section?["StaleSessionTimeoutMinutes"], out var staleSessionTimeoutMinutes)
+                ? staleSessionTimeoutMinutes
+                : 240);
     }
 
     // A malformed/legacy ConfigJson must fall back to defaults rather than fail GetAsync outright.

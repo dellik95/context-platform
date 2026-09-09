@@ -189,6 +189,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService(sp => sp.GetRequiredService<JobDispatcher>());
         services.AddHostedService<ReindexSchedulerService>();
         services.AddHostedService<SessionSummaryScheduler>();
+        services.AddHostedService<StaleSessionScheduler>();
     }
 
     private static void AddIndexingPipeline(IServiceCollection services)

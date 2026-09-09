@@ -1,6 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Context.Application.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Context.Domain\Context.Domain.csproj" />
     <ProjectReference Include="..\Context.Shared\Context.Shared.csproj" />
     <ProjectReference Include="..\Context.Infrastructure\Context.Infrastructure.csproj" />
