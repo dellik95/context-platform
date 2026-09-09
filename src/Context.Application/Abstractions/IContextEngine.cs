@@ -22,12 +22,16 @@ public interface IContextEngine
     /// </summary>
     Task<IReadOnlyList<Context.Domain.Entities.Memory>> SearchMemoryAsync(Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null);
 
-    Task<Guid> StartSessionAsync(Guid projectId, string? claudeSessionId, CancellationToken ct);
+    /// <paramref name="cwd"/> (optional, trailing per CONTRACTS.md §10's fixed-shape convention above)
+    /// is the working directory Claude Code reported at SessionStart -- captured once, on creation
+    /// only, never on the "reuse existing session" path.
+    Task<Guid> StartSessionAsync(Guid projectId, string? claudeSessionId, CancellationToken ct, string? cwd = null);
 
     Task RecordEventAsync(Guid sessionId, Context.Domain.Enums.SessionEventType type, object payload, CancellationToken ct);
 
-    /// <summary>Enqueues <c>SummarizeSession</c>, which itself chains into <c>ExtractMemory</c> once the summary is ready.</summary>
-    Task EndSessionAsync(Guid projectId, Guid sessionId, CancellationToken ct);
+    /// <summary>Enqueues <c>SummarizeSession</c>, which itself chains into <c>ExtractMemory</c> once the summary is ready.
+    /// <paramref name="reason"/> (optional, trailing) is the SessionEnd hook's <c>reason</c> field, persisted verbatim.</summary>
+    Task EndSessionAsync(Guid projectId, Guid sessionId, CancellationToken ct, string? reason = null);
 
     Task<object> ProjectInfoAsync(Guid projectId, CancellationToken ct);
 

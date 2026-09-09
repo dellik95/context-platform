@@ -9,4 +9,7 @@ public sealed class SessionEventSourceAdapter(ISessionRepository sessionReposito
 {
     public Task<IReadOnlyList<SessionEvent>> GetEventsAsync(Guid projectId, Guid sessionId, CancellationToken ct) =>
         sessionRepository.GetEventsAsync(projectId, sessionId, ct);
+
+    public Task<Session?> GetSessionAsync(Guid projectId, Guid sessionId, CancellationToken ct) =>
+        sessionRepository.GetByIdAsync(projectId, sessionId, ct);
 }

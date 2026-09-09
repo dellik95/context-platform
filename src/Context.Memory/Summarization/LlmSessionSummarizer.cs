@@ -43,7 +43,8 @@ public sealed class LlmSessionSummarizer(
             return ToChunk(HeuristicSessionSummaryBuilder.Build(sessionId, events, now), fromEventAt, toEventAt, events.Count);
         }
 
-        var userPrompt = SessionSummaryPromptBuilder.BuildUserPrompt(sessionId, events, isSlice: since is not null);
+        var session = await eventSource.GetSessionAsync(projectId, sessionId, ct).ConfigureAwait(false);
+        var userPrompt = SessionSummaryPromptBuilder.BuildUserPrompt(sessionId, events, isSlice: since is not null, session: session);
         List<ChatMessage> messages = [new(ChatRole.System, SessionSummaryPromptBuilder.SystemPrompt), new(ChatRole.User, userPrompt)];
 
         string rawResponse;

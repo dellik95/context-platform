@@ -106,7 +106,7 @@ public sealed class ContextEngine(
         return [.. results.OrderByDescending(m => RelevanceOf(m, now))];
     }
 
-    public async Task<Guid> StartSessionAsync(Guid projectId, string? claudeSessionId, CancellationToken ct)
+    public async Task<Guid> StartSessionAsync(Guid projectId, string? claudeSessionId, CancellationToken ct, string? cwd = null)
     {
         // Claude Code fires SessionStart more than once per real session (resume, /clear,
         // /compact all re-trigger it) and Context.Dashboard.Server's in-memory ClaudeSessionMap cache (Hooks
@@ -118,6 +118,18 @@ public sealed class ContextEngine(
             var existing = await sessionRepository.GetByClaudeSessionIdAsync(projectId, claudeSessionId, ct).ConfigureAwait(false);
             if (existing is not null && existing.ProjectId == projectId)
             {
+                // Until StaleSessionScheduler existed, only the SessionEnd hook itself ever set
+                // Ended, so a reused row was always still Active. Now a background timeout can end
+                // a session that later turns out to still be alive (hook traffic resumes after a
+                // network blip, e.g.) -- treat renewed hook traffic as proof of that and un-end it,
+                // rather than silently handing new events to a row stuck in Ended forever.
+                if (existing.Status == SessionStatus.Ended)
+                {
+                    existing.Status = SessionStatus.Active;
+                    existing.EndedAt = null;
+                    await sessionRepository.UpdateAsync(existing, ct).ConfigureAwait(false);
+                }
+
                 return existing.Id;
             }
         }
@@ -129,7 +141,8 @@ public sealed class ContextEngine(
             ClaudeSessionId = claudeSessionId,
             StartedAt = DateTimeOffset.UtcNow,
             EndedAt = null,
-            Status = SessionStatus.Active
+            Status = SessionStatus.Active,
+            Cwd = cwd
         };
 
         var saved = await sessionRepository.AddAsync(session, ct).ConfigureAwait(false);
@@ -153,13 +166,14 @@ public sealed class ContextEngine(
         await sessionRepository.AddEventAsync(sessionEvent, ct).ConfigureAwait(false);
     }
 
-    public async Task EndSessionAsync(Guid projectId, Guid sessionId, CancellationToken ct)
+    public async Task EndSessionAsync(Guid projectId, Guid sessionId, CancellationToken ct, string? reason = null)
     {
         var session = await sessionRepository.GetByIdAsync(projectId, sessionId, ct).ConfigureAwait(false)
             ?? throw new KeyNotFoundException($"Session {sessionId} was not found.");
 
         session.Status = SessionStatus.Ended;
         session.EndedAt = DateTimeOffset.UtcNow;
+        session.EndReason = reason;
         await sessionRepository.UpdateAsync(session, ct).ConfigureAwait(false);
 
         // SummarizeSessionJobHandler chains into ExtractMemory itself once the summary is ready -

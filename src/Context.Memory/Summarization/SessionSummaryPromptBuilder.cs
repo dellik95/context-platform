@@ -44,7 +44,7 @@ internal static class SessionSummaryPromptBuilder
         a later memory-extraction pass sees, so a vague bullet here becomes an unusable memory later.
         """;
 
-    public static string BuildUserPrompt(Guid sessionId, IReadOnlyList<SessionEvent> events, bool isSlice = false)
+    public static string BuildUserPrompt(Guid sessionId, IReadOnlyList<SessionEvent> events, bool isSlice = false, Session? session = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Session: {sessionId}");
@@ -52,6 +52,17 @@ internal static class SessionSummaryPromptBuilder
         {
             sb.AppendLine("This is a later slice of an ongoing session, not its start. Summarize what happened in THIS SLICE of the session, not the whole session so far.");
         }
+
+        if (!string.IsNullOrWhiteSpace(session?.Cwd))
+        {
+            sb.AppendLine($"Working directory: {session.Cwd}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(session?.EndReason))
+        {
+            sb.AppendLine($"Ended: {session.EndReason}");
+        }
+
         sb.AppendLine($"Total events: {events.Count}");
         sb.AppendLine();
 

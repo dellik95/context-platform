@@ -13,6 +13,8 @@ public class SessionConfiguration : IEntityTypeConfiguration<Session>
 
         builder.Property(s => s.ClaudeSessionId).HasMaxLength(128);
         builder.Property(s => s.StartedAt).IsRequired();
+        builder.Property(s => s.Cwd).HasMaxLength(1024);
+        builder.Property(s => s.EndReason).HasMaxLength(128);
 
         builder.HasIndex(s => s.ProjectId);
         builder.HasIndex(s => s.ClaudeSessionId);

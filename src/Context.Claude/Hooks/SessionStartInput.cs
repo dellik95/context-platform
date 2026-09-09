@@ -8,4 +8,5 @@ namespace Context.Claude.Hooks;
 /// </summary>
 public record SessionStartInput(
     [property: JsonPropertyName("session_id")] string SessionId,
-    [property: JsonPropertyName("source")] string Source);
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("cwd")] string? Cwd = null);

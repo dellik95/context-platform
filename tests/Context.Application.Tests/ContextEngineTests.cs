@@ -325,6 +325,50 @@ public sealed class ContextEngineTests
             r => r.GetByClaudeSessionIdAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Fact]
+    public async Task StartSessionAsync_persists_cwd_on_new_session_creation()
+    {
+        var projectId = Guid.NewGuid();
+        _sessionRepository.Setup(r => r.AddAsync(It.IsAny<Session>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Session s, CancellationToken _) => s);
+
+        await _sut.StartSessionAsync(projectId, claudeSessionId: null, CancellationToken.None, cwd: "/repo");
+
+        _sessionRepository.Verify(
+            r => r.AddAsync(It.Is<Session>(s => s.Cwd == "/repo"), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // A background StaleSessionScheduler can end a session that later turns out to still be
+    // alive (hook traffic resumes after a network blip, e.g.) -- renewed hook traffic for the
+    // same claudeSessionId must un-end it rather than keep handing events to a row stuck Ended.
+    [Fact]
+    public async Task StartSessionAsync_reactivates_a_reused_session_that_was_previously_Ended()
+    {
+        var projectId = Guid.NewGuid();
+        var claudeSessionId = "claude-session-resumed";
+        var existing = new Session
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = projectId,
+            ClaudeSessionId = claudeSessionId,
+            StartedAt = DateTimeOffset.UtcNow.AddHours(-5),
+            EndedAt = DateTimeOffset.UtcNow.AddHours(-4),
+            EndReason = "stale-timeout",
+            Status = SessionStatus.Ended
+        };
+
+        _sessionRepository.Setup(r => r.GetByClaudeSessionIdAsync(projectId, claudeSessionId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existing);
+
+        var result = await _sut.StartSessionAsync(projectId, claudeSessionId, CancellationToken.None);
+
+        result.Should().Be(existing.Id);
+        existing.Status.Should().Be(SessionStatus.Active);
+        existing.EndedAt.Should().BeNull();
+        _sessionRepository.Verify(r => r.UpdateAsync(existing, It.IsAny<CancellationToken>()), Times.Once);
+        _sessionRepository.Verify(r => r.AddAsync(It.IsAny<Session>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     // ---- 4. EndSessionAsync enqueues SummarizeSession via IJobQueue ----
 
     [Fact]
@@ -358,6 +402,28 @@ public sealed class ContextEngineTests
         session.Status.Should().Be(SessionStatus.Ended);
         session.EndedAt.Should().NotBeNull();
         _sessionRepository.Verify(r => r.UpdateAsync(session, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task EndSessionAsync_persists_the_given_reason_onto_the_session()
+    {
+        var sessionId = Guid.NewGuid();
+        var session = new Session
+        {
+            Id = sessionId,
+            ProjectId = Guid.NewGuid(),
+            StartedAt = DateTimeOffset.UtcNow.AddHours(-1),
+            Status = SessionStatus.Active
+        };
+
+        _sessionRepository.Setup(r => r.GetByIdAsync(session.ProjectId, sessionId, It.IsAny<CancellationToken>())).ReturnsAsync(session);
+        _jobQueue
+            .Setup(q => q.EnqueueAsync(JobType.SummarizeSession, It.IsAny<object>(), It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Guid.NewGuid());
+
+        await _sut.EndSessionAsync(session.ProjectId, sessionId, CancellationToken.None, reason: "stale-timeout");
+
+        session.EndReason.Should().Be("stale-timeout");
     }
 
     [Fact]

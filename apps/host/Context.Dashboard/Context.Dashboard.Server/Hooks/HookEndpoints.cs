@@ -62,7 +62,7 @@ public static class HookEndpoints
         ClaudeSessionMap sessionMap,
         CancellationToken ct)
     {
-        var sessionId = await engine.StartSessionAsync(project.ProjectId, input.SessionId, ct).ConfigureAwait(false);
+        var sessionId = await engine.StartSessionAsync(project.ProjectId, input.SessionId, ct, input.Cwd).ConfigureAwait(false);
         sessionMap.Set(input.SessionId, project.ProjectId, sessionId);
 
         var additionalContext = await TryBuildSessionStartContextAsync(engine, project.ProjectId, ct).ConfigureAwait(false);
@@ -123,7 +123,7 @@ public static class HookEndpoints
         CancellationToken ct)
     {
         var sessionId = await GetOrStartSessionAsync(engine, project, sessionMap, input.SessionId, ct).ConfigureAwait(false);
-        await engine.EndSessionAsync(project.ProjectId, sessionId, ct).ConfigureAwait(false);
+        await engine.EndSessionAsync(project.ProjectId, sessionId, ct, input.Reason).ConfigureAwait(false);
         sessionMap.Remove(input.SessionId, project.ProjectId);
         return Results.Ok(new HookOutput(AdditionalContext: null));
     }
