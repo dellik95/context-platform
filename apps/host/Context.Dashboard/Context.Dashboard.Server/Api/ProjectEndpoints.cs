@@ -156,7 +156,7 @@ public static class ProjectEndpoints
     /// <summary>
     /// Admin-only, deliberately not <see cref="RequireOwnProjectOrAdminAsync"/>: this exists
     /// specifically for the case where the caller does NOT have the project's own bearer token any
-    /// more (a browser tab that never captured it, or lost sessionStorage — see
+    /// more (a browser tab that never captured it, or lost localStorage — see
     /// ProjectTokenService.ts's remarks) — only the admin token can authorize minting a
     /// replacement. Rotates <see cref="Project.BearerTokenHash"/>, which invalidates the old raw
     /// token everywhere it's in use (other browser tabs, an installed CLI/hook config, MCP) — an

@@ -56,7 +56,7 @@ export class ProjectContextService implements OnDestroy {
 
   /**
    * When this browser has no stored bearer token for `projectId` (never captured a deep link, or
-   * lost sessionStorage — see ProjectTokenService's own remarks), silently mints a replacement via
+   * lost localStorage — see ProjectTokenService's own remarks), silently mints a replacement via
    * the admin-gated `POST /api/projects/{id}/token` (see ProjectEndpoints.ReissueTokenAsync) before
    * joining the SignalR hub — no link, no banner, this is only ever visible as "it just works" when
    * the Dashboard has admin access (same-machine loopback bootstrap, see AdminTokenService). A

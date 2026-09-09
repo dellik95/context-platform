@@ -5,10 +5,16 @@ import { Injectable } from '@angular/core';
  * CreateAsync — there is no longer one host-wide token to bootstrap). A user gets a browser into a
  * project by opening a deep link of the form `http://<host>:<port>/projects/<id>?projectId=<id>&token=<token>`
  * (built from ProjectEndpoints.CreateAsync's one-time response, or from `context claude install`) —
- * this service captures that token on first load, stashes it in sessionStorage keyed by project
+ * this service captures that token on first load, stashes it in localStorage keyed by project
  * id, and strips both query params from the visible URL so the token doesn't linger in the address
  * bar/history. Every later request for that project reads the stashed value; the query string is
  * gone by then.
+ * <para/>
+ * Deliberately localStorage, not sessionStorage: sessionStorage is scoped to the tab and clears on
+ * every tab/browser close, which made ProjectContextService.init() treat an ordinary restart as
+ * "lost access" and silently reissue (rotate) the project's bearer token — invalidating the same
+ * token baked into .mcp.json/hooks and causing 401s there. localStorage survives that; a token is
+ * now only actually lost on a real profile/storage clear or a different browser.
  */
 @Injectable({ providedIn: 'root' })
 export class ProjectTokenService {
@@ -23,7 +29,7 @@ export class ProjectTokenService {
    */
   setToken(projectId: string, token: string): void {
     try {
-      sessionStorage.setItem(storageKey(projectId), token);
+      localStorage.setItem(storageKey(projectId), token);
     } catch {
       // Same as captureFromUrl -- nothing more to do if storage isn't available.
     }
@@ -34,9 +40,9 @@ export class ProjectTokenService {
       return null;
     }
     try {
-      return sessionStorage.getItem(storageKey(projectId));
+      return localStorage.getItem(storageKey(projectId));
     } catch {
-      // sessionStorage unavailable (private browsing, disabled storage, etc.) -- treat as "no
+      // localStorage unavailable (private browsing, disabled storage, etc.) -- treat as "no
       // token", same as a fresh browser that never opened the deep link.
       return null;
     }
@@ -51,7 +57,7 @@ export class ProjectTokenService {
     }
 
     try {
-      sessionStorage.setItem(storageKey(projectId), token);
+      localStorage.setItem(storageKey(projectId), token);
     } catch {
       // Can't persist it -- nothing more to do; requests for this project will 401 same as if the
       // link had never been opened.
