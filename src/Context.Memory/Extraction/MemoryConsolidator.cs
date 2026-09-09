@@ -101,9 +101,13 @@ public sealed class MemoryConsolidator(
         return new ConsolidationResult(fresh, ConsolidationOutcome.Created);
     }
 
-    /// <summary>Walks <paramref name="matches"/> nearest-first, checking each candidate in the
+    /// <summary>Checks every <paramref name="matches"/> candidate in the
     /// [<see cref="LowSimilarityThreshold"/>, <see cref="SimilarityThreshold"/>] band for a
-    /// restatement judgment, and returns the first one found (or null if none qualify).</summary>
+    /// restatement judgment concurrently (each check is a synchronous LLM round-trip, and
+    /// TopKForDedup is small/fixed, so firing them together instead of one-by-one materially cuts
+    /// memory_remember's latency), then returns the nearest one judged a restatement — same
+    /// winner <c>matches</c>' nearest-first sequential walk would have picked, just without paying
+    /// for each round-trip serially.</summary>
     private async Task<Context.Domain.Entities.Memory?> FindRestatedMatchAsync(
         IReadOnlyList<(ExistingMemoryWithEmbedding Existing, double Similarity)> matches,
         MemoryCandidate candidate,
@@ -112,17 +116,19 @@ public sealed class MemoryConsolidator(
         IChatClient chatClient,
         CancellationToken ct)
     {
-        foreach (var match in matches)
-        {
-            if (match.Similarity < LowSimilarityThreshold || match.Similarity > SimilarityThreshold)
-            {
-                continue;
-            }
+        var eligible = matches
+            .Where(match => match.Similarity >= LowSimilarityThreshold && match.Similarity <= SimilarityThreshold)
+            .ToList();
 
-            var oldMemory = match.Existing.Memory;
-            if (await IsRestatementAsync(oldMemory, candidate, projectId, sessionId, chatClient, ct).ConfigureAwait(false))
+        var verdicts = await Task.WhenAll(
+            eligible.Select(match => IsRestatementAsync(match.Existing.Memory, candidate, projectId, sessionId, chatClient, ct)))
+            .ConfigureAwait(false);
+
+        for (var i = 0; i < eligible.Count; i++)
+        {
+            if (verdicts[i])
             {
-                return oldMemory;
+                return eligible[i].Existing.Memory;
             }
         }
 
