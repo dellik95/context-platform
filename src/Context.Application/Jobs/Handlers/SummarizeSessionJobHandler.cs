@@ -79,6 +79,16 @@ public sealed class SummarizeSessionJobHandler(
         var newChunk = await summarizer.SummarizeAsync(projectId, payload.SessionId, since, ct).ConfigureAwait(false);
         var savedChunk = await sessionRepository.AddSummaryChunkAsync(newChunk, ct).ConfigureAwait(false);
 
+        // Everything up to this chunk's own ToEventAt is now fully covered by it - ExtractMemory
+        // (below) reads only the chunk, never raw events, so it's safe to drop them here rather than
+        // let SessionEvents grow unbounded. Opt-in: the dashboard's session detail view and the MCP
+        // recall tool still read raw events for history, so a project keeps them until it asks to
+        // trade that away.
+        if (settings.DeleteSessionEventsAfterSummary)
+        {
+            await sessionRepository.DeleteEventsUpToAsync(payload.SessionId, savedChunk.ToEventAt, ct).ConfigureAwait(false);
+        }
+
         var allChunks = await sessionRepository.GetSummaryChunksAsync(projectId, payload.SessionId, ct).ConfigureAwait(false);
         var mergedSummary = SessionSummaryMerger.Merge(payload.SessionId, allChunks);
         await sessionRepository.UpsertSummaryAsync(mergedSummary, ct).ConfigureAwait(false);

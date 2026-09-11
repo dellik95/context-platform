@@ -86,14 +86,20 @@ public class GraphRepository(ContextDbContext db) : IGraphRepository
     {
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
-        var edges = await db.GraphEdges
-            .Where(e => e.ProjectId == projectId && e.OwningFileId == fileId)
-            .ToListAsync(ct);
-        db.GraphEdges.RemoveRange(edges);
-
         var nodes = await db.GraphNodes
             .Where(n => n.ProjectId == projectId && n.OwningFileId == fileId)
             .ToListAsync(ct);
+        var nodeIds = nodes.Select(n => n.Id).ToHashSet();
+
+        // Restrict FK on GraphEdge.Source/TargetNodeId means any edge still pointing at one of
+        // these nodes blocks the node delete below — not just edges this file owns, but
+        // cross-file reference edges owned by whichever file introduced the reference.
+        var edges = await db.GraphEdges
+            .Where(e => e.ProjectId == projectId
+                && (e.OwningFileId == fileId || nodeIds.Contains(e.SourceNodeId) || nodeIds.Contains(e.TargetNodeId)))
+            .ToListAsync(ct);
+        db.GraphEdges.RemoveRange(edges);
+
         db.GraphNodes.RemoveRange(nodes);
 
         await db.SaveChangesAsync(ct);

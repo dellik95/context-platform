@@ -144,6 +144,24 @@
           </mat-form-field>
         </div>
 
+        <h2 class="section-title">Session event retention</h2>
+        <p class="provider-note">
+          <mat-icon>info</mat-icon>
+          Once a batch of raw session events is folded into a summary, it's no longer needed by the
+          memory pipeline — enabling this deletes it from the database. The dashboard's session
+          detail view and MCP recall tool will no longer show raw events older than the latest
+          summary once enabled.
+        </p>
+
+        <div class="field-row field-row--align-center">
+          <mat-slide-toggle
+            [checked]="settingsForm.deleteSessionEventsAfterSummary().value()"
+            (change)="setDeleteSessionEventsAfterSummary($event)"
+          >
+            Delete raw session events after summarization
+          </mat-slide-toggle>
+        </div>
+
         <div class="actions">
           <button mat-flat-button color="primary" type="submit" [disabled]="saving()">
             {{ saving() ? 'Saving…' : 'Save' }}

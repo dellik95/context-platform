@@ -36,4 +36,9 @@ public sealed class IndexingHubNotifier(IHubContext<IndexingHub> hub)
     /// counts.</summary>
     public Task JobCountsChangedAsync(Guid projectId, Context.Application.Notifications.JobCounts counts, CancellationToken ct) =>
         hub.Clients.Group(IndexingHub.GroupName(projectId)).SendAsync("JobCountsChanged", counts, ct);
+
+    /// <summary>Per-project push of one hook endpoint call — see
+    /// <see cref="Context.Application.Notifications.IHookInvocationNotifier"/>.</summary>
+    public Task HookInvokedAsync(Guid projectId, Context.Application.Notifications.HookInvocationEvent evt, CancellationToken ct) =>
+        hub.Clients.Group(IndexingHub.GroupName(projectId)).SendAsync("HookInvoked", evt, ct);
 }

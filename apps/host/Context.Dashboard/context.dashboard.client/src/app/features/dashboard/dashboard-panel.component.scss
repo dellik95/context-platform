@@ -156,6 +156,7 @@
 // Rounds these to match the rest of the app's surfaces (see styles.scss's global .mat-mdc-card
 // override) -- mat-expansion-panel defaults to hard corners otherwise.
 .failed-jobs-panel,
+.hooks-panel,
 .logs-panel {
   border-radius: 14px !important;
   overflow: hidden;
@@ -174,6 +175,13 @@
   color: #b71c1c;
   font-size: 0.72rem;
   font-weight: 600;
+
+  // Hook invocation counts aren't a problem (unlike a Failed jobs count) -- neutral instead of the
+  // alert-red default above.
+  &.panel-count--neutral {
+    background: var(--mat-sys-surface-variant);
+    color: var(--mat-sys-on-surface-variant);
+  }
 }
 
 .panel-toolbar {
@@ -234,10 +242,13 @@
 }
 
 .error-cell {
-  max-width: 360px;
+  max-width: 480px;
   color: var(--mat-sys-error);
   font-family: ui-monospace, monospace;
   font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .retry-cell {
@@ -262,4 +273,38 @@
 .log-tail {
   max-height: 400px;
   overflow-y: auto;
+}
+
+.hooks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.hook-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  .raw-json {
+    max-height: 200px;
+    overflow-y: auto;
+  }
+}
+
+.hook-entry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.85rem;
+}
+
+.hook-type {
+  font-weight: 600;
+}
+
+.hook-time {
+  color: var(--mat-sys-on-surface-variant);
 }

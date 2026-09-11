@@ -1,0 +1,38 @@
+using Context.Dashboard.Server.Security;
+using Context.Domain.Entities;
+using Context.Domain.Enums;
+using Context.Infrastructure.Abstractions;
+
+namespace Context.Dashboard.Server.Api;
+
+/// <summary>
+/// <c>/api/hooks/status</c> — read side of the Dashboard's "Hook invocations" panel: how many times
+/// the Claude Code lifecycle hooks (<c>Hooks/HookEndpoints.cs</c>) have fired for a project, and the
+/// raw payload of the last 10 calls. Named distinctly from <c>HookEndpoints</c>/<c>MapHookEndpoints</c>
+/// (the hook handlers themselves) to avoid confusion between "receiving a hook" and "reporting on
+/// hooks received".
+/// </summary>
+public static class HooksStatusEndpoints
+{
+    private const int RecentLimit = 10;
+
+    public static void MapHooksStatusEndpoints(this WebApplication app)
+    {
+        var group = app.MapGroup("").RequireBearerToken();
+        group.MapGet("/api/hooks/status", StatusAsync);
+    }
+
+    private static async Task<IResult> StatusAsync(Guid projectId, IHookInvocationRepository repo, CancellationToken ct)
+    {
+        var count = await repo.CountAsync(projectId, ct).ConfigureAwait(false);
+        var recent = await repo.GetRecentAsync(projectId, RecentLimit, ct).ConfigureAwait(false);
+        return Results.Ok(new HookStatusDto(count, [.. recent.Select(HookInvocationDto.FromEntity)]));
+    }
+}
+
+public sealed record HookInvocationDto(Guid Id, HookType Type, string PayloadJson, DateTimeOffset ReceivedAt)
+{
+    public static HookInvocationDto FromEntity(HookInvocation h) => new(h.Id, h.Type, h.PayloadJson, h.ReceivedAt);
+}
+
+public sealed record HookStatusDto(int Count, HookInvocationDto[] Recent);

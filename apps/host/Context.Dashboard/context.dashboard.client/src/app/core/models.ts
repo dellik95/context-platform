@@ -331,6 +331,7 @@ export interface ProjectSettingsDto {
   minEventsForMemoryExtraction: number; // min events in a chunk to trigger memory extraction (bypassed at session end)
   explicitRememberEnabled: boolean; // gates the memory_remember/memory_forget MCP tools
   staleSessionTimeoutMinutes: number; // <= 0 disables auto-ending idle Active sessions
+  deleteSessionEventsAfterSummary: boolean; // opt-in cleanup of raw events once folded into a summary chunk
 }
 
 // Response of POST /api/projects/{id}/claude/install.
@@ -357,4 +358,31 @@ export interface JobCountsChangedEvent {
   running: number;
   failed: number;
   done: number;
+}
+
+// Mirrors src/Context.Domain/Enums/HookType.cs.
+export type HookType = 'SessionStart' | 'UserPromptSubmit' | 'PostToolUse' | 'SessionEnd';
+
+// Mirrors Context.Dashboard.Server.Api.HooksStatusEndpoints's HookInvocationDto record.
+export interface HookInvocationDto {
+  id: string;
+  type: HookType;
+  payloadJson: string;
+  receivedAt: string; // ISO-8601
+}
+
+// Mirrors Context.Dashboard.Server.Api.HooksStatusEndpoints's HookStatusDto record --
+// GET /api/hooks/status response.
+export interface HookStatusDto {
+  count: number;
+  recent: HookInvocationDto[];
+}
+
+// Pushed over the /hubs/indexing SignalR hub's "HookInvoked" event (IndexingHub.HookInvokedAsync),
+// project-scoped (unlike JobCountsChangedEvent). Mirrors Context.Application.Notifications.HookInvocationEvent.
+export interface HookInvocationEvent {
+  type: HookType;
+  payloadJson: string;
+  receivedAt: string; // ISO-8601
+  totalCount: number;
 }

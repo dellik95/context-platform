@@ -9,13 +9,9 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { ApiService } from '../../core/api.service';
-import { JobDto, ReindexProgressEvent } from '../../core/models';
+import { HookInvocationDto, JobDto, ReindexProgressEvent } from '../../core/models';
 import { SignalrService } from '../../core/signalr.service';
 import { ProjectContextService } from '../projects/project-context.service';
-
-// Truncation length for a Failed job's LastError shown inline in the table -- the full text is
-// still available via the cell's matTooltip, this just keeps one row from blowing out the table.
-const LAST_ERROR_PREVIEW_LENGTH = 140;
 
 // Job counts (pending/running/failed/done) update live over the "JobCountsChanged" SignalR push
 // (see the constructor) -- this interval is only a reconciliation fallback for the rest of the
@@ -94,9 +90,9 @@ export class DashboardPanelComponent {
   protected readonly reindexProgress = signal<ReindexProgressEvent | null>(null);
   protected readonly showReindexProgress = signal(false);
 
-  // Failed-jobs table: loaded once on tab load + manual refresh, deliberately NOT part of any
-  // status poll/push above -- job failures don't need that aggressive a refresh rate, and
-  // refetching a potentially-growing table on every job-count change would be wasteful.
+  // Failed-jobs table: loaded on tab load + manual refresh, and kept live thereafter -- the
+  // constructor's jobCountsChanged$ subscription reloads it whenever the pushed Failed count
+  // actually moves, so it doesn't refetch on every unrelated pending/running transition.
   private readonly failedJobsResource = this.api.failedJobsResource(this.ctx.projectId);
   protected readonly failedJobs = computed(() => (this.failedJobsResource.hasValue() ? this.failedJobsResource.value() : []));
   protected readonly jobsLoading = this.failedJobsResource.isLoading;
@@ -110,6 +106,16 @@ export class DashboardPanelComponent {
   protected readonly retryingAll = signal(false);
   protected readonly cleaningUpDone = signal(false);
   protected readonly cleaningUpPending = signal(false);
+
+  // Hook invocations: loaded once on tab mount, then kept live by the "HookInvoked" SignalR push
+  // below (patched into the existing resource value in place — no refetch, same pattern as the
+  // job-counts patch above).
+  private readonly hooksStatusResource = this.api.hooksStatusResource(this.ctx.projectId);
+  protected readonly hookCount = computed(() => (this.hooksStatusResource.hasValue() ? this.hooksStatusResource.value()?.count ?? 0 : 0));
+  protected readonly recentHooks = computed(() => (this.hooksStatusResource.hasValue() ? this.hooksStatusResource.value()?.recent ?? [] : []));
+  protected readonly hooksLoading = this.hooksStatusResource.isLoading;
+  protected readonly initialHooksLoading = computed(() => this.hooksLoading() && !this.hooksStatusResource.hasValue());
+  protected readonly hooksError = computed(() => Boolean(this.hooksStatusResource.error()));
 
   // Log tail: fetched on demand (button click) rather than eagerly, since most visits to this tab
   // don't need it and a 200-line tail on every load would be wasted work.
@@ -137,6 +143,8 @@ export class DashboardPanelComponent {
     // ticking over). Global push (not scoped to the current project's SignalR group), matching
     // the counts themselves being host-wide.
     this.signalr.jobCountsChanged$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((counts) => {
+      const failedCountChanged = this.status()?.jobsFailed !== counts.failed;
+
       this.statusResource.update((current) =>
         current
           ? {
@@ -148,6 +156,13 @@ export class DashboardPanelComponent {
             }
           : current,
       );
+
+      // Failed jobs table: the count push above tells us the Failed total moved, so refetch the
+      // table itself to match -- only once it's been loaded at least once (tab visited), same
+      // lazy-load gate as everywhere else on this page.
+      if (failedCountChanged && this.failedJobsResource.hasValue()) {
+        this.failedJobsResource.reload();
+      }
     });
 
     // Resync the uptime baseline whenever the server's own uptimeSeconds actually changes (the
@@ -178,6 +193,25 @@ export class DashboardPanelComponent {
     });
 
     this.destroyRef.onDestroy(() => clearTimeout(this.hideTimer));
+
+    // Project-scoped (ProjectContextService already joins/leaves this project's SignalR group for
+    // the whole /projects/:id subtree) — patches the count/recent list in place, no refetch.
+    this.signalr.hookInvoked$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((evt) => {
+      this.hooksStatusResource.update((current) => {
+        if (!current) {
+          return current;
+        }
+
+        const invocation: HookInvocationDto = {
+          id: crypto.randomUUID(),
+          type: evt.type,
+          payloadJson: evt.payloadJson,
+          receivedAt: evt.receivedAt,
+        };
+
+        return { count: evt.totalCount, recent: [invocation, ...current.recent].slice(0, 10) };
+      });
+    });
 
     effect(() => {
       if (this.logResource.error()) {
@@ -210,6 +244,10 @@ export class DashboardPanelComponent {
 
   protected loadFailedJobs(): void {
     this.failedJobsResource.reload();
+  }
+
+  protected loadHooksStatus(): void {
+    this.hooksStatusResource.reload();
   }
 
   protected retryJob(job: JobDto): void {
@@ -279,15 +317,6 @@ export class DashboardPanelComponent {
         this.snackBar.open('Failed to clear pending jobs.', 'Dismiss');
       },
     });
-  }
-
-  protected truncateError(error: string | null): string {
-    if (!error) {
-      return '';
-    }
-    return error.length > LAST_ERROR_PREVIEW_LENGTH
-      ? `${error.slice(0, LAST_ERROR_PREVIEW_LENGTH)}…`
-      : error;
   }
 
   protected loadLogTail(): void {

@@ -86,6 +86,21 @@ public class SessionRepository(ContextDbContext db) : ISessionRepository
         return [.. events.OrderBy(e => e.Timestamp)];
     }
 
+    public async Task DeleteEventsUpToAsync(Guid sessionId, DateTimeOffset upTo, CancellationToken ct)
+    {
+        var toDelete = await db.SessionEvents
+            .Where(e => e.SessionId == sessionId && e.Timestamp <= upTo)
+            .ToListAsync(ct);
+
+        if (toDelete.Count == 0)
+        {
+            return;
+        }
+
+        db.SessionEvents.RemoveRange(toDelete);
+        await db.SaveChangesAsync(ct);
+    }
+
     public async Task UpsertSummaryAsync(SessionSummary summary, CancellationToken ct)
     {
         var existing = await db.SessionSummaries.FirstOrDefaultAsync(s => s.SessionId == summary.SessionId, ct);

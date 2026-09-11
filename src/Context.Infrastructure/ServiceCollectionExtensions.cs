@@ -38,6 +38,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISessionRepository, SessionRepository>();
         services.AddScoped<IMemoryRepository, MemoryRepository>();
         services.AddScoped<IJobRepository, JobRepository>();
+        services.AddScoped<IHookInvocationRepository, HookInvocationRepository>();
         services.AddScoped<IUsageRecorder, UsageRecorder>();
 
         return services;

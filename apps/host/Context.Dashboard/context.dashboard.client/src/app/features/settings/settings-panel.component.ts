@@ -63,6 +63,7 @@ export class SettingsPanelComponent {
     explicitRememberEnabled: true,
     staleSessionCleanupEnabled: true,
     staleSessionTimeoutMinutes: 240,
+    deleteSessionEventsAfterSummary: false,
   });
 
   protected readonly settingsForm = form(this.settingsModel, (path) => {
@@ -119,6 +120,7 @@ export class SettingsPanelComponent {
         explicitRememberEnabled: settings.explicitRememberEnabled,
         staleSessionCleanupEnabled: settings.staleSessionTimeoutMinutes > 0,
         staleSessionTimeoutMinutes: settings.staleSessionTimeoutMinutes > 0 ? settings.staleSessionTimeoutMinutes : 240,
+        deleteSessionEventsAfterSummary: settings.deleteSessionEventsAfterSummary,
       });
     });
 
@@ -153,6 +155,10 @@ export class SettingsPanelComponent {
     this.settingsModel.update((current) => ({ ...current, staleSessionCleanupEnabled: event.checked }));
   }
 
+  protected setDeleteSessionEventsAfterSummary(event: MatSlideToggleChange): void {
+    this.settingsModel.update((current) => ({ ...current, deleteSessionEventsAfterSummary: event.checked }));
+  }
+
   protected save(): void {
     if (this.settingsForm().invalid()) {
       return;
@@ -174,6 +180,7 @@ export class SettingsPanelComponent {
       minEventsForMemoryExtraction: raw.minEventsForMemoryExtraction,
       explicitRememberEnabled: raw.explicitRememberEnabled,
       staleSessionTimeoutMinutes: raw.staleSessionCleanupEnabled ? raw.staleSessionTimeoutMinutes : 0,
+      deleteSessionEventsAfterSummary: raw.deleteSessionEventsAfterSummary,
     };
 
     this.saving.set(true);

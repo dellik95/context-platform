@@ -196,8 +196,8 @@
               <tr>
                 <td>{{ job.type }}</td>
                 <td>{{ job.attempts }}</td>
-                <td class="error-cell" [matTooltip]="job.lastError ?? ''" matTooltipClass="error-tooltip">
-                  {{ truncateError(job.lastError) || '—' }}
+                <td class="error-cell">
+                  {{ job.lastError || '—' }}
                 </td>
                 <td>{{ job.createdAt | date: 'short' }}</td>
                 <td class="retry-cell">
@@ -215,6 +215,54 @@
             }
           </tbody>
         </table>
+      </div>
+    }
+  </mat-expansion-panel>
+
+  <mat-expansion-panel class="hooks-panel">
+    <mat-expansion-panel-header>
+      <mat-panel-title>
+        <mat-icon>webhook</mat-icon>
+        Hook invocations
+        @if (hookCount() > 0) {
+          <span class="panel-count panel-count--neutral">{{ hookCount() }}</span>
+        }
+      </mat-panel-title>
+    </mat-expansion-panel-header>
+
+    <div class="panel-toolbar">
+      <button mat-stroked-button type="button" (click)="loadHooksStatus()" [disabled]="hooksLoading()">
+        <mat-icon>refresh</mat-icon>
+        Refresh
+      </button>
+      @if (hooksLoading() && !initialHooksLoading()) {
+        <mat-progress-bar mode="indeterminate" class="inline-progress" />
+      }
+    </div>
+
+    @if (initialHooksLoading()) {
+      <mat-progress-bar mode="indeterminate" />
+    } @else if (hooksError()) {
+      <div class="empty-state">
+        <mat-icon>cloud_off</mat-icon>
+        <p>Could not load hook invocations — is Context.Host running?</p>
+      </div>
+    } @else if (recentHooks().length === 0) {
+      <div class="empty-state">
+        <mat-icon>info</mat-icon>
+        <p>No hook invocations recorded yet.</p>
+      </div>
+    } @else {
+      <div class="hooks-list">
+        @for (invocation of recentHooks(); track invocation.id) {
+          <div class="hook-entry">
+            <div class="hook-entry-header">
+              <span class="hook-type">{{ invocation.type }}</span>
+              <span class="hook-time">{{ invocation.receivedAt | date: 'short' }}</span>
+            </div>
+            <pre class="raw-json">{{ invocation.payloadJson }}</pre>
+          </div>
+        }
       </div>
     }
   </mat-expansion-panel>

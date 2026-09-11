@@ -23,6 +23,13 @@ public interface ISessionRepository
     /// belong to <paramref name="projectId"/>.</summary>
     Task<IReadOnlyList<SessionEvent>> GetEventsAsync(Guid projectId, Guid sessionId, CancellationToken ct);
 
+    /// <summary>Deletes every <see cref="SessionEvent"/> for <paramref name="sessionId"/> with
+    /// <see cref="SessionEvent.Timestamp"/> at or before <paramref name="upTo"/> - used by
+    /// <see cref="Context.Application.Jobs.Handlers.SummarizeSessionJobHandler"/> to clean up events
+    /// already folded into a <see cref="SessionSummaryChunk"/>, once a project opts into
+    /// <c>ProjectSettingsDto.DeleteSessionEventsAfterSummary</c>.</summary>
+    Task DeleteEventsUpToAsync(Guid sessionId, DateTimeOffset upTo, CancellationToken ct);
+
     Task UpsertSummaryAsync(SessionSummary summary, CancellationToken ct);
 
     /// <summary>The session's summary, or null if it doesn't exist or the session doesn't belong to

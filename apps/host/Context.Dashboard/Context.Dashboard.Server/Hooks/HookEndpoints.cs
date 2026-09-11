@@ -1,8 +1,11 @@
 using System.Text;
+using System.Text.Json;
 using Context.Application;
+using Context.Application.Notifications;
 using Context.Claude.Hooks;
 using Context.Domain.Enums;
 using Context.Dashboard.Server.Security;
+using Context.Infrastructure.Abstractions;
 using Context.Retrieval.Abstractions;
 
 namespace Context.Dashboard.Server.Hooks;
@@ -60,10 +63,16 @@ public static class HookEndpoints
         IContextEngine engine,
         CurrentProjectAccessor project,
         ClaudeSessionMap sessionMap,
+        IHookInvocationRepository hookInvocations,
+        IHookInvocationNotifier hookNotifier,
         CancellationToken ct)
     {
-        var sessionId = await engine.StartSessionAsync(project.ProjectId, input.SessionId, ct, input.Cwd).ConfigureAwait(false);
-        sessionMap.Set(input.SessionId, project.ProjectId, sessionId);
+        await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.SessionStart, input, ct).ConfigureAwait(false);
+
+        var sessionId = await sessionMap.StartAsync(
+            input.SessionId, project.ProjectId,
+            c => engine.StartSessionAsync(project.ProjectId, input.SessionId, c, input.Cwd),
+            ct).ConfigureAwait(false);
 
         var additionalContext = await TryBuildSessionStartContextAsync(engine, project.ProjectId, ct).ConfigureAwait(false);
         return Results.Ok(new HookOutput(additionalContext));
@@ -74,8 +83,12 @@ public static class HookEndpoints
         IContextEngine engine,
         CurrentProjectAccessor project,
         ClaudeSessionMap sessionMap,
+        IHookInvocationRepository hookInvocations,
+        IHookInvocationNotifier hookNotifier,
         CancellationToken ct)
     {
+        await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.UserPromptSubmit, input, ct).ConfigureAwait(false);
+
         var sessionId = await GetOrStartSessionAsync(engine, project, sessionMap, input.SessionId, ct).ConfigureAwait(false);
         await engine.RecordEventAsync(sessionId, SessionEventType.Prompt, new { prompt = input.Prompt }, ct).ConfigureAwait(false);
 
@@ -96,8 +109,12 @@ public static class HookEndpoints
         IContextEngine engine,
         CurrentProjectAccessor project,
         ClaudeSessionMap sessionMap,
+        IHookInvocationRepository hookInvocations,
+        IHookInvocationNotifier hookNotifier,
         CancellationToken ct)
     {
+        await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.PostToolUse, input, ct).ConfigureAwait(false);
+
         var sessionId = await GetOrStartSessionAsync(engine, project, sessionMap, input.SessionId, ct).ConfigureAwait(false);
         var type = ClassifyTool(input.ToolName);
 
@@ -120,27 +137,40 @@ public static class HookEndpoints
         IContextEngine engine,
         CurrentProjectAccessor project,
         ClaudeSessionMap sessionMap,
+        IHookInvocationRepository hookInvocations,
+        IHookInvocationNotifier hookNotifier,
         CancellationToken ct)
     {
+        await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.SessionEnd, input, ct).ConfigureAwait(false);
+
         var sessionId = await GetOrStartSessionAsync(engine, project, sessionMap, input.SessionId, ct).ConfigureAwait(false);
         await engine.EndSessionAsync(project.ProjectId, sessionId, ct, input.Reason).ConfigureAwait(false);
         sessionMap.Remove(input.SessionId, project.ProjectId);
         return Results.Ok(new HookOutput(AdditionalContext: null));
     }
 
-    /// <summary>See <see cref="ClaudeSessionMap"/>'s remarks for why a miss here starts a new session.</summary>
-    private static async Task<Guid> GetOrStartSessionAsync(
-        IContextEngine engine, CurrentProjectAccessor project, ClaudeSessionMap sessionMap, string claudeSessionId, CancellationToken ct)
+    /// <summary>
+    /// Records that one of the four hook endpoints fired, for the Dashboard's "Hook invocations"
+    /// panel — persists the raw (already model-bound) payload, then pushes the new total count and
+    /// this payload live over SignalR so the panel updates without polling.
+    /// </summary>
+    private static async Task RecordHookInvocationAsync(
+        IHookInvocationRepository repo, IHookInvocationNotifier notifier,
+        Guid projectId, HookType type, object payload, CancellationToken ct)
     {
-        if (sessionMap.TryGet(claudeSessionId, project.ProjectId, out var existing))
-        {
-            return existing;
-        }
-
-        var sessionId = await engine.StartSessionAsync(project.ProjectId, claudeSessionId, ct).ConfigureAwait(false);
-        sessionMap.Set(claudeSessionId, project.ProjectId, sessionId);
-        return sessionId;
+        var json = JsonSerializer.Serialize(payload);
+        await repo.RecordAsync(projectId, type, json, ct).ConfigureAwait(false);
+        var count = await repo.CountAsync(projectId, ct).ConfigureAwait(false);
+        await notifier.NotifyAsync(projectId, new HookInvocationEvent(type, json, DateTimeOffset.UtcNow, count), ct).ConfigureAwait(false);
     }
+
+    /// <summary>See <see cref="ClaudeSessionMap"/>'s remarks for why a miss here starts a new session.</summary>
+    private static Task<Guid> GetOrStartSessionAsync(
+        IContextEngine engine, CurrentProjectAccessor project, ClaudeSessionMap sessionMap, string claudeSessionId, CancellationToken ct) =>
+        sessionMap.GetOrStartAsync(
+            claudeSessionId, project.ProjectId,
+            c => engine.StartSessionAsync(project.ProjectId, claudeSessionId, c),
+            ct);
 
     private static SessionEventType ClassifyTool(string toolName) => toolName switch
     {

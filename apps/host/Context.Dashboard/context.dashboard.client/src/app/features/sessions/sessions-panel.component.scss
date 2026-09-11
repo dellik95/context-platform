@@ -43,6 +43,11 @@
   flex-direction: column;
 }
 
+.detail-content {
+  width: 100%;
+  min-width: 0;
+}
+
 // <button mat-list-item> keeps the browser's native button chrome (background/border/font)
 // unless explicitly reset — that's what was rendering as a hard rectangular border around every
 // row. A thin bottom divider replaces it so rows still read as a list, not a stack of boxes.
@@ -157,6 +162,8 @@ mat-list .session-item:last-of-type {
   p {
     margin: 0;
     white-space: pre-wrap;
+    overflow-wrap: break-word;
+    word-break: break-word;
   }
 }
 

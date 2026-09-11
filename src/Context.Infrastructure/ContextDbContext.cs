@@ -34,6 +34,7 @@ public class ContextDbContext : DbContext
     public DbSet<ProviderModel> ProviderModels => Set<ProviderModel>();
     public DbSet<ClaudeIntegration> ClaudeIntegrations => Set<ClaudeIntegration>();
     public DbSet<UsageRecord> UsageRecords => Set<UsageRecord>();
+    public DbSet<HookInvocation> HookInvocations => Set<HookInvocation>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

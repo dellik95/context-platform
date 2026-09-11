@@ -25,6 +25,7 @@ namespace Context.Dashboard.Server.Hooks;
 public sealed class ClaudeSessionMap
 {
     private readonly ConcurrentDictionary<(string ClaudeSessionId, Guid ProjectId), Guid> _map = new();
+    private readonly ConcurrentDictionary<(string ClaudeSessionId, Guid ProjectId), SemaphoreSlim> _locks = new();
 
     public bool TryGet(string claudeSessionId, Guid projectId, out Guid sessionId) =>
         _map.TryGetValue((claudeSessionId, projectId), out sessionId);
@@ -34,4 +35,54 @@ public sealed class ClaudeSessionMap
 
     public void Remove(string claudeSessionId, Guid projectId) =>
         _map.TryRemove((claudeSessionId, projectId), out _);
+
+    /// <summary>
+    /// Race-safe "look up, or start and cache" - closes a check-then-act gap where two concurrent
+    /// hook calls for the same (claudeSessionId, projectId) could both miss <see cref="TryGet"/>
+    /// and each call <paramref name="startAsync"/>, forking one logical Claude Code session across
+    /// two internal Session rows. Locking is keyed per (claudeSessionId, projectId) only, so
+    /// unrelated sessions/projects never contend.
+    /// </summary>
+    public Task<Guid> GetOrStartAsync(
+        string claudeSessionId, Guid projectId, Func<CancellationToken, Task<Guid>> startAsync, CancellationToken ct)
+    {
+        return TryGet(claudeSessionId, projectId, out var existing)
+            ? Task.FromResult(existing)
+            : StartUnderLockAsync(claudeSessionId, projectId, startAsync, recheckCache: true, ct);
+    }
+
+    /// <summary>
+    /// Unlike <see cref="GetOrStartAsync"/>, always invokes <paramref name="startAsync"/> even on a
+    /// cache hit - required for the SessionStart hook, whose <c>ContextEngine.StartSessionAsync</c>
+    /// carries un-end-a-stale-timed-out-session semantics that a cached fast-path would silently
+    /// skip. Still takes the same keyed lock as <see cref="GetOrStartAsync"/> so the two can't race
+    /// each other into creating duplicate rows for the same id.
+    /// </summary>
+    public Task<Guid> StartAsync(
+        string claudeSessionId, Guid projectId, Func<CancellationToken, Task<Guid>> startAsync, CancellationToken ct) =>
+        StartUnderLockAsync(claudeSessionId, projectId, startAsync, recheckCache: false, ct);
+
+    private async Task<Guid> StartUnderLockAsync(
+        string claudeSessionId, Guid projectId, Func<CancellationToken, Task<Guid>> startAsync, bool recheckCache, CancellationToken ct)
+    {
+        var key = (claudeSessionId, projectId);
+        var gate = _locks.GetOrAdd(key, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (recheckCache && TryGet(claudeSessionId, projectId, out var existing))
+            {
+                return existing;
+            }
+
+            var sessionId = await startAsync(ct).ConfigureAwait(false);
+            Set(claudeSessionId, projectId, sessionId);
+            return sessionId;
+        }
+        finally
+        {
+            gate.Release();
+            _locks.TryRemove(key, out _);
+        }
+    }
 }

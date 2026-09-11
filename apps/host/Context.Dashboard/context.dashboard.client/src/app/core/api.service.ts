@@ -10,6 +10,7 @@ import {
   CreateProjectRequest,
   GraphNeighborhoodDto,
   HealthResponse,
+  HookStatusDto,
   ImpactSet,
   IndexTriggerResponse,
   JobDto,
@@ -208,6 +209,13 @@ export class ApiService {
 
   cleanupJobs(projectId: string, status: 'Done' | 'Pending'): Observable<CleanupJobsResponse> {
     return this.http.post<CleanupJobsResponse>(`${this.base}/api/jobs/cleanup?projectId=${projectId}&status=${status}`, {});
+  }
+
+  hooksStatusResource(projectId: Signal<string>): HttpResourceRef<HookStatusDto | undefined> {
+    return httpResource<HookStatusDto>(() => {
+      const id = projectId();
+      return id ? { url: `${this.base}/api/hooks/status`, params: { projectId: id } } : undefined;
+    });
   }
 
   /** `requested` gates the initial fetch (stays idle until true); call the returned resource's

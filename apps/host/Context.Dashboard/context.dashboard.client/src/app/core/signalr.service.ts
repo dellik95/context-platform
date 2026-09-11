@@ -3,7 +3,7 @@ import * as signalR from '@microsoft/signalr';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { ProjectTokenService } from './project-token.service';
-import { JobCountsChangedEvent, ProjectActivityEvent, ProjectStatusChangedEvent, ReindexProgressEvent } from './models';
+import { HookInvocationEvent, JobCountsChangedEvent, ProjectActivityEvent, ProjectStatusChangedEvent, ReindexProgressEvent } from './models';
 
 /**
  * Wraps the /hubs/indexing SignalR hub (apps/host/Context.Host/Hubs/IndexingHub.cs). One
@@ -28,6 +28,7 @@ export class SignalrService implements OnDestroy {
   readonly reindexProgress$ = new Subject<ReindexProgressEvent>();
   readonly projectActivity$ = new Subject<ProjectActivityEvent>();
   readonly jobCountsChanged$ = new Subject<JobCountsChangedEvent>();
+  readonly hookInvoked$ = new Subject<HookInvocationEvent>();
 
   private async ensureStarted(): Promise<void> {
     if (this.connection) {
@@ -55,6 +56,11 @@ export class SignalrService implements OnDestroy {
 
     this.connection.on('ProjectActivity', (dto: ProjectActivityEvent) =>
       this.projectActivity$.next(dto));
+
+    // Project-scoped -- same JoinProject group as ProjectStatusChanged/ReindexProgress
+    // (IndexingHubNotifier.HookInvokedAsync uses Clients.Group(GroupName(projectId))).
+    this.connection.on('HookInvoked', (dto: HookInvocationEvent) =>
+      this.hookInvoked$.next(dto));
 
     // Host-wide -- broadcast to every connected client (IndexingHubNotifier.JobCountsChangedAsync
     // uses Clients.All, not a per-project group), so no JoinProject membership is needed to

@@ -124,6 +124,7 @@ try
     builder.Services.AddSingleton<Context.Application.Indexing.IIndexingProgressReporter, Context.Dashboard.Server.Hubs.SignalRIndexingProgressReporter>();
     builder.Services.AddSingleton<Context.Application.Notifications.IProjectActivityNotifier, Context.Dashboard.Server.Hubs.SignalRProjectActivityNotifier>();
     builder.Services.AddSingleton<Context.Application.Notifications.IJobCountsNotifier, Context.Dashboard.Server.Hubs.SignalRJobCountsNotifier>();
+    builder.Services.AddSingleton<Context.Application.Notifications.IHookInvocationNotifier, Context.Dashboard.Server.Hubs.SignalRHookInvocationNotifier>();
 
     // Multi-instance job dispatch: overrides Context.Application's single-process InMemoryJobSignal
     // default only when CONTEXT_PLATFORM_REDIS is configured, so more than one Context.Dashboard.Server
@@ -224,6 +225,7 @@ try
     app.MapClaudeEndpoints();
     app.MapSystemEndpoints();
     app.MapJobsEndpoints();
+    app.MapHooksStatusEndpoints();
     app.MapUsageEndpoints();
     app.MapFileSystemEndpoints();
     app.MapHub<IndexingHub>("/hubs/indexing");

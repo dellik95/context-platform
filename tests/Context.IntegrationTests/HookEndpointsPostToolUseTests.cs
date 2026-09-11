@@ -1,9 +1,11 @@
 using Context.Application;
+using Context.Application.Notifications;
 using Context.Claude.Hooks;
 using Context.Dashboard.Server.Hooks;
 using Context.Dashboard.Server.Security;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
+using Context.Infrastructure.Abstractions;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Moq;
@@ -47,7 +49,13 @@ public class HookEndpointsPostToolUseTests
 
         var input = new PostToolUseInput(claudeSessionId, "Read", "{}", "{}");
 
-        var result = await HookEndpoints.PostToolUseAsync(input, engine.Object, currentProject, sessionMap, CancellationToken.None);
+        // Loose (not Strict) - hook-invocation tracking is orthogonal to this test's "no other
+        // IContextEngine member is called" assertion, so it just needs to not throw.
+        var hookInvocations = new Mock<IHookInvocationRepository>();
+
+        var result = await HookEndpoints.PostToolUseAsync(
+            input, engine.Object, currentProject, sessionMap,
+            hookInvocations.Object, NullHookInvocationNotifier.Instance, CancellationToken.None);
 
         result.Should().NotBeNull();
         engine.Verify(

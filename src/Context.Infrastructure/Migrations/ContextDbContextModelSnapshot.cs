@@ -255,6 +255,32 @@ namespace Context.Infrastructure.Migrations
                     b.ToTable("GraphNodes", (string)null);
                 });
 
+            modelBuilder.Entity("Context.Domain.Entities.HookInvocation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PayloadJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ReceivedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Type")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId", "ReceivedAt");
+
+                    b.ToTable("HookInvocations", (string)null);
+                });
+
             modelBuilder.Entity("Context.Domain.Entities.Job", b =>
                 {
                     b.Property<Guid>("Id")

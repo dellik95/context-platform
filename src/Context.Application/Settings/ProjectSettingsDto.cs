@@ -43,4 +43,10 @@ public sealed record ProjectSettingsDto(
     // "stale-timeout") once this many minutes have passed with no new SessionEvent. <= 0 disables
     // cleanup for the project (today's only behavior: a killed CLI process leaves its Session row
     // Active forever). Default 4h - long enough that a normal thinking pause never trips it.
-    int StaleSessionTimeoutMinutes = 240);
+    int StaleSessionTimeoutMinutes = 240,
+    // Once SummarizeSessionJobHandler folds a batch of SessionEvents into a SessionSummaryChunk,
+    // those events are fully covered by the chunk and never read again by ExtractMemory - but the
+    // dashboard's session detail view and the memory_recall MCP tool both still show raw events for
+    // history. Defaults to off so a project keeps that raw view until it explicitly opts into
+    // trading it away for a smaller SessionEvents table.
+    bool DeleteSessionEventsAfterSummary = false);
