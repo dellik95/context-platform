@@ -11,4 +11,8 @@ public interface IHookInvocationRepository
     /// <summary>Most recent invocations for <paramref name="projectId"/>, newest first, capped at
     /// <paramref name="limit"/>.</summary>
     Task<IReadOnlyList<HookInvocation>> GetRecentAsync(Guid projectId, int limit, CancellationToken ct);
+
+    /// <summary>Deletes every invocation for <paramref name="projectId"/> received at or before
+    /// <paramref name="upTo"/>.</summary>
+    Task DeleteOlderThanAsync(Guid projectId, DateTimeOffset upTo, CancellationToken ct);
 }

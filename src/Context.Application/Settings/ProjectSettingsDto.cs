@@ -49,4 +49,11 @@ public sealed record ProjectSettingsDto(
     // dashboard's session detail view and the memory_recall MCP tool both still show raw events for
     // history. Defaults to off so a project keeps that raw view until it explicitly opts into
     // trading it away for a smaller SessionEvents table.
-    bool DeleteSessionEventsAfterSummary = false);
+    bool DeleteSessionEventsAfterSummary = false,
+    // HookInvocationRetentionScheduler deletes HookInvocation rows older than this many days for
+    // the project. Unlike SessionEvents, hook invocations are never folded into anything else (no
+    // summary/chunk covers them) - they exist purely for the dashboard's live activity feed and
+    // "hook invocations" counter, so the table grows forever with no natural cleanup point. <= 0
+    // disables cleanup (today's only behavior). Default 30d - long enough to cover the dashboard's
+    // recent-activity views, short enough that the table doesn't grow unbounded.
+    int HookInvocationRetentionDays = 30);

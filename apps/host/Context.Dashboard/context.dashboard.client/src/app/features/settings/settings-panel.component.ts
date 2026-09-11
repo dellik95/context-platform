@@ -64,6 +64,8 @@ export class SettingsPanelComponent {
     staleSessionCleanupEnabled: true,
     staleSessionTimeoutMinutes: 240,
     deleteSessionEventsAfterSummary: false,
+    hookInvocationRetentionEnabled: true,
+    hookInvocationRetentionDays: 30,
   });
 
   protected readonly settingsForm = form(this.settingsModel, (path) => {
@@ -73,6 +75,7 @@ export class SettingsPanelComponent {
     min(path.maxMemoryNotesPerSection, 1);
     min(path.minEventsForMemoryExtraction, 1);
     min(path.staleSessionTimeoutMinutes, 1);
+    min(path.hookInvocationRetentionDays, 1);
   });
 
   protected readonly showOllamaBaseUrl = computed(() => {
@@ -121,6 +124,8 @@ export class SettingsPanelComponent {
         staleSessionCleanupEnabled: settings.staleSessionTimeoutMinutes > 0,
         staleSessionTimeoutMinutes: settings.staleSessionTimeoutMinutes > 0 ? settings.staleSessionTimeoutMinutes : 240,
         deleteSessionEventsAfterSummary: settings.deleteSessionEventsAfterSummary,
+        hookInvocationRetentionEnabled: settings.hookInvocationRetentionDays > 0,
+        hookInvocationRetentionDays: settings.hookInvocationRetentionDays > 0 ? settings.hookInvocationRetentionDays : 30,
       });
     });
 
@@ -159,6 +164,10 @@ export class SettingsPanelComponent {
     this.settingsModel.update((current) => ({ ...current, deleteSessionEventsAfterSummary: event.checked }));
   }
 
+  protected setHookInvocationRetentionEnabled(event: MatSlideToggleChange): void {
+    this.settingsModel.update((current) => ({ ...current, hookInvocationRetentionEnabled: event.checked }));
+  }
+
   protected save(): void {
     if (this.settingsForm().invalid()) {
       return;
@@ -181,6 +190,7 @@ export class SettingsPanelComponent {
       explicitRememberEnabled: raw.explicitRememberEnabled,
       staleSessionTimeoutMinutes: raw.staleSessionCleanupEnabled ? raw.staleSessionTimeoutMinutes : 0,
       deleteSessionEventsAfterSummary: raw.deleteSessionEventsAfterSummary,
+      hookInvocationRetentionDays: raw.hookInvocationRetentionEnabled ? raw.hookInvocationRetentionDays : 0,
     };
 
     this.saving.set(true);

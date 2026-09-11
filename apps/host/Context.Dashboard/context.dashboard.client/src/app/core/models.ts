@@ -332,6 +332,7 @@ export interface ProjectSettingsDto {
   explicitRememberEnabled: boolean; // gates the memory_remember/memory_forget MCP tools
   staleSessionTimeoutMinutes: number; // <= 0 disables auto-ending idle Active sessions
   deleteSessionEventsAfterSummary: boolean; // opt-in cleanup of raw events once folded into a summary chunk
+  hookInvocationRetentionDays: number; // <= 0 disables cleanup of HookInvocations rows
 }
 
 // Response of POST /api/projects/{id}/claude/install.

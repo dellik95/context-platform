@@ -36,4 +36,22 @@ public class HookInvocationRepository(ContextDbContext db) : IHookInvocationRepo
 
         return [.. invocations.OrderByDescending(h => h.ReceivedAt).Take(limit)];
     }
+
+    public async Task DeleteOlderThanAsync(Guid projectId, DateTimeOffset upTo, CancellationToken ct)
+    {
+        // Same SQLite/DateTimeOffset ORDER BY-and-filter limitation as SessionRepository's
+        // DeleteEventsUpToAsync: the cutoff is applied client-side rather than in the query.
+        var invocations = await db.HookInvocations
+            .Where(h => h.ProjectId == projectId)
+            .ToListAsync(ct);
+
+        var toDelete = invocations.Where(h => h.ReceivedAt <= upTo).ToList();
+        if (toDelete.Count == 0)
+        {
+            return;
+        }
+
+        db.HookInvocations.RemoveRange(toDelete);
+        await db.SaveChangesAsync(ct);
+    }
 }

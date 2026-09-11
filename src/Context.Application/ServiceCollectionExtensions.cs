@@ -192,6 +192,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<ReindexSchedulerService>();
         services.AddHostedService<SessionSummaryScheduler>();
         services.AddHostedService<StaleSessionScheduler>();
+        services.AddHostedService<HookInvocationRetentionScheduler>();
     }
 
     private static void AddIndexingPipeline(IServiceCollection services)

@@ -162,6 +162,28 @@
           </mat-slide-toggle>
         </div>
 
+        <h2 class="section-title">Hook invocation retention</h2>
+        <p class="provider-note">
+          <mat-icon>info</mat-icon>
+          Every hook call (SessionStart, UserPromptSubmit, PostToolUse, SessionEnd) is logged for the
+          dashboard's live activity feed and never cleaned up elsewhere — enabling this periodically
+          deletes invocations older than the window below.
+        </p>
+
+        <div class="field-row field-row--align-center">
+          <mat-slide-toggle
+            [checked]="settingsForm.hookInvocationRetentionEnabled().value()"
+            (change)="setHookInvocationRetentionEnabled($event)"
+          >
+            Enable hook invocation cleanup
+          </mat-slide-toggle>
+
+          <mat-form-field appearance="outline" class="interval-field">
+            <mat-label>Retention (days)</mat-label>
+            <input matInput type="number" [formField]="settingsForm.hookInvocationRetentionDays" />
+          </mat-form-field>
+        </div>
+
         <div class="actions">
           <button mat-flat-button color="primary" type="submit" [disabled]="saving()">
             {{ saving() ? 'Saving…' : 'Save' }}
