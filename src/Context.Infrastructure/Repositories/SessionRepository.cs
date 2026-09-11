@@ -88,9 +88,13 @@ public class SessionRepository(ContextDbContext db) : ISessionRepository
 
     public async Task DeleteEventsUpToAsync(Guid sessionId, DateTimeOffset upTo, CancellationToken ct)
     {
-        var toDelete = await db.SessionEvents
-            .Where(e => e.SessionId == sessionId && e.Timestamp <= upTo)
+        // SQLite's EF Core provider cannot translate comparisons over DateTimeOffset columns,
+        // so events are fetched by sessionId and the upTo cutoff is applied client-side.
+        var events = await db.SessionEvents
+            .Where(e => e.SessionId == sessionId)
             .ToListAsync(ct);
+
+        var toDelete = events.Where(e => e.Timestamp <= upTo).ToList();
 
         if (toDelete.Count == 0)
         {
