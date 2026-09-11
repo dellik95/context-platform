@@ -58,12 +58,20 @@ export class SettingsPanelComponent {
     sessionSummaryEnabled: false,
     sessionSummaryIntervalMinutes: 30,
     minEventsForSessionSummary: 15,
+    maxMemoryNotesPerSection: 20,
+    minEventsForMemoryExtraction: 20,
+    explicitRememberEnabled: true,
+    staleSessionCleanupEnabled: true,
+    staleSessionTimeoutMinutes: 240,
   });
 
   protected readonly settingsForm = form(this.settingsModel, (path) => {
     min(path.reindexIntervalMinutes, 1);
     min(path.sessionSummaryIntervalMinutes, 1);
     min(path.minEventsForSessionSummary, 1);
+    min(path.maxMemoryNotesPerSection, 1);
+    min(path.minEventsForMemoryExtraction, 1);
+    min(path.staleSessionTimeoutMinutes, 1);
   });
 
   protected readonly showOllamaBaseUrl = computed(() => {
@@ -106,6 +114,11 @@ export class SettingsPanelComponent {
         sessionSummaryEnabled: settings.sessionSummaryIntervalMinutes > 0,
         sessionSummaryIntervalMinutes: settings.sessionSummaryIntervalMinutes > 0 ? settings.sessionSummaryIntervalMinutes : 30,
         minEventsForSessionSummary: settings.minEventsForSessionSummary,
+        maxMemoryNotesPerSection: settings.maxMemoryNotesPerSection,
+        minEventsForMemoryExtraction: settings.minEventsForMemoryExtraction,
+        explicitRememberEnabled: settings.explicitRememberEnabled,
+        staleSessionCleanupEnabled: settings.staleSessionTimeoutMinutes > 0,
+        staleSessionTimeoutMinutes: settings.staleSessionTimeoutMinutes > 0 ? settings.staleSessionTimeoutMinutes : 240,
       });
     });
 
@@ -132,6 +145,14 @@ export class SettingsPanelComponent {
     this.settingsModel.update((current) => ({ ...current, sessionSummaryEnabled: event.checked }));
   }
 
+  protected setExplicitRememberEnabled(event: MatSlideToggleChange): void {
+    this.settingsModel.update((current) => ({ ...current, explicitRememberEnabled: event.checked }));
+  }
+
+  protected setStaleSessionCleanupEnabled(event: MatSlideToggleChange): void {
+    this.settingsModel.update((current) => ({ ...current, staleSessionCleanupEnabled: event.checked }));
+  }
+
   protected save(): void {
     if (this.settingsForm().invalid()) {
       return;
@@ -149,6 +170,10 @@ export class SettingsPanelComponent {
       lastReindexScheduledAt: this.lastReindexScheduledAt,
       sessionSummaryIntervalMinutes: raw.sessionSummaryEnabled ? raw.sessionSummaryIntervalMinutes : 0,
       minEventsForSessionSummary: raw.minEventsForSessionSummary,
+      maxMemoryNotesPerSection: raw.maxMemoryNotesPerSection,
+      minEventsForMemoryExtraction: raw.minEventsForMemoryExtraction,
+      explicitRememberEnabled: raw.explicitRememberEnabled,
+      staleSessionTimeoutMinutes: raw.staleSessionCleanupEnabled ? raw.staleSessionTimeoutMinutes : 0,
     };
 
     this.saving.set(true);

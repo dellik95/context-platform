@@ -1,0 +1,99 @@
+using Context.Application.Settings;
+using FluentAssertions;
+using Xunit;
+
+namespace Context.Application.Tests;
+
+public sealed class ProjectSettingsValidatorTests
+{
+    [Fact]
+    public void Validate_returns_no_errors_for_defaults()
+    {
+        var errors = ProjectSettingsValidator.Validate(BuildValidSettings());
+
+        errors.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_rejects_non_positive_MinEventsForSessionSummary(int value)
+    {
+        var dto = BuildValidSettings() with { MinEventsForSessionSummary = value };
+
+        var errors = ProjectSettingsValidator.Validate(dto);
+
+        errors.Should().ContainSingle(e => e.Contains(nameof(ProjectSettingsDto.MinEventsForSessionSummary)));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_rejects_non_positive_MinEventsForMemoryExtraction(int value)
+    {
+        var dto = BuildValidSettings() with { MinEventsForMemoryExtraction = value };
+
+        var errors = ProjectSettingsValidator.Validate(dto);
+
+        errors.Should().ContainSingle(e => e.Contains(nameof(ProjectSettingsDto.MinEventsForMemoryExtraction)));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_rejects_non_positive_MaxMemoryNotesPerSection(int value)
+    {
+        var dto = BuildValidSettings() with { MaxMemoryNotesPerSection = value };
+
+        var errors = ProjectSettingsValidator.Validate(dto);
+
+        errors.Should().ContainSingle(e => e.Contains(nameof(ProjectSettingsDto.MaxMemoryNotesPerSection)));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_rejects_non_positive_ReindexIntervalMinutes(int value)
+    {
+        var dto = BuildValidSettings() with { ReindexIntervalMinutes = value };
+
+        var errors = ProjectSettingsValidator.Validate(dto);
+
+        errors.Should().ContainSingle(e => e.Contains(nameof(ProjectSettingsDto.ReindexIntervalMinutes)));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_allows_non_positive_SessionSummaryIntervalMinutes_as_disabled_sentinel(int value)
+    {
+        var dto = BuildValidSettings() with { SessionSummaryIntervalMinutes = value };
+
+        var errors = ProjectSettingsValidator.Validate(dto);
+
+        errors.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_allows_non_positive_StaleSessionTimeoutMinutes_as_disabled_sentinel(int value)
+    {
+        var dto = BuildValidSettings() with { StaleSessionTimeoutMinutes = value };
+
+        var errors = ProjectSettingsValidator.Validate(dto);
+
+        errors.Should().BeEmpty();
+    }
+
+    private static ProjectSettingsDto BuildValidSettings() =>
+        new(
+            EmbeddingProvider: "noop",
+            LlmProvider: "noop",
+            OllamaBaseUrl: null,
+            OllamaEmbeddingModel: null,
+            OllamaChatModel: null,
+            ReindexEnabled: false,
+            ReindexIntervalMinutes: 60,
+            LastReindexScheduledAt: null);
+}

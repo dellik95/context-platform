@@ -36,6 +36,12 @@ public static class SettingsEndpoints
         ProjectSettingsWriteTarget? target,
         CancellationToken ct)
     {
+        var errors = ProjectSettingsValidator.Validate(dto);
+        if (errors.Count > 0)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]> { [string.Empty] = errors.ToArray() });
+        }
+
         try
         {
             await settings.UpdateAsync(id, dto, target ?? ProjectSettingsWriteTarget.Both, ct).ConfigureAwait(false);

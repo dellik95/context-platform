@@ -4,6 +4,8 @@ using Context.Domain.Entities;
 using Context.Domain.Enums;
 using Context.Infrastructure.Abstractions;
 using Context.Memory.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Context.Application.Jobs.Handlers;
 
@@ -13,9 +15,11 @@ namespace Context.Application.Jobs.Handlers;
 public sealed class ExtractMemoryJobHandler(
     IMemoryExtractor extractor,
     ISessionRepository sessionRepository,
-    IProjectActivityNotifier? activityNotifier = null) : IJobHandler
+    IProjectActivityNotifier? activityNotifier = null,
+    ILogger<ExtractMemoryJobHandler>? logger = null) : IJobHandler
 {
     private readonly IProjectActivityNotifier _activityNotifier = activityNotifier ?? NullProjectActivityNotifier.Instance;
+    private readonly ILogger<ExtractMemoryJobHandler> _logger = logger ?? NullLogger<ExtractMemoryJobHandler>.Instance;
 
     public JobType Type => JobType.ExtractMemory;
 
@@ -39,7 +43,11 @@ public sealed class ExtractMemoryJobHandler(
         // job) is safe against duplicate memories only as a side effect of MemoryConsolidator's
         // >0.92 similarity reinforce path (MEMORY_PIPELINE_PLAN.md §D.6/Gap #6) - not a designed
         // idempotency guarantee, so don't assume it survives an unrelated change to that threshold.
-        await extractor.ExtractAsync(projectId, chunk, ct).ConfigureAwait(false);
+        var memories = await extractor.ExtractAsync(projectId, chunk, ct).ConfigureAwait(false);
+
+        _logger.LogInformation(
+            "Memory extraction produced {MemoryCount} memories for session {SessionId}, chunk {ChunkId}.",
+            memories.Count, payload.SessionId, payload.SummaryChunkId);
 
         // SessionSummaryChunk carries no ProjectId of its own - the owning Session is the only path to it.
         var session = await sessionRepository.GetByIdAsync(projectId, payload.SessionId, ct).ConfigureAwait(false);

@@ -28,6 +28,10 @@ describe('SettingsPanelComponent cloud provider disclosure', () => {
     lastReindexScheduledAt: null,
     sessionSummaryIntervalMinutes: 0,
     minEventsForSessionSummary: 15,
+    maxMemoryNotesPerSection: 20,
+    minEventsForMemoryExtraction: 20,
+    explicitRememberEnabled: true,
+    staleSessionTimeoutMinutes: 240,
   };
 
   function fakeSettingsResource(settings: ProjectSettingsDto) {

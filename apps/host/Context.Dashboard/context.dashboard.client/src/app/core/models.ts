@@ -327,6 +327,10 @@ export interface ProjectSettingsDto {
   lastReindexScheduledAt: string | null; // ISO-8601
   sessionSummaryIntervalMinutes: number; // <= 0 means "only summarize at session end"
   minEventsForSessionSummary: number; // interval is a max wait -- also needs this many new events
+  maxMemoryNotesPerSection: number; // max ranked memories shown per retrieval context section
+  minEventsForMemoryExtraction: number; // min events in a chunk to trigger memory extraction (bypassed at session end)
+  explicitRememberEnabled: boolean; // gates the memory_remember/memory_forget MCP tools
+  staleSessionTimeoutMinutes: number; // <= 0 disables auto-ending idle Active sessions
 }
 
 // Response of POST /api/projects/{id}/claude/install.

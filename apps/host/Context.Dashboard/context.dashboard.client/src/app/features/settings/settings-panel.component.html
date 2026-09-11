@@ -104,6 +104,46 @@
           </mat-form-field>
         </div>
 
+        <h2 class="section-title">Memory &amp; retrieval</h2>
+
+        <div class="field-row field-row--align-center">
+          <mat-form-field appearance="outline" class="interval-field">
+            <mat-label>Min. events for memory extraction</mat-label>
+            <input matInput type="number" [formField]="settingsForm.minEventsForMemoryExtraction" />
+            <mat-hint>A chunk must cover at least this many events to trigger memory extraction</mat-hint>
+          </mat-form-field>
+
+          <mat-form-field appearance="outline" class="interval-field">
+            <mat-label>Max memories per section</mat-label>
+            <input matInput type="number" [formField]="settingsForm.maxMemoryNotesPerSection" />
+          </mat-form-field>
+        </div>
+
+        <div class="field-row field-row--align-center">
+          <mat-slide-toggle [checked]="settingsForm.explicitRememberEnabled().value()" (change)="setExplicitRememberEnabled($event)">
+            Allow agent-initiated memory writes (memory_remember/memory_forget)
+          </mat-slide-toggle>
+        </div>
+
+        <h2 class="section-title">Stale session cleanup</h2>
+        <p class="provider-note">
+          <mat-icon>info</mat-icon>
+          Ends an Active session (with a final summary and memory extraction) after no new activity
+          for this long — protects against a killed terminal or crashed CLI process leaving a
+          session Active forever.
+        </p>
+
+        <div class="field-row field-row--align-center">
+          <mat-slide-toggle [checked]="settingsForm.staleSessionCleanupEnabled().value()" (change)="setStaleSessionCleanupEnabled($event)">
+            Enable stale-session cleanup
+          </mat-slide-toggle>
+
+          <mat-form-field appearance="outline" class="interval-field">
+            <mat-label>Timeout (minutes)</mat-label>
+            <input matInput type="number" [formField]="settingsForm.staleSessionTimeoutMinutes" />
+          </mat-form-field>
+        </div>
+
         <div class="actions">
           <button mat-flat-button color="primary" type="submit" [disabled]="saving()">
             {{ saving() ? 'Saving…' : 'Save' }}
