@@ -13,10 +13,13 @@ namespace Context.Application.Tests;
 
 /// <summary>
 /// Tests for <see cref="SummarizeSessionJobHandler"/>'s event-count gate (product feedback:
-/// "I do not need to write empty sessions") — a trivial/empty session must not end up with a
-/// persisted <see cref="SessionSummary"/> row, whether the job was triggered by
-/// <see cref="Context.Application.Scheduling.SessionSummaryScheduler"/> or by
-/// <c>ContextEngine.EndSessionAsync</c> (which enqueues unconditionally, regardless of activity).
+/// "I do not need to write empty sessions") — a truly empty session must not end up with a
+/// persisted <see cref="SessionSummary"/> row. That bar only applies to
+/// <see cref="Context.Application.Scheduling.SessionSummaryScheduler"/>'s periodic firing and a
+/// session's first-ever chunk while it's still active: at session end
+/// (<c>ContextEngine.EndSessionAsync</c>, which enqueues unconditionally) it's waived entirely, since
+/// there's no later pass to catch a short session and its hook activity must still turn into a
+/// summary and a chained ExtractMemory job.
 /// </summary>
 public sealed class SummarizeSessionJobHandlerTests
 {
@@ -101,7 +104,7 @@ public sealed class SummarizeSessionJobHandlerTests
     }
 
     [Fact]
-    public async Task HandleAsync_writes_no_summary_when_a_short_session_ends_below_the_MinEventsForSessionSummary_bar()
+    public async Task HandleAsync_still_persists_and_extracts_when_a_short_session_ends_below_the_MinEventsForSessionSummary_bar()
     {
         var projectId = Guid.NewGuid();
         var sessionId = Guid.NewGuid();
@@ -109,21 +112,47 @@ public sealed class SummarizeSessionJobHandlerTests
         var session = MakeSession(projectId, sessionId, startedAt);
 
         // Three trivial events - well under the default MinEventsForSessionSummary of 15 - and this
-        // would be the session's first-ever chunk (no existing chunks). Even though IsSessionEnd is
-        // true (so there's no later pass to catch this), a session this short should still not get
-        // a persisted SessionSummary row.
+        // would be the session's first-ever chunk (no existing chunks). IsSessionEnd is true, so
+        // there's no later pass to catch this session: the bar is waived and it must still get a
+        // summary and a chained ExtractMemory job, or a short-lived session's hook activity would
+        // never turn into memory at all.
         var events = new List<SessionEvent> { MakeEvent(startedAt.AddSeconds(1)), MakeEvent(startedAt.AddSeconds(2)), MakeEvent(startedAt.AddSeconds(3)) };
 
+        var producedChunk = new SessionSummaryChunk
+        {
+            Id = Guid.NewGuid(),
+            SessionId = sessionId,
+            Title = "Quick fix",
+            EventCount = 3,
+            FromEventAt = events[0].Timestamp,
+            ToEventAt = events[^1].Timestamp,
+            GeneratedAt = DateTimeOffset.UtcNow
+        };
+
         _sessionRepository.Setup(r => r.GetByIdAsync(projectId, sessionId, It.IsAny<CancellationToken>())).ReturnsAsync(session);
-        _sessionRepository.Setup(r => r.GetSummaryChunksAsync(projectId, sessionId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<SessionSummaryChunk>)[]);
+        _sessionRepository.SetupSequence(r => r.GetSummaryChunksAsync(projectId, sessionId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<SessionSummaryChunk>)[])
+            .ReturnsAsync((IReadOnlyList<SessionSummaryChunk>)[producedChunk]);
         _sessionRepository.Setup(r => r.GetEventsAsync(projectId, sessionId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(events);
+        _summarizer.Setup(s => s.SummarizeAsync(projectId, sessionId, startedAt, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(producedChunk);
+        _sessionRepository.Setup(r => r.AddSummaryChunkAsync(producedChunk, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(producedChunk);
         SetUpSettings(minEventsForSessionSummary: 15);
 
         await _sut.HandleAsync(MakeJob(projectId, sessionId, isSessionEnd: true), CancellationToken.None);
 
-        VerifyNothingWasPersisted();
+        _sessionRepository.Verify(r => r.AddSummaryChunkAsync(producedChunk, It.IsAny<CancellationToken>()), Times.Once);
+        _sessionRepository.Verify(r => r.UpsertSummaryAsync(It.Is<SessionSummary>(sum => sum.Title == "Quick fix"), It.IsAny<CancellationToken>()), Times.Once);
+        _jobQueue.Verify(
+            q => q.EnqueueAsync(
+                JobType.ExtractMemory,
+                It.Is<object>(p => p is ExtractMemoryPayload && ((ExtractMemoryPayload)p).SummaryChunkId == producedChunk.Id),
+                projectId,
+                It.IsAny<int>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]

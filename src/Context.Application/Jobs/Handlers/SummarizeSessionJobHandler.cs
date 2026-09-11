@@ -68,10 +68,16 @@ public sealed class SummarizeSessionJobHandler(
         //    the "worth summarizing" bar: skip rather than persist a thin, near-empty summary. A
         //    session that already has a real chunk is allowed through below that bar, since this is
         //    just topping up an already-meaningful summary rather than creating one from scratch.
+        // On session end (payload.IsSessionEnd) the bar is waived entirely: ConversationEndExtractionTrigger
+        // fires unconditionally there since there won't be a later pass to pick this chunk up, but it
+        // only ever gets the chance to fire if a chunk is actually produced - a short session (e.g. a
+        // couple of tool calls) that never clears MinEventsForSessionSummary was silently losing both
+        // its summary and its memory extraction. The "no new events at all" bail still applies even on
+        // session end - there's genuinely nothing to summarize.
         var allEvents = await sessionRepository.GetEventsAsync(projectId, payload.SessionId, ct).ConfigureAwait(false);
         var newEventCount = since is null ? allEvents.Count : allEvents.Count(e => e.Timestamp > since.Value);
 
-        if (newEventCount == 0 || (existingChunks.Count == 0 && newEventCount < settings.MinEventsForSessionSummary))
+        if (newEventCount == 0 || (!payload.IsSessionEnd && existingChunks.Count == 0 && newEventCount < settings.MinEventsForSessionSummary))
         {
             return;
         }

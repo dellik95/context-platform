@@ -27,7 +27,7 @@ public class TokenEstimatorTests
     {
         for (var length = 0; length < 20; length++)
         {
-            TokenEstimator.Estimate(new string('x', length)).Should().BeGreaterOrEqualTo(1);
+            TokenEstimator.Estimate(new string('x', length)).Should().BeGreaterThanOrEqualTo(1);
         }
     }
 
@@ -37,7 +37,7 @@ public class TokenEstimatorTests
         var shortText = new string('x', 40);
         var longText = new string('x', 400);
 
-        TokenEstimator.Estimate(longText).Should().BeGreaterOrEqualTo(TokenEstimator.Estimate(shortText));
+        TokenEstimator.Estimate(longText).Should().BeGreaterThanOrEqualTo(TokenEstimator.Estimate(shortText));
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public class TokenEstimatorTests
         for (var length = 1; length <= 100; length++)
         {
             var current = TokenEstimator.Estimate(new string('x', length));
-            current.Should().BeGreaterOrEqualTo(previous);
+            current.Should().BeGreaterThanOrEqualTo(previous);
             previous = current;
         }
     }

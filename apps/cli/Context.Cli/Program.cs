@@ -8,7 +8,6 @@
 // Exit codes (per task brief): 0 success, 1 user error (bad args / not found), 2 unexpected failure.
 
 using System.CommandLine;
-using System.CommandLine.Invocation;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -37,15 +36,17 @@ using Microsoft.Extensions.DependencyInjection;
 // Global options
 // ---------------------------------------------------------------------------------------------
 
-var rootOption = new Option<string>(
-    "--root",
-    () => Directory.GetCurrentDirectory(),
-    "Project root directory (defaults to the current directory). The Context Platform database is " +
-    "shared across projects — see CONTEXT_PLATFORM_DATA_DIR / SharedDataLocation for where it lives.");
+var rootOption = new Option<string>("--root")
+{
+    Description = "Project root directory (defaults to the current directory). The Context Platform database is " +
+        "shared across projects — see CONTEXT_PLATFORM_DATA_DIR / SharedDataLocation for where it lives.",
+    DefaultValueFactory = _ => Directory.GetCurrentDirectory(),
+    Recursive = true
+};
 
 var rootCommand = new RootCommand(
     "Context Platform CLI — persistent project memory, code graph and semantic search for Claude Code.");
-rootCommand.AddGlobalOption(rootOption);
+rootCommand.Options.Add(rootOption);
 
 // ---------------------------------------------------------------------------------------------
 // context project ...
@@ -53,59 +54,68 @@ rootCommand.AddGlobalOption(rootOption);
 
 var projectCommand = new Command("project", "Manage registered projects.");
 
-var createNameOption = new Option<string>("--name", "Display name for the project.") { IsRequired = true };
-var createPathOption = new Option<string?>(
-    "--path", "Filesystem path the project's source tree lives at (defaults to --root).");
+var createNameOption = new Option<string>("--name") { Description = "Display name for the project.", Required = true };
+var createPathOption = new Option<string?>("--path")
+{
+    Description = "Filesystem path the project's source tree lives at (defaults to --root)."
+};
 var createCommand = new Command("create", "Register a new project.");
-createCommand.AddOption(createNameOption);
-createCommand.AddOption(createPathOption);
-createCommand.SetHandler(HandleProjectCreateAsync);
+createCommand.Options.Add(createNameOption);
+createCommand.Options.Add(createPathOption);
+createCommand.SetAction(HandleProjectCreateAsync);
 
 var listCommand = new Command("list", "List every project registered in this root's database.");
-listCommand.SetHandler(HandleProjectListAsync);
+listCommand.SetAction(HandleProjectListAsync);
 
-var statusProjectOption = new Option<string?>("--project", "Project id (GUID). Defaults to the project registered at --root.");
+var statusProjectOption = new Option<string?>("--project") { Description = "Project id (GUID). Defaults to the project registered at --root." };
 var statusCommand = new Command("status", "Show aggregate stats for a project.");
-statusCommand.AddOption(statusProjectOption);
-statusCommand.SetHandler(HandleProjectStatusAsync);
+statusCommand.Options.Add(statusProjectOption);
+statusCommand.SetAction(HandleProjectStatusAsync);
 
-var initProjectOption = new Option<string?>("--project", "Project id (GUID). Defaults to the project registered at --root.");
+var initProjectOption = new Option<string?>("--project") { Description = "Project id (GUID). Defaults to the project registered at --root." };
 var initCommand = new Command("init", "Install/repair the Claude Code integration (hooks, .mcp.json) for a project.");
-initCommand.AddOption(initProjectOption);
-Func<InvocationContext, Task> initHandler = context => HandleClaudeInstallAsync(context, initProjectOption);
-initCommand.SetHandler(initHandler);
+initCommand.Options.Add(initProjectOption);
+initCommand.SetAction((parseResult, ct) => HandleClaudeInstallAsync(parseResult, initProjectOption, ct));
 
-projectCommand.AddCommand(createCommand);
-projectCommand.AddCommand(listCommand);
-projectCommand.AddCommand(statusCommand);
-projectCommand.AddCommand(initCommand);
-rootCommand.AddCommand(projectCommand);
+projectCommand.Subcommands.Add(createCommand);
+projectCommand.Subcommands.Add(listCommand);
+projectCommand.Subcommands.Add(statusCommand);
+projectCommand.Subcommands.Add(initCommand);
+rootCommand.Subcommands.Add(projectCommand);
 
 // ---------------------------------------------------------------------------------------------
 // context index
 // ---------------------------------------------------------------------------------------------
 
-var indexFullOption = new Option<bool>("--full", () => false, "Reprocess every file regardless of content-hash cache.");
-var indexProjectOption = new Option<string?>("--project", "Project id (GUID). Defaults to the project registered at --root.");
+var indexFullOption = new Option<bool>("--full")
+{
+    Description = "Reprocess every file regardless of content-hash cache.",
+    DefaultValueFactory = _ => false
+};
+var indexProjectOption = new Option<string?>("--project") { Description = "Project id (GUID). Defaults to the project registered at --root." };
 var indexCommand = new Command("index", "Scan and (re)index the project's source tree.");
-indexCommand.AddOption(indexFullOption);
-indexCommand.AddOption(indexProjectOption);
-indexCommand.SetHandler(HandleIndexAsync);
-rootCommand.AddCommand(indexCommand);
+indexCommand.Options.Add(indexFullOption);
+indexCommand.Options.Add(indexProjectOption);
+indexCommand.SetAction(HandleIndexAsync);
+rootCommand.Subcommands.Add(indexCommand);
 
 // ---------------------------------------------------------------------------------------------
 // context search "<query>"
 // ---------------------------------------------------------------------------------------------
 
-var searchQueryArgument = new Argument<string>("query", "Free-text search query.");
-var searchProjectOption = new Option<string?>("--project", "Project id (GUID). Defaults to the project registered at --root.");
-var searchBudgetOption = new Option<int>("--budget", () => 2000, "Token budget for the returned context pack.");
+var searchQueryArgument = new Argument<string>("query") { Description = "Free-text search query." };
+var searchProjectOption = new Option<string?>("--project") { Description = "Project id (GUID). Defaults to the project registered at --root." };
+var searchBudgetOption = new Option<int>("--budget")
+{
+    Description = "Token budget for the returned context pack.",
+    DefaultValueFactory = _ => 2000
+};
 var searchCommand = new Command("search", "Search project code + memory and build a ranked context pack.");
-searchCommand.AddArgument(searchQueryArgument);
-searchCommand.AddOption(searchProjectOption);
-searchCommand.AddOption(searchBudgetOption);
-searchCommand.SetHandler(HandleSearchAsync);
-rootCommand.AddCommand(searchCommand);
+searchCommand.Arguments.Add(searchQueryArgument);
+searchCommand.Options.Add(searchProjectOption);
+searchCommand.Options.Add(searchBudgetOption);
+searchCommand.SetAction(HandleSearchAsync);
+rootCommand.Subcommands.Add(searchCommand);
 
 // ---------------------------------------------------------------------------------------------
 // context memory search "<query>"
@@ -113,70 +123,72 @@ rootCommand.AddCommand(searchCommand);
 
 var memoryCommand = new Command("memory", "Memory subsystem commands.");
 
-var memorySearchQueryArgument = new Argument<string>("query", "Free-text query over memory title/body.");
-var memorySearchProjectOption = new Option<string?>("--project", "Project id (GUID). Defaults to the project registered at --root.");
+var memorySearchQueryArgument = new Argument<string>("query") { Description = "Free-text query over memory title/body." };
+var memorySearchProjectOption = new Option<string?>("--project") { Description = "Project id (GUID). Defaults to the project registered at --root." };
 var memorySearchCommand = new Command("search", "Search this project's memories (decisions, discoveries, bug fixes, ...).");
-memorySearchCommand.AddArgument(memorySearchQueryArgument);
-memorySearchCommand.AddOption(memorySearchProjectOption);
-memorySearchCommand.SetHandler(HandleMemorySearchAsync);
+memorySearchCommand.Arguments.Add(memorySearchQueryArgument);
+memorySearchCommand.Options.Add(memorySearchProjectOption);
+memorySearchCommand.SetAction(HandleMemorySearchAsync);
 
-memoryCommand.AddCommand(memorySearchCommand);
-rootCommand.AddCommand(memoryCommand);
+memoryCommand.Subcommands.Add(memorySearchCommand);
+rootCommand.Subcommands.Add(memoryCommand);
 
 // ---------------------------------------------------------------------------------------------
 // context graph "<symbol name or id>"
 // ---------------------------------------------------------------------------------------------
 
-var graphSymbolArgument = new Argument<string>("symbol", "Symbol name (substring match) or symbol/node id (GUID).");
-var graphProjectOption = new Option<string?>("--project", "Project id (GUID). Defaults to the project registered at --root.");
-var graphHopsOption = new Option<int>("--hops", () => 3, "Maximum traversal hops for the blast-radius query.");
+var graphSymbolArgument = new Argument<string>("symbol") { Description = "Symbol name (substring match) or symbol/node id (GUID)." };
+var graphProjectOption = new Option<string?>("--project") { Description = "Project id (GUID). Defaults to the project registered at --root." };
+var graphHopsOption = new Option<int>("--hops")
+{
+    Description = "Maximum traversal hops for the blast-radius query.",
+    DefaultValueFactory = _ => 3
+};
 var graphCommand = new Command("graph", "Show callers/implementers/covering tests (blast radius) for a symbol.");
-graphCommand.AddArgument(graphSymbolArgument);
-graphCommand.AddOption(graphProjectOption);
-graphCommand.AddOption(graphHopsOption);
-graphCommand.SetHandler(HandleGraphAsync);
-rootCommand.AddCommand(graphCommand);
+graphCommand.Arguments.Add(graphSymbolArgument);
+graphCommand.Options.Add(graphProjectOption);
+graphCommand.Options.Add(graphHopsOption);
+graphCommand.SetAction(HandleGraphAsync);
+rootCommand.Subcommands.Add(graphCommand);
 
 // ---------------------------------------------------------------------------------------------
 // context claude install
 // ---------------------------------------------------------------------------------------------
 
 var claudeCommand = new Command("claude", "Claude Code integration commands.");
-var claudeInstallProjectOption = new Option<string?>("--project", "Project id (GUID). Defaults to the project registered at --root.");
+var claudeInstallProjectOption = new Option<string?>("--project") { Description = "Project id (GUID). Defaults to the project registered at --root." };
 var claudeInstallCommand = new Command("install", "Install/repair the Claude Code integration (hooks, .mcp.json) for a project.");
-claudeInstallCommand.AddOption(claudeInstallProjectOption);
-Func<InvocationContext, Task> claudeInstallHandler = context => HandleClaudeInstallAsync(context, claudeInstallProjectOption);
-claudeInstallCommand.SetHandler(claudeInstallHandler);
+claudeInstallCommand.Options.Add(claudeInstallProjectOption);
+claudeInstallCommand.SetAction((parseResult, ct) => HandleClaudeInstallAsync(parseResult, claudeInstallProjectOption, ct));
 
-claudeCommand.AddCommand(claudeInstallCommand);
-rootCommand.AddCommand(claudeCommand);
+claudeCommand.Subcommands.Add(claudeInstallCommand);
+rootCommand.Subcommands.Add(claudeCommand);
 
 // ---------------------------------------------------------------------------------------------
 // context doctor
 // ---------------------------------------------------------------------------------------------
 
-var doctorProjectOption = new Option<string?>("--project", "Project id (GUID). Only used to echo which project this root resolves to.");
+var doctorProjectOption = new Option<string?>("--project") { Description = "Project id (GUID). Only used to echo which project this root resolves to." };
 var doctorCommand = new Command("doctor", "Diagnose Context Platform health for a project root.");
-doctorCommand.AddOption(doctorProjectOption);
-doctorCommand.SetHandler(HandleDoctorAsync);
-rootCommand.AddCommand(doctorCommand);
+doctorCommand.Options.Add(doctorProjectOption);
+doctorCommand.SetAction(HandleDoctorAsync);
+rootCommand.Subcommands.Add(doctorCommand);
 
 // ---------------------------------------------------------------------------------------------
 
-return await rootCommand.InvokeAsync(args);
+return await rootCommand.Parse(args).InvokeAsync();
 
 // =================================================================================================
 // Command handlers
 // =================================================================================================
 
-async Task HandleProjectCreateAsync(InvocationContext context)
+async Task<int> HandleProjectCreateAsync(ParseResult parseResult, CancellationToken ct)
 {
-    var ct = context.GetCancellationToken();
-    context.ExitCode = await RunAsync(async () =>
+    return await RunAsync(async () =>
     {
-        var root = ResolveRoot(context.ParseResult.GetValueForOption(rootOption));
-        var name = context.ParseResult.GetValueForOption(createNameOption)!;
-        var path = context.ParseResult.GetValueForOption(createPathOption);
+        var root = ResolveRoot(parseResult.GetValue(rootOption));
+        var name = parseResult.GetValue(createNameOption)!;
+        var path = parseResult.GetValue(createPathOption);
         var fullPath = Path.GetFullPath(path ?? root);
 
         await RunWithProviderAsync(root, migrate: true, ct, async provider =>
@@ -206,12 +218,11 @@ async Task HandleProjectCreateAsync(InvocationContext context)
     }).ConfigureAwait(false);
 }
 
-async Task HandleProjectListAsync(InvocationContext context)
+async Task<int> HandleProjectListAsync(ParseResult parseResult, CancellationToken ct)
 {
-    var ct = context.GetCancellationToken();
-    context.ExitCode = await RunAsync(async () =>
+    return await RunAsync(async () =>
     {
-        var root = ResolveRoot(context.ParseResult.GetValueForOption(rootOption));
+        var root = ResolveRoot(parseResult.GetValue(rootOption));
 
         await RunWithProviderAsync(root, migrate: true, ct, async provider =>
         {
@@ -234,13 +245,12 @@ async Task HandleProjectListAsync(InvocationContext context)
     }).ConfigureAwait(false);
 }
 
-async Task HandleProjectStatusAsync(InvocationContext context)
+async Task<int> HandleProjectStatusAsync(ParseResult parseResult, CancellationToken ct)
 {
-    var ct = context.GetCancellationToken();
-    context.ExitCode = await RunAsync(async () =>
+    return await RunAsync(async () =>
     {
-        var root = ResolveRoot(context.ParseResult.GetValueForOption(rootOption));
-        var projectIdText = context.ParseResult.GetValueForOption(statusProjectOption);
+        var root = ResolveRoot(parseResult.GetValue(rootOption));
+        var projectIdText = parseResult.GetValue(statusProjectOption);
 
         await RunWithProviderAsync(root, migrate: true, ct, async provider =>
         {
@@ -261,13 +271,12 @@ async Task HandleProjectStatusAsync(InvocationContext context)
     }).ConfigureAwait(false);
 }
 
-async Task HandleClaudeInstallAsync(InvocationContext context, Option<string?> projectOption)
+async Task<int> HandleClaudeInstallAsync(ParseResult parseResult, Option<string?> projectOption, CancellationToken ct)
 {
-    var ct = context.GetCancellationToken();
-    context.ExitCode = await RunAsync(async () =>
+    return await RunAsync(async () =>
     {
-        var root = ResolveRoot(context.ParseResult.GetValueForOption(rootOption));
-        var projectIdText = context.ParseResult.GetValueForOption(projectOption);
+        var root = ResolveRoot(parseResult.GetValue(rootOption));
+        var projectIdText = parseResult.GetValue(projectOption);
 
         // Preferred path: resolve/create the project against a shared, already-running
         // Context.Dashboard.Server over its admin-gated HTTP API instead of this process's own direct-DB
@@ -408,14 +417,13 @@ static async Task<(Project Project, string? Token, string HostBaseUrl)?> TryReso
     }
 }
 
-async Task HandleIndexAsync(InvocationContext context)
+async Task<int> HandleIndexAsync(ParseResult parseResult, CancellationToken ct)
 {
-    var ct = context.GetCancellationToken();
-    context.ExitCode = await RunAsync(async () =>
+    return await RunAsync(async () =>
     {
-        var root = ResolveRoot(context.ParseResult.GetValueForOption(rootOption));
-        var full = context.ParseResult.GetValueForOption(indexFullOption);
-        var projectIdText = context.ParseResult.GetValueForOption(indexProjectOption);
+        var root = ResolveRoot(parseResult.GetValue(rootOption));
+        var full = parseResult.GetValue(indexFullOption);
+        var projectIdText = parseResult.GetValue(indexProjectOption);
 
         await RunWithProviderAsync(root, migrate: true, ct, async provider =>
         {
@@ -453,15 +461,14 @@ async Task HandleIndexAsync(InvocationContext context)
     }).ConfigureAwait(false);
 }
 
-async Task HandleSearchAsync(InvocationContext context)
+async Task<int> HandleSearchAsync(ParseResult parseResult, CancellationToken ct)
 {
-    var ct = context.GetCancellationToken();
-    context.ExitCode = await RunAsync(async () =>
+    return await RunAsync(async () =>
     {
-        var root = ResolveRoot(context.ParseResult.GetValueForOption(rootOption));
-        var query = context.ParseResult.GetValueForArgument(searchQueryArgument);
-        var projectIdText = context.ParseResult.GetValueForOption(searchProjectOption);
-        var budget = context.ParseResult.GetValueForOption(searchBudgetOption);
+        var root = ResolveRoot(parseResult.GetValue(rootOption));
+        var query = parseResult.GetValue(searchQueryArgument)!;
+        var projectIdText = parseResult.GetValue(searchProjectOption);
+        var budget = parseResult.GetValue(searchBudgetOption);
 
         await RunWithProviderAsync(root, migrate: true, ct, async provider =>
         {
@@ -478,14 +485,13 @@ async Task HandleSearchAsync(InvocationContext context)
     }).ConfigureAwait(false);
 }
 
-async Task HandleMemorySearchAsync(InvocationContext context)
+async Task<int> HandleMemorySearchAsync(ParseResult parseResult, CancellationToken ct)
 {
-    var ct = context.GetCancellationToken();
-    context.ExitCode = await RunAsync(async () =>
+    return await RunAsync(async () =>
     {
-        var root = ResolveRoot(context.ParseResult.GetValueForOption(rootOption));
-        var query = context.ParseResult.GetValueForArgument(memorySearchQueryArgument);
-        var projectIdText = context.ParseResult.GetValueForOption(memorySearchProjectOption);
+        var root = ResolveRoot(parseResult.GetValue(rootOption));
+        var query = parseResult.GetValue(memorySearchQueryArgument)!;
+        var projectIdText = parseResult.GetValue(memorySearchProjectOption);
 
         await RunWithProviderAsync(root, migrate: true, ct, async provider =>
         {
@@ -514,15 +520,14 @@ async Task HandleMemorySearchAsync(InvocationContext context)
     }).ConfigureAwait(false);
 }
 
-async Task HandleGraphAsync(InvocationContext context)
+async Task<int> HandleGraphAsync(ParseResult parseResult, CancellationToken ct)
 {
-    var ct = context.GetCancellationToken();
-    context.ExitCode = await RunAsync(async () =>
+    return await RunAsync(async () =>
     {
-        var root = ResolveRoot(context.ParseResult.GetValueForOption(rootOption));
-        var symbolText = context.ParseResult.GetValueForArgument(graphSymbolArgument);
-        var projectIdText = context.ParseResult.GetValueForOption(graphProjectOption);
-        var hops = context.ParseResult.GetValueForOption(graphHopsOption);
+        var root = ResolveRoot(parseResult.GetValue(rootOption));
+        var symbolText = parseResult.GetValue(graphSymbolArgument)!;
+        var projectIdText = parseResult.GetValue(graphProjectOption);
+        var hops = parseResult.GetValue(graphHopsOption);
 
         await RunWithProviderAsync(root, migrate: true, ct, async provider =>
         {
@@ -544,13 +549,12 @@ async Task HandleGraphAsync(InvocationContext context)
     }).ConfigureAwait(false);
 }
 
-async Task HandleDoctorAsync(InvocationContext context)
+async Task<int> HandleDoctorAsync(ParseResult parseResult, CancellationToken ct)
 {
-    var ct = context.GetCancellationToken();
-    context.ExitCode = await RunAsync(async () =>
+    return await RunAsync(async () =>
     {
-        var root = ResolveRoot(context.ParseResult.GetValueForOption(rootOption));
-        var projectIdText = context.ParseResult.GetValueForOption(doctorProjectOption);
+        var root = ResolveRoot(parseResult.GetValue(rootOption));
+        var projectIdText = parseResult.GetValue(doctorProjectOption);
 
         Console.WriteLine($"Context Platform doctor — root: {root}");
         Console.WriteLine();
