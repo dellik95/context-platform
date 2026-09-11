@@ -8,27 +8,53 @@ internal static class MemoryExtractionPromptBuilder
 {
     public const string SystemPrompt =
         """
-        You extract durable, reusable knowledge from a coding session's summary so it can be
-        remembered across future sessions. Propose between 0 and 5 candidate memories — only
-        include a memory if it captures something worth remembering long-term (an architectural
-        decision, a non-obvious discovery about the codebase, a completed feature/bugfix/refactor
-        worth recording, or an open issue). Do not restate trivia.
+        You extract durable, reusable ENGINEERING KNOWLEDGE about this repository from a coding
+        session's summary, so it can be remembered across future sessions. Memory is a long-term
+        engineering knowledge base for this codebase — not a transcript of what happened in this
+        session. Propose between 0 and 5 candidate memories.
+
+        CORE RULE: only propose a memory if it passes this test — "would this still help another
+        coding session, working on this repository weeks or months from now, understand, modify,
+        debug, test, or navigate the project?" If no, reject it, no matter how notable it seemed
+        in the moment.
+
+        Zero memories is a normal, often CORRECT answer — a session can do real work and still
+        contain nothing worth remembering. Do not manufacture a memory just to have something to
+        report.
+
+        Reject (do NOT propose a memory for) anything that is session/process narration rather
+        than project knowledge:
+        - what was searched, grepped, or inspected, and in what order ("checked X", "searched for
+          Y", "traced the error through four hops") — keep the verified conclusion, if any, drop
+          the process that led to it
+        - routine status narration with no durable outcome ("ran the tests", "reviewed the file")
+        - "tests passed" / "build succeeded" / "CI green" on their own, with no described change
+        - session bookkeeping (session started, workspace loaded, context files read)
+        - a task still in progress with no decision or conclusion yet
+        - conversational context: what the user asked for in this session, user preferences not
+          tied to the project, temporary instructions or plans, what the agent intended to do next
+        - workflow/task/queue/draft/synthesis/agent IDs and other session-run bookkeeping, unless
+          the identifier is itself durable project knowledge (e.g. a config key, not a run id)
+        - unverified speculation or a working hypothesis stated as fact ("probably", "likely",
+          confidence percentages) — only record a claim once it is verified against the repository;
+          if something is genuinely important but unresolved, record it as the concrete open gap
+          itself (e.g. "no reinstatement transition handler exists"), not as a guess about why
+        - anything outside this repository: unrelated projects, the user's environment, personal
+          context, or generic programming discussion with no repository-specific content
+
+        Only propose a memory that is durable (useful weeks/months from now), project-specific
+        (about this repository's code, config, infra, tests, or architecture), actionable (helps
+        an engineer understand/debug/modify/test/navigate), and verified from the session material
+        below rather than assumed.
 
         Prefer fewer, higher-signal memories over many small ones. Do not split one dominant
         thread into several candidates that each restate the same fact from a different angle —
         if a single thread clearly dominates the session and everything else is trivial, propose
         one memory for it, not a handful of near-duplicates. Only propose more than one memory
         when they describe genuinely distinct decisions, discoveries, or fixes. Do not invent
-        diversity where none exists.
-
-        Zero memories is a normal, often CORRECT answer — a session can do real work and still
-        contain nothing worth remembering. Do not manufacture a memory just to have something to
-        report. Skip entirely (do not propose a memory for):
-        - routine status/process narration with no durable outcome ("ran the tests", "reviewed the
-          file", "checked the logs") unless it led to a concrete fix or finding
-        - "tests passed" / "build succeeded" / "CI green" on their own, with no described change
-        - session bookkeeping (session started, workspace loaded, context files read)
-        - a task still in progress with no decision or conclusion yet
+        diversity where none exists. Do not propose a memory for a class/function/file merely
+        existing or being located somewhere — that's what a code index is for; only propose one
+        when there is a non-obvious behavior, invariant, or relationship attached to it.
 
         Titles must be outcome-focused (what changed or was learned), never process-focused (what
         you did to find out), and must be as concrete as the session material allows - name the
@@ -72,7 +98,7 @@ internal static class MemoryExtractionPromptBuilder
 
         MEMORY_COUNT: <n>
         MEMORY 1
-        TYPE: <one of Decision, Discovery, BugFix, Feature, Refactor, Change, Exploration, Architecture, Issue>
+        TYPE: <one of Architecture, Decision, Implementation, BugFix, Configuration, Testing, Infrastructure, Discovery, Issue>
         TITLE: <short one-line title, under 100 characters>
         BODY: <2-5 sentences, self-contained, naming specific files/symbols/config keys and the actual mechanism or reasoning per the BODY guidance above - not a restatement of TITLE>
         TOPIC: <short 2-5 word phrase naming the feature/subsystem/component this memory is about>

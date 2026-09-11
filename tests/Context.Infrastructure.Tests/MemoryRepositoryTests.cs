@@ -76,6 +76,56 @@ public sealed class MemoryRepositoryTests : IDisposable
         results.Should().HaveCount(2);
     }
 
+    [Fact]
+    public async Task SearchAsync_round_trips_memories_using_the_newly_appended_MemoryType_values()
+    {
+        using var db = CreateContext();
+        await db.Database.MigrateAsync();
+
+        var project = new Project { Id = Guid.NewGuid(), Name = "P1", RootPath = "/repo1", CreatedAt = DateTimeOffset.UtcNow };
+        db.Projects.Add(project);
+        var configMemory = new Memory
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = project.Id,
+            Type = MemoryType.Configuration,
+            Title = "Microsoft.OpenApi pinned to 2.7.5 to fix CVE-2026-49451",
+            Body = "Directory.Packages.props transitively pins Microsoft.OpenApi to 2.7.5 via " +
+                "CentralPackageTransitivePinningEnabled; Microsoft.AspNetCore.OpenApi 10.0.0 otherwise " +
+                "pulls the vulnerable 2.0.0.",
+            Topic = "NuGet dependency pinning",
+            Confidence = 0.95,
+            Tier = MemoryTier.Working,
+            CreatedAt = DateTimeOffset.UtcNow,
+            LastReinforcedAt = DateTimeOffset.UtcNow,
+        };
+        var infraMemory = new Memory
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = project.Id,
+            Type = MemoryType.Infrastructure,
+            Title = "Microsoft.Data.Sqlite central pin bumped 9.0.0 to 10.0.12",
+            Body = "The stale 9.0.0 pin broke restore (NU1109) for every project pulling " +
+                "Microsoft.SemanticKernel.Connectors.SqliteVec transitively, since that package requires >= 9.0.10.",
+            Topic = "NuGet dependency pinning",
+            Confidence = 0.95,
+            Tier = MemoryTier.Working,
+            CreatedAt = DateTimeOffset.UtcNow,
+            LastReinforcedAt = DateTimeOffset.UtcNow,
+        };
+        db.Memories.AddRange(configMemory, infraMemory);
+        await db.SaveChangesAsync();
+
+        using var readDb = CreateContext();
+        var repository = new MemoryRepository(readDb);
+
+        var results = await repository.SearchAsync(project.Id, string.Empty, includeSuperseded: false, CancellationToken.None, topic: "NuGet dependency pinning");
+
+        results.Should().HaveCount(2);
+        results.Should().ContainSingle(m => m.Id == configMemory.Id && m.Type == MemoryType.Configuration);
+        results.Should().ContainSingle(m => m.Id == infraMemory.Id && m.Type == MemoryType.Infrastructure);
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();

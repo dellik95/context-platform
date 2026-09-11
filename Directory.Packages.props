@@ -1,13 +1,27 @@
 <Project>
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
     <!-- EF Core / SQLite -->
     <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.0" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.0" />
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+    <!-- 10.0.12, not 9.0.0: Microsoft.SemanticKernel.Connectors.SqliteVec 1.74.0-preview requires
+         Microsoft.Data.Sqlite >= 9.0.10, and the stale 9.0.0 pin caused an NU1109 package-downgrade
+         restore error for every project that pulls SqliteVec transitively. -->
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+    <!-- Transitive-pin overrides for CVEs in EF Core Sqlite/Design's own dependencies (NU1903):
+         SQLitePCLRaw.lib.e_sqlite3 2.1.11 -> CVE-2025-6965 (needs SQLite >= 3.50.2);
+         System.Security.Cryptography.Xml 9.0.0 -> CVE-2026-26171 (fixed 9.0.15/10.0.6+). -->
+    <PackageVersion Include="SQLitePCLRaw.core" Version="3.0.5" />
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
+    <PackageVersion Include="SQLitePCLRaw.provider.e_sqlite3" Version="3.0.5" />
+    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.12" />
+    <!-- Transitive pin: Microsoft.AspNetCore.OpenApi 10.0.0 pulls Microsoft.OpenApi 2.0.0 ->
+         CVE-2026-49451 (circular schema reference causes stack-overflow crash), fixed 2.7.5+. -->
+    <PackageVersion Include="Microsoft.OpenApi" Version="2.7.5" />
     <!-- ASP.NET / SignalR client (server libs come from the shared framework) -->
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.0" />
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.0" />

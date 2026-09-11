@@ -155,7 +155,7 @@ public sealed class ContextMcpTools(
         [Description("The memory's main content: 2-5 self-contained sentences naming the SPECIFIC files (by path), " +
             "classes/functions/symbols (by name), and config keys actually involved — never a generic stand-in " +
             "('a service', 'some files'). State the actual mechanism/reasoning, not just that something happened.")] string content,
-        [Description("One of Decision, Discovery, BugFix, Feature, Refactor, Change, Exploration, Architecture, Issue, Instruction. Defaults to Instruction.")] string? type = null,
+        [Description("One of Decision, Discovery, BugFix, Architecture, Issue, Instruction, Implementation, Configuration, Testing, Infrastructure, Feature, Refactor, Change, Exploration. Defaults to Instruction.")] string? type = null,
         [Description("Short one-line title (under 100 chars), outcome-focused (what changed/was learned, not what you did to find out). " +
             "Omit to auto-derive one from the first sentence of content.")] string? title = null,
         [Description("Short 2-5 word phrase naming the feature/subsystem/component this memory is about (e.g. \"Auth middleware\", " +
