@@ -1,6 +1,6 @@
 import { CommonModule } from '@angular/common';
 import { Component, computed, effect, inject, signal } from '@angular/core';
-import { FormField, form, min } from '@angular/forms/signals';
+import { FormField, form, max, min } from '@angular/forms/signals';
 import { Router } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
@@ -46,6 +46,7 @@ export class SettingsPanelComponent {
   protected readonly installing = signal(false);
   protected readonly deleting = signal(false);
   private lastReindexScheduledAt: string | null = null;
+  private lastMemoryCompactionScheduledAt: string | null = null;
 
   protected readonly settingsModel = signal({
     embeddingProvider: 'noop',
@@ -66,6 +67,13 @@ export class SettingsPanelComponent {
     deleteSessionEventsAfterSummary: false,
     hookInvocationRetentionEnabled: true,
     hookInvocationRetentionDays: 30,
+    memoryCompactionEnabled: false,
+    memoryCompactionIntervalMinutes: 60,
+    memoryCompactionSimilarityThreshold: 0.9,
+    memoryConsolidationSimilarityThreshold: 0.92,
+    memoryConsolidationLowSimilarityThreshold: 0.8,
+    memoryConsolidationPromotionReinforcementThreshold: 2,
+    memoryConsolidationTopKForDedup: 3,
   });
 
   protected readonly settingsForm = form(this.settingsModel, (path) => {
@@ -76,6 +84,15 @@ export class SettingsPanelComponent {
     min(path.minEventsForMemoryExtraction, 1);
     min(path.staleSessionTimeoutMinutes, 1);
     min(path.hookInvocationRetentionDays, 1);
+    min(path.memoryCompactionIntervalMinutes, 1);
+    min(path.memoryCompactionSimilarityThreshold, 0.01);
+    max(path.memoryCompactionSimilarityThreshold, 1);
+    min(path.memoryConsolidationSimilarityThreshold, 0.01);
+    max(path.memoryConsolidationSimilarityThreshold, 1);
+    min(path.memoryConsolidationLowSimilarityThreshold, 0.01);
+    max(path.memoryConsolidationLowSimilarityThreshold, 1);
+    min(path.memoryConsolidationPromotionReinforcementThreshold, 1);
+    min(path.memoryConsolidationTopKForDedup, 1);
   });
 
   protected readonly showOllamaBaseUrl = computed(() => {
@@ -107,6 +124,7 @@ export class SettingsPanelComponent {
       }
       const settings = this.resource.value();
       this.lastReindexScheduledAt = settings.lastReindexScheduledAt;
+      this.lastMemoryCompactionScheduledAt = settings.lastMemoryCompactionScheduledAt;
       this.settingsModel.set({
         embeddingProvider: settings.embeddingProvider,
         llmProvider: settings.llmProvider,
@@ -126,6 +144,13 @@ export class SettingsPanelComponent {
         deleteSessionEventsAfterSummary: settings.deleteSessionEventsAfterSummary,
         hookInvocationRetentionEnabled: settings.hookInvocationRetentionDays > 0,
         hookInvocationRetentionDays: settings.hookInvocationRetentionDays > 0 ? settings.hookInvocationRetentionDays : 30,
+        memoryCompactionEnabled: settings.memoryCompactionIntervalMinutes > 0,
+        memoryCompactionIntervalMinutes: settings.memoryCompactionIntervalMinutes > 0 ? settings.memoryCompactionIntervalMinutes : 60,
+        memoryCompactionSimilarityThreshold: settings.memoryCompactionSimilarityThreshold,
+        memoryConsolidationSimilarityThreshold: settings.memoryConsolidationSimilarityThreshold,
+        memoryConsolidationLowSimilarityThreshold: settings.memoryConsolidationLowSimilarityThreshold,
+        memoryConsolidationPromotionReinforcementThreshold: settings.memoryConsolidationPromotionReinforcementThreshold,
+        memoryConsolidationTopKForDedup: settings.memoryConsolidationTopKForDedup,
       });
     });
 
@@ -168,6 +193,10 @@ export class SettingsPanelComponent {
     this.settingsModel.update((current) => ({ ...current, hookInvocationRetentionEnabled: event.checked }));
   }
 
+  protected setMemoryCompactionEnabled(event: MatSlideToggleChange): void {
+    this.settingsModel.update((current) => ({ ...current, memoryCompactionEnabled: event.checked }));
+  }
+
   protected save(): void {
     if (this.settingsForm().invalid()) {
       return;
@@ -191,6 +220,13 @@ export class SettingsPanelComponent {
       staleSessionTimeoutMinutes: raw.staleSessionCleanupEnabled ? raw.staleSessionTimeoutMinutes : 0,
       deleteSessionEventsAfterSummary: raw.deleteSessionEventsAfterSummary,
       hookInvocationRetentionDays: raw.hookInvocationRetentionEnabled ? raw.hookInvocationRetentionDays : 0,
+      memoryCompactionIntervalMinutes: raw.memoryCompactionEnabled ? raw.memoryCompactionIntervalMinutes : 0,
+      lastMemoryCompactionScheduledAt: this.lastMemoryCompactionScheduledAt,
+      memoryCompactionSimilarityThreshold: raw.memoryCompactionSimilarityThreshold,
+      memoryConsolidationSimilarityThreshold: raw.memoryConsolidationSimilarityThreshold,
+      memoryConsolidationLowSimilarityThreshold: raw.memoryConsolidationLowSimilarityThreshold,
+      memoryConsolidationPromotionReinforcementThreshold: raw.memoryConsolidationPromotionReinforcementThreshold,
+      memoryConsolidationTopKForDedup: raw.memoryConsolidationTopKForDedup,
     };
 
     this.saving.set(true);

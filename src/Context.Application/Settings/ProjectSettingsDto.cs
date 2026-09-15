@@ -65,4 +65,21 @@ public sealed record ProjectSettingsDto(
     DateTimeOffset? LastMemoryCompactionScheduledAt = null,
     // Cosine similarity (embedding of "{Title}\n{Body}") above which two memories are clustered
     // together for a single compaction merge.
-    double MemoryCompactionSimilarityThreshold = 0.90);
+    double MemoryCompactionSimilarityThreshold = 0.90,
+    // The four MemoryConsolidator knobs below govern real-time dedup on extraction (every
+    // memory_remember call and every ExtractMemory job), separate from the periodic
+    // MemoryCompaction* pass above. Defaults match MemoryConsolidator's former hardcoded consts,
+    // so an unconfigured project behaves exactly as before this became configurable.
+    //
+    // Best-match cosine similarity strictly above this reinforces the existing memory (or, if the
+    // LLM judges it contradictory, supersedes it) instead of inserting a near-duplicate.
+    double MemoryConsolidationSimilarityThreshold = 0.92,
+    // Best-match similarity at or above this (but at/below MemoryConsolidationSimilarityThreshold)
+    // triggers a restatement check against the nearest neighbors before inserting as new.
+    double MemoryConsolidationLowSimilarityThreshold = 0.80,
+    // Reinforcements a memory needs (via the paths above) before being promoted from Working to
+    // LongTerm tier.
+    int MemoryConsolidationPromotionReinforcementThreshold = 2,
+    // How many nearest existing memories are considered as merge/restatement candidates for one
+    // new candidate.
+    int MemoryConsolidationTopKForDedup = 3);

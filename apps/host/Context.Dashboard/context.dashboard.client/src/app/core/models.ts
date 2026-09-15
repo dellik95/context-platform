@@ -333,6 +333,13 @@ export interface ProjectSettingsDto {
   staleSessionTimeoutMinutes: number; // <= 0 disables auto-ending idle Active sessions
   deleteSessionEventsAfterSummary: boolean; // opt-in cleanup of raw events once folded into a summary chunk
   hookInvocationRetentionDays: number; // <= 0 disables cleanup of HookInvocations rows
+  memoryCompactionIntervalMinutes: number; // <= 0 disables periodic near-duplicate memory compaction
+  lastMemoryCompactionScheduledAt: string | null; // ISO-8601
+  memoryCompactionSimilarityThreshold: number; // (0, 1] -- cosine similarity to cluster memories for compaction
+  memoryConsolidationSimilarityThreshold: number; // (0, 1] -- above this, reinforce/supersede instead of inserting new
+  memoryConsolidationLowSimilarityThreshold: number; // (0, 1], <= memoryConsolidationSimilarityThreshold
+  memoryConsolidationPromotionReinforcementThreshold: number; // >= 1 -- reinforcements before promotion to LongTerm tier
+  memoryConsolidationTopKForDedup: number; // >= 1 -- nearest existing memories considered per new candidate
 }
 
 // Response of POST /api/projects/{id}/claude/install.

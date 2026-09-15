@@ -40,6 +40,31 @@ public static class ProjectSettingsValidator
             errors.Add($"{nameof(dto.MemoryCompactionSimilarityThreshold)} must be in (0, 1].");
         }
 
+        if (dto.MemoryConsolidationSimilarityThreshold <= 0 || dto.MemoryConsolidationSimilarityThreshold > 1)
+        {
+            errors.Add($"{nameof(dto.MemoryConsolidationSimilarityThreshold)} must be in (0, 1].");
+        }
+
+        if (dto.MemoryConsolidationLowSimilarityThreshold <= 0 || dto.MemoryConsolidationLowSimilarityThreshold > 1)
+        {
+            errors.Add($"{nameof(dto.MemoryConsolidationLowSimilarityThreshold)} must be in (0, 1].");
+        }
+
+        if (dto.MemoryConsolidationLowSimilarityThreshold > dto.MemoryConsolidationSimilarityThreshold)
+        {
+            errors.Add($"{nameof(dto.MemoryConsolidationLowSimilarityThreshold)} must be less than or equal to {nameof(dto.MemoryConsolidationSimilarityThreshold)}.");
+        }
+
+        if (dto.MemoryConsolidationPromotionReinforcementThreshold < 1)
+        {
+            errors.Add($"{nameof(dto.MemoryConsolidationPromotionReinforcementThreshold)} must be at least 1.");
+        }
+
+        if (dto.MemoryConsolidationTopKForDedup < 1)
+        {
+            errors.Add($"{nameof(dto.MemoryConsolidationTopKForDedup)} must be at least 1.");
+        }
+
         return errors;
     }
 }

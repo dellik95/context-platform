@@ -35,13 +35,9 @@ public sealed class MemoryConsolidator(
     IMemoryStore memoryStore,
     IProviderResolver providerResolver,
     IUsageRecorder usageRecorder,
+    IMemoryConsolidationSettingsProvider settingsProvider,
     ILogger<MemoryConsolidator>? logger = null) : IMemoryConsolidator
 {
-    private const double SimilarityThreshold = 0.92;
-    private const double LowSimilarityThreshold = 0.80;
-    private const int PromotionReinforcementThreshold = 2;
-    private const int TopKForDedup = 3;
-
     // Same pattern as EmbeddingLookupAdapter.InteractiveOptions: flags an interactive caller's
     // embedding call so OllamaEmbeddingGeneratorDecorator skips its concurrency gate instead of
     // queuing behind a background EmbedChunk backlog it has nothing to do with.
@@ -60,6 +56,7 @@ public sealed class MemoryConsolidator(
     {
         ct.ThrowIfCancellationRequested();
 
+        var settings = await settingsProvider.GetAsync(projectId, ct).ConfigureAwait(false);
         var chatClient = await providerResolver.GetChatClientAsync(projectId, ct).ConfigureAwait(false);
         var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
         var now = DateTimeOffset.UtcNow;
@@ -69,17 +66,17 @@ public sealed class MemoryConsolidator(
             .ConfigureAwait(false);
         var embedding = embeddingResult.Vector.ToArray();
 
-        var topMatches = FindTopMatches(embedding, existing, TopKForDedup);
+        var topMatches = FindTopMatches(embedding, existing, settings.TopKForDedup);
         var bestMatch = topMatches.Count > 0 ? topMatches[0] : ((ExistingMemoryWithEmbedding Existing, double Similarity)?)null;
 
-        if (bestMatch is { Similarity: > SimilarityThreshold })
+        if (bestMatch is { } best0 && best0.Similarity > settings.SimilarityThreshold)
         {
-            var oldMemory = bestMatch.Value.Existing.Memory;
+            var oldMemory = best0.Existing.Memory;
             var consistent = await IsRestatementAsync(oldMemory, candidate, projectId, sessionId, chatClient, ct).ConfigureAwait(false);
 
             if (consistent)
             {
-                await ReinforceAsync(oldMemory, now, ct).ConfigureAwait(false);
+                await ReinforceAsync(oldMemory, now, settings.PromotionReinforcementThreshold, ct).ConfigureAwait(false);
                 return new ConsolidationResult(oldMemory, ConsolidationOutcome.Reinforced);
             }
 
@@ -90,17 +87,19 @@ public sealed class MemoryConsolidator(
             return new ConsolidationResult(superseding, ConsolidationOutcome.Superseded);
         }
 
-        if (bestMatch is { Similarity: >= LowSimilarityThreshold })
+        if (bestMatch is { } best1 && best1.Similarity >= settings.LowSimilarityThreshold)
         {
             // Not similar enough to auto-reinforce outright, but close enough that it might be
             // the same fact in different words - walk the near-neighbors (nearest first) and
             // ask the same consistency checker used above; the first one judged a restatement
             // wins, so this doesn't insert a near-duplicate just because the top match's exact
             // wording happened not to match well enough to be judged the same thing.
-            var restated = await FindRestatedMatchAsync(topMatches, candidate, projectId, sessionId, chatClient, ct).ConfigureAwait(false);
+            var restated = await FindRestatedMatchAsync(
+                topMatches, candidate, projectId, sessionId, chatClient,
+                settings.LowSimilarityThreshold, settings.SimilarityThreshold, ct).ConfigureAwait(false);
             if (restated is not null)
             {
-                await ReinforceAsync(restated, now, ct).ConfigureAwait(false);
+                await ReinforceAsync(restated, now, settings.PromotionReinforcementThreshold, ct).ConfigureAwait(false);
                 return new ConsolidationResult(restated, ConsolidationOutcome.Reinforced);
             }
         }
@@ -112,8 +111,8 @@ public sealed class MemoryConsolidator(
     }
 
     /// <summary>Checks every <paramref name="matches"/> candidate in the
-    /// [<see cref="LowSimilarityThreshold"/>, <see cref="SimilarityThreshold"/>] band for a
-    /// restatement judgment concurrently (each check is a synchronous LLM round-trip, and
+    /// [<paramref name="lowSimilarityThreshold"/>, <paramref name="similarityThreshold"/>] band
+    /// for a restatement judgment concurrently (each check is a synchronous LLM round-trip, and
     /// TopKForDedup is small/fixed, so firing them together instead of one-by-one materially cuts
     /// memory_remember's latency), then returns the nearest one judged a restatement — same
     /// winner <c>matches</c>' nearest-first sequential walk would have picked, just without paying
@@ -124,10 +123,12 @@ public sealed class MemoryConsolidator(
         Guid projectId,
         Guid? sessionId,
         IChatClient chatClient,
+        double lowSimilarityThreshold,
+        double similarityThreshold,
         CancellationToken ct)
     {
         var eligible = matches
-            .Where(match => match.Similarity >= LowSimilarityThreshold && match.Similarity <= SimilarityThreshold)
+            .Where(match => match.Similarity >= lowSimilarityThreshold && match.Similarity <= similarityThreshold)
             .ToList();
 
         var verdicts = await Task.WhenAll(
@@ -151,11 +152,11 @@ public sealed class MemoryConsolidator(
             ? Task.FromResult(MemoryConsistencyChecker.HeuristicIsConsistent(oldMemory, candidate))
             : CheckConsistencyViaLlmAsync(oldMemory, candidate, projectId, sessionId, chatClient, ct);
 
-    private async Task ReinforceAsync(Context.Domain.Entities.Memory memory, DateTimeOffset now, CancellationToken ct)
+    private async Task ReinforceAsync(Context.Domain.Entities.Memory memory, DateTimeOffset now, int promotionReinforcementThreshold, CancellationToken ct)
     {
         memory.ReinforcementCount++;
         memory.LastReinforcedAt = now;
-        if (memory.Pinned || memory.ReinforcementCount >= PromotionReinforcementThreshold)
+        if (memory.Pinned || memory.ReinforcementCount >= promotionReinforcementThreshold)
         {
             memory.Tier = MemoryTier.LongTerm;
         }

@@ -150,6 +150,11 @@ public static class ServiceCollectionExtensions
         // Context.Infrastructure/EF Core directly.
         services.AddScoped<Context.Memory.Abstractions.IUsageRecorder, UsageRecorderAdapter>();
 
+        // Same seam pattern again: MemoryConsolidator reads its per-project thresholds through
+        // this instead of depending on IProjectSettingsService directly (Context.Memory can't
+        // reference Context.Application - see the adapter's remarks).
+        services.AddScoped<Context.Memory.Abstractions.IMemoryConsolidationSettingsProvider, MemoryConsolidationSettingsProviderAdapter>();
+
         // ContextPackBuilder is registered by AddContextRetrieval as the singleton
         // IContextPackBuilder implementation. ContextEngine needs the concrete type directly (see
         // its own remarks) to reach the richer BuildAsync overload that accepts historical

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Context.Application;
 using Context.Application.Notifications;
 using Context.Claude.Hooks;
@@ -165,11 +166,123 @@ public static class HookEndpoints
         IHookInvocationNotifier hookNotifier,
         CancellationToken ct)
     {
-        await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.PostCompact, input, ct).ConfigureAwait(false);
+        // input alone only ever carries session_id/trigger/cwd -- the real compaction summary
+        // text lives in the transcript file at input.TranscriptPath, so this reads that file to
+        // surface it in the recorded invocation instead of persisting input verbatim.
+        var compactSummary = await TryExtractCompactSummaryAsync(input.TranscriptPath, ct).ConfigureAwait(false);
+        var recordedPayload = new PostCompactRecordedPayload(input.SessionId, input.Trigger, input.Cwd, input.TranscriptPath, compactSummary);
+        await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.PostCompact, recordedPayload, ct).ConfigureAwait(false);
 
         var sessionId = await GetOrStartSessionAsync(engine, project, sessionMap, input.SessionId, ct).ConfigureAwait(false);
         await engine.RequestSessionSummaryAsync(project.ProjectId, sessionId, ct).ConfigureAwait(false);
         return Results.Ok(new HookOutput(AdditionalContext: null));
+    }
+
+    /// <summary>What actually gets persisted/broadcast for a PostCompact invocation -- same
+    /// snake_case wire naming as <see cref="PostCompactInput"/> (and every other hook DTO) so the
+    /// dashboard's raw-payload viewer stays consistent across hook types, plus the transcript-derived
+    /// summary <see cref="PostCompactInput"/> itself never carries.</summary>
+    private sealed record PostCompactRecordedPayload(
+        [property: JsonPropertyName("session_id")] string SessionId,
+        [property: JsonPropertyName("trigger")] string Trigger,
+        [property: JsonPropertyName("cwd")] string? Cwd,
+        [property: JsonPropertyName("transcript_path")] string? TranscriptPath,
+        [property: JsonPropertyName("compact_summary")] string? CompactSummary);
+
+    private const int CompactSummaryMaxLinesToScan = 200;
+    private const int CompactSummaryMaxBytesToScan = 2 * 1024 * 1024;
+
+    /// <summary>
+    /// Claude Code's own compact-boundary summary text, pulled straight from the session
+    /// transcript rather than regenerated from stored SessionEvents -- the transcript's
+    /// <c>{"type":"user","isCompactSummary":true,"message":{"content":"..."}}</c> line right
+    /// after the <c>compact_boundary</c> marker. Only scans the tail of the file (compaction just
+    /// happened, so that line is always near EOF), keeping this bounded regardless of transcript
+    /// size -- this handler must return well inside the hook script's 2s curl timeout. Fails open
+    /// like every other Try*Async helper in this file: a missing/unreadable/malformed transcript
+    /// just means no summary, never a broken hook response.
+    /// </summary>
+    private static async Task<string?> TryExtractCompactSummaryAsync(string? transcriptPath, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(transcriptPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            var lines = await ReadTailLinesAsync(transcriptPath, CompactSummaryMaxLinesToScan, CompactSummaryMaxBytesToScan, ct).ConfigureAwait(false);
+            for (var i = lines.Count - 1; i >= 0; i--)
+            {
+                var summary = TryParseCompactSummaryLine(lines[i]);
+                if (summary is not null)
+                {
+                    return summary;
+                }
+            }
+        }
+        catch
+        {
+            return null;
+        }
+
+        return null;
+    }
+
+    private static string? TryParseCompactSummaryLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("isCompactSummary", out var flag) || flag.ValueKind != JsonValueKind.True)
+            {
+                return null;
+            }
+
+            return root.TryGetProperty("message", out var message) &&
+                message.TryGetProperty("content", out var content) &&
+                content.ValueKind == JsonValueKind.String
+                ? content.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            // A truncated line at the tail-read boundary (or any other non-JSON line in the
+            // transcript) must not abort the scan of the remaining lines.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Up to <paramref name="maxLines"/> complete lines from the end of <paramref name="path"/>,
+    /// scanning at most <paramref name="maxBytes"/> backward from EOF instead of reading the whole
+    /// file. Returned oldest-first (the last element is the file's final line); the first segment
+    /// of a partial tail read is dropped since it may be a truncated line, not valid JSON.
+    /// </summary>
+    private static async Task<List<string>> ReadTailLinesAsync(string path, int maxLines, int maxBytes, CancellationToken ct)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        var length = stream.Length;
+        var readLength = (int)Math.Min(length, maxBytes);
+        if (readLength == 0)
+        {
+            return [];
+        }
+
+        stream.Seek(-readLength, SeekOrigin.End);
+        var buffer = new byte[readLength];
+        await stream.ReadExactlyAsync(buffer, ct).ConfigureAwait(false);
+
+        var text = Encoding.UTF8.GetString(buffer);
+        var lines = text.Split('\n');
+        var start = readLength < length ? 1 : 0;
+        return lines.Skip(start).Where(l => l.Length > 0).TakeLast(maxLines).ToList();
     }
 
     /// <summary>
