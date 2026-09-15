@@ -14,6 +14,7 @@ public class MemoryConfiguration : IEntityTypeConfiguration<Memory>
         builder.Property(m => m.Title).IsRequired().HasMaxLength(512);
         builder.Property(m => m.Body).IsRequired();
         builder.Property(m => m.Topic).HasMaxLength(100);
+        builder.Property(m => m.ScopePath).HasMaxLength(400);
         builder.Property(m => m.Confidence).IsRequired().HasDefaultValue(0.7);
         builder.Property(m => m.Tier).IsRequired();
         builder.Property(m => m.CreatedAt).IsRequired();
@@ -21,6 +22,7 @@ public class MemoryConfiguration : IEntityTypeConfiguration<Memory>
 
         builder.HasIndex(m => new { m.ProjectId, m.Type });
         builder.HasIndex(m => new { m.ProjectId, m.Topic });
+        builder.HasIndex(m => new { m.ProjectId, m.ScopePath });
         builder.HasIndex(m => m.SupersededById);
 
         builder.HasOne<Project>()

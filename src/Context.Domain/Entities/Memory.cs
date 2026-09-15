@@ -14,6 +14,12 @@ public class Memory
     // (which is specific to this one memory) so that memories about the same subject, extracted
     // across different sessions, share the same Topic and can be found/grouped together.
     public string? Topic { get; set; }
+    // Repo-relative directory/module path this memory is scoped to (e.g.
+    // "src/Context.Application/Indexing") — structured and hierarchical, unlike Topic (a short
+    // human-readable phrase) or FilesReadJson/FilesModifiedJson (exact file lists), so memories can
+    // be filtered by "everything under this component" without needing an LLM-authored Topic match
+    // or scanning every file list.
+    public string? ScopePath { get; set; }
     public string? FactsJson { get; set; }
     // JSON array drawn from a fixed taxonomy: how-it-works, why-it-exists, what-changed,
     // problem-solution, gotcha, pattern, trade-off — lets a future agent filter memories by kind

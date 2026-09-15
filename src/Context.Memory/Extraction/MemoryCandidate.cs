@@ -13,6 +13,10 @@ namespace Context.Memory.Extraction;
 /// <see cref="MemoryExtractionPromptBuilder"/>'s CONCEPTS documentation) — e.g. "gotcha", "pattern".</param>
 /// <param name="FilesRead">Files this specific memory is about but that weren't modified (read for context/investigation).</param>
 /// <param name="FilesModified">Files this specific memory is about that were actually changed.</param>
+/// <param name="ScopePath">Repo-relative directory/module path this memory is scoped to (see
+/// <see cref="Context.Domain.Entities.Memory.ScopePath"/>) — structured and hierarchical, unlike
+/// <paramref name="Topic"/> (a short human-readable phrase). Null when the LLM omitted it or a
+/// heuristic couldn't derive one.</param>
 public sealed record MemoryCandidate(
     MemoryType Type,
     string Title,
@@ -22,4 +26,5 @@ public sealed record MemoryCandidate(
     IReadOnlyList<string> Concepts,
     IReadOnlyList<string> FilesRead,
     IReadOnlyList<string> FilesModified,
-    string? Topic = null);
+    string? Topic = null,
+    string? ScopePath = null);

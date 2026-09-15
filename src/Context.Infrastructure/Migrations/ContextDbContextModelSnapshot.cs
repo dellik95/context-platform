@@ -15,7 +15,7 @@ namespace Context.Infrastructure.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
+            modelBuilder.HasAnnotation("ProductVersion", "10.0.12");
 
             modelBuilder.Entity("Context.Domain.Entities.Chunk", b =>
                 {
@@ -379,6 +379,10 @@ namespace Context.Infrastructure.Migrations
                     b.Property<int>("ReinforcementCount")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("ScopePath")
+                        .HasMaxLength(400)
+                        .HasColumnType("TEXT");
+
                     b.Property<Guid?>("SupersededById")
                         .HasColumnType("TEXT");
 
@@ -402,6 +406,8 @@ namespace Context.Infrastructure.Migrations
                     b.HasIndex("CreatedFromSessionId");
 
                     b.HasIndex("SupersededById");
+
+                    b.HasIndex("ProjectId", "ScopePath");
 
                     b.HasIndex("ProjectId", "Topic");
 
