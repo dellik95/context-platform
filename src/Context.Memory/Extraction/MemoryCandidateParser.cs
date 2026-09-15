@@ -37,6 +37,8 @@ internal static partial class MemoryCandidateParser
         {
             if (type is not null && !string.IsNullOrWhiteSpace(title))
             {
+                var readList = filesRead.ToList();
+                var modifiedList = filesModified.ToList();
                 results.Add(new MemoryCandidate(
                     type.Value,
                     title.Trim(),
@@ -44,9 +46,10 @@ internal static partial class MemoryCandidateParser
                     confidence,
                     facts.ToList(),
                     concepts.ToList(),
-                    filesRead.ToList(),
-                    filesModified.ToList(),
-                    string.IsNullOrWhiteSpace(topic) ? null : topic.Trim()));
+                    readList,
+                    modifiedList,
+                    string.IsNullOrWhiteSpace(topic) ? null : topic.Trim(),
+                    ScopePathHeuristics.DeriveFromFiles(modifiedList, readList)));
             }
 
             type = null;

@@ -348,7 +348,8 @@ public sealed class ContextEngine(
             Concepts: concepts ?? [],
             FilesRead: filesRead ?? [],
             FilesModified: filesModified ?? [],
-            Topic: string.IsNullOrWhiteSpace(topic) ? null : topic.Trim());
+            Topic: string.IsNullOrWhiteSpace(topic) ? null : topic.Trim(),
+            ScopePath: Context.Memory.Extraction.ScopePathHeuristics.DeriveFromFiles(filesModified ?? [], filesRead ?? []));
 
         var existing = (await memoryStore.GetExistingWithEmbeddingsAsync(projectId, ct).ConfigureAwait(false)).ToList();
         var result = await memoryConsolidator.ConsolidateAsync(projectId, sessionId: null, candidate, existing, isInteractive: true, ct).ConfigureAwait(false);

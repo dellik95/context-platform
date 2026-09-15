@@ -63,7 +63,8 @@ internal static class MemoryCandidateHeuristics
         var facts = files.Take(MaxFacts).Select(f => $"Changed {f}").ToList();
         // This candidate IS specifically about these files (that's its whole content), unlike the
         // Decision/Discovery/Issue candidates above — FilesModified is accurate here, not a guess.
-        candidates.Add(new MemoryCandidate(MemoryType.Change, title, body, 0.5, facts, [], [], files));
+        candidates.Add(new MemoryCandidate(MemoryType.Change, title, body, 0.5, facts, [], [], files,
+            ScopePath: ScopePathHeuristics.DeriveFromFiles(files, [])));
     }
 
     private static IReadOnlyList<string> ParseChangedFiles(string? changedFilesJson)

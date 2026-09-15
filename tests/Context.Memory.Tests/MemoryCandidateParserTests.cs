@@ -74,4 +74,45 @@ public class MemoryCandidateParserTests
         candidates[1].Type.Should().Be(MemoryType.BugFix);
         candidates[1].Topic.Should().Be("Embedding pipeline concurrency");
     }
+
+    [Fact]
+    public void Parse_derives_ScopePath_from_the_common_directory_of_FILES_MODIFIED()
+    {
+        const string response = """
+            MEMORY_COUNT: 1
+            MEMORY 1
+            TYPE: BugFix
+            TITLE: Fixed retry backoff
+            BODY: JobDispatcher now caps retry backoff at 30s.
+            FILES_MODIFIED:
+            - src/Context.Application/Jobs/JobDispatcher.cs
+            - src/Context.Application/Jobs/JobRetryPolicy.cs
+            CONFIDENCE: 0.8
+            END_MEMORY
+            """;
+
+        var candidates = MemoryCandidateParser.Parse(response);
+
+        candidates.Should().ContainSingle();
+        candidates[0].ScopePath.Should().Be("src/Context.Application/Jobs");
+    }
+
+    [Fact]
+    public void Parse_leaves_ScopePath_null_when_no_files_are_listed()
+    {
+        const string response = """
+            MEMORY_COUNT: 1
+            MEMORY 1
+            TYPE: Decision
+            TITLE: Some decision
+            BODY: A concrete, specific body sentence.
+            CONFIDENCE: 0.7
+            END_MEMORY
+            """;
+
+        var candidates = MemoryCandidateParser.Parse(response);
+
+        candidates.Should().ContainSingle();
+        candidates[0].ScopePath.Should().BeNull();
+    }
 }
