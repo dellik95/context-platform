@@ -76,7 +76,8 @@ public sealed class MemoryStoreAdapter(
 
         var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(memory.ProjectId, ct).ConfigureAwait(false);
         await memoryVectorIndex.UpsertAsync(
-            memory.Id, memory.ProjectId, embeddingGenerator.GetProviderModelKey(), embedding, ct).ConfigureAwait(false);
+            memory.Id, memory.ProjectId, memory.Type.ToString(), memory.Topic,
+            embeddingGenerator.GetProviderModelKey(), embedding, ct).ConfigureAwait(false);
     }
 
     public async Task MarkSupersededAsync(Guid oldMemoryId, Guid newMemoryId, CancellationToken ct)

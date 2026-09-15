@@ -136,7 +136,7 @@ public sealed class ContextEngine(
         var lexicalHits = await memoryRepository.SearchAsync(projectId, query, includeSuperseded, ct, topic).ConfigureAwait(false);
         var lexicalIds = lexicalHits.Select(m => m.Id).ToHashSet();
 
-        var semanticScores = await SemanticSearchAsync(projectId, query, ct).ConfigureAwait(false);
+        var semanticScores = await SemanticSearchAsync(projectId, query, topic, ct).ConfigureAwait(false);
 
         var byId = lexicalHits.ToDictionary(m => m.Id);
         var missingIds = semanticScores.Keys.Where(id => !byId.ContainsKey(id)).ToList();
@@ -145,15 +145,10 @@ public sealed class ContextEngine(
             var fetched = await memoryRepository.GetByIdsAsync(missingIds, ct).ConfigureAwait(false);
             foreach (var memory in fetched)
             {
-                // The vector index only filters by ProjectId (see SqliteMemoryVectorIndex.SearchAsync) —
-                // apply the same includeSuperseded/topic filters the lexical pass already enforced,
-                // so a semantic-only hit can't bypass them.
+                // The vector index now filters by topic too (see SqliteMemoryVectorIndex.SearchAsync),
+                // but still only by ProjectId/Topic -- includeSuperseded still needs enforcing here
+                // so a semantic-only hit can't bypass it.
                 if (!includeSuperseded && memory.SupersededById is not null)
-                {
-                    continue;
-                }
-
-                if (topic is { } t && !string.Equals(memory.Topic, t, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -173,7 +168,7 @@ public sealed class ContextEngine(
         return [.. byId.Values.OrderByDescending(m => CombinedScore(m, lexicalIds, normalizedSemantic, now))];
     }
 
-    private async Task<Dictionary<Guid, double>> SemanticSearchAsync(Guid projectId, string query, CancellationToken ct)
+    private async Task<Dictionary<Guid, double>> SemanticSearchAsync(Guid projectId, string query, string? topic, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(query))
         {
@@ -184,7 +179,7 @@ public sealed class ContextEngine(
         var embeddingResult = await embeddingGenerator.GenerateAsync(query, InteractiveEmbeddingOptions, ct).ConfigureAwait(false);
 
         var hits = await memoryVectorIndex.SearchAsync(
-            projectId, embeddingGenerator.GetProviderModelKey(), embeddingResult.Vector.ToArray(), SemanticSearchLimit, ct)
+            projectId, embeddingGenerator.GetProviderModelKey(), embeddingResult.Vector.ToArray(), SemanticSearchLimit, ct, topic)
             .ConfigureAwait(false);
 
         return hits.ToDictionary(h => h.MemoryId, h => h.Score);

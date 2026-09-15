@@ -32,20 +32,30 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
     private readonly string _connectionString = $"Data Source={dbPath};Default Timeout=10";
     private readonly ConcurrentDictionary<string, Lazy<Task<SqliteCollection<Guid, MemoryVectorRecord>>>> _collections = new();
 
-    public async Task UpsertAsync(Guid memoryId, Guid projectId, string provider, float[] vector, CancellationToken ct)
+    public async Task UpsertAsync(Guid memoryId, Guid projectId, string memoryType, string? topic, string provider, float[] vector, CancellationToken ct)
     {
         var collection = await GetOrCreateCollectionAsync(provider, vector.Length, ct).ConfigureAwait(false);
         await collection.UpsertAsync(
-            new MemoryVectorRecord { MemoryId = memoryId, ProjectId = projectId, Vector = vector },
+            // Topic is lower-invariant'd here (and again on the SearchAsync filter side below) so
+            // this record's Topic column is purely a case-insensitive filter key, matching
+            // IMemoryRepository.SearchAsync's case-insensitive topic semantics -- it's never read
+            // back for display.
+            new MemoryVectorRecord { MemoryId = memoryId, ProjectId = projectId, MemoryType = memoryType, Topic = topic?.ToLowerInvariant(), Vector = vector },
             ct).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<(Guid MemoryId, double Score)>> SearchAsync(
-        Guid projectId, string provider, float[] queryVector, int limit, CancellationToken ct)
+        Guid projectId, string provider, float[] queryVector, int limit, CancellationToken ct, string? topic = null)
     {
         var collection = await GetOrCreateCollectionAsync(provider, queryVector.Length, ct).ConfigureAwait(false);
 
-        var options = new VectorSearchOptions<MemoryVectorRecord> { Filter = r => r.ProjectId == projectId };
+        var normalizedTopic = topic?.ToLowerInvariant();
+        var options = new VectorSearchOptions<MemoryVectorRecord>
+        {
+            Filter = normalizedTopic is null
+                ? r => r.ProjectId == projectId
+                : r => r.ProjectId == projectId && r.Topic == normalizedTopic,
+        };
         var results = new List<(Guid, double)>();
 
         await foreach (var hit in collection.SearchAsync(new ReadOnlyMemory<float>(queryVector), limit, options, ct)
@@ -106,6 +116,8 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
         {
             new VectorStoreKeyProperty(nameof(MemoryVectorRecord.MemoryId), typeof(Guid)),
             new VectorStoreDataProperty(nameof(MemoryVectorRecord.ProjectId), typeof(Guid)) { IsIndexed = true },
+            new VectorStoreDataProperty(nameof(MemoryVectorRecord.MemoryType), typeof(string)),
+            new VectorStoreDataProperty(nameof(MemoryVectorRecord.Topic), typeof(string)),
             new VectorStoreVectorProperty(nameof(MemoryVectorRecord.Vector), typeof(ReadOnlyMemory<float>), 1)
             {
                 DistanceFunction = DistanceFunction.CosineDistance,
@@ -154,7 +166,7 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
         var rows = await (
             from m in db.Memories.AsNoTracking()
             join e in db.MemoryEmbeddings.AsNoTracking() on m.Id equals e.MemoryId
-            select new { MemoryId = m.Id, m.ProjectId, e.Vector }
+            select new { MemoryId = m.Id, m.ProjectId, m.Type, m.Topic, e.Vector }
         ).ToListAsync(ct).ConfigureAwait(false);
 
         if (rows.Count == 0)
@@ -166,6 +178,8 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
         {
             MemoryId = r.MemoryId,
             ProjectId = r.ProjectId,
+            MemoryType = r.Type.ToString(),
+            Topic = r.Topic?.ToLowerInvariant(),
             Vector = new ReadOnlyMemory<float>(EmbeddingVectorCodec.Decode(r.Vector)),
         });
 
@@ -180,6 +194,8 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
             {
                 new VectorStoreKeyProperty(nameof(MemoryVectorRecord.MemoryId), typeof(Guid)),
                 new VectorStoreDataProperty(nameof(MemoryVectorRecord.ProjectId), typeof(Guid)) { IsIndexed = true },
+                new VectorStoreDataProperty(nameof(MemoryVectorRecord.MemoryType), typeof(string)) { IsIndexed = true },
+                new VectorStoreDataProperty(nameof(MemoryVectorRecord.Topic), typeof(string)) { IsIndexed = true },
                 new VectorStoreVectorProperty(nameof(MemoryVectorRecord.Vector), typeof(ReadOnlyMemory<float>), dimensions)
                 {
                     DistanceFunction = DistanceFunction.CosineDistance,
@@ -201,6 +217,8 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
     {
         public required Guid MemoryId { get; set; }
         public required Guid ProjectId { get; set; }
+        public string? MemoryType { get; set; }
+        public string? Topic { get; set; }
         public required ReadOnlyMemory<float> Vector { get; set; }
     }
 }
