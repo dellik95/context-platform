@@ -367,6 +367,9 @@ namespace Context.Infrastructure.Migrations
                     b.Property<string>("FilesReadJson")
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("IsCompacted")
+                        .HasColumnType("INTEGER");
+
                     b.Property<DateTimeOffset>("LastReinforcedAt")
                         .HasColumnType("TEXT");
 

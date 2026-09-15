@@ -182,6 +182,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IJobHandler, ExtractMemoryJobHandler>();
         services.AddScoped<IJobHandler, DecayMemoryJobHandler>();
         services.AddScoped<IJobHandler, BackupDbJobHandler>();
+        services.AddScoped<IJobHandler, RecreateEmbeddingsJobHandler>();
+        services.AddScoped<IJobHandler, CompactMemoryJobHandler>();
     }
 
     /// <summary>
@@ -200,6 +202,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<SessionSummaryScheduler>();
         services.AddHostedService<StaleSessionScheduler>();
         services.AddHostedService<HookInvocationRetentionScheduler>();
+        services.AddHostedService<MemoryCompactionScheduler>();
     }
 
     private static void AddIndexingPipeline(IServiceCollection services)

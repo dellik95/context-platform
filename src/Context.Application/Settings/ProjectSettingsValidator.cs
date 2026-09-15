@@ -4,8 +4,9 @@ namespace Context.Application.Settings;
 /// Floor-validates the numeric knobs that would otherwise silently misbehave rather than error:
 /// <see cref="ProjectSettingsDto.MinEventsForMemoryExtraction"/> at 0 makes
 /// <c>EventThresholdExtractionTrigger</c> fire on every chunk regardless of size, and the other
-/// two follow the same "count/size, not a sentinel" shape. <see cref="ProjectSettingsDto.SessionSummaryIntervalMinutes"/>
-/// and <see cref="ProjectSettingsDto.StaleSessionTimeoutMinutes"/> are deliberately excluded -
+/// two follow the same "count/size, not a sentinel" shape. <see cref="ProjectSettingsDto.SessionSummaryIntervalMinutes"/>,
+/// <see cref="ProjectSettingsDto.StaleSessionTimeoutMinutes"/> and
+/// <see cref="ProjectSettingsDto.MemoryCompactionIntervalMinutes"/> are deliberately excluded -
 /// <c>&lt;= 0</c> is their documented "disabled" sentinel, not an invalid value.
 /// </summary>
 public static class ProjectSettingsValidator
@@ -32,6 +33,11 @@ public static class ProjectSettingsValidator
         if (dto.ReindexIntervalMinutes < 1)
         {
             errors.Add($"{nameof(dto.ReindexIntervalMinutes)} must be at least 1.");
+        }
+
+        if (dto.MemoryCompactionSimilarityThreshold <= 0 || dto.MemoryCompactionSimilarityThreshold > 1)
+        {
+            errors.Add($"{nameof(dto.MemoryCompactionSimilarityThreshold)} must be in (0, 1].");
         }
 
         return errors;

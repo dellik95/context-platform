@@ -1,6 +1,6 @@
 namespace Context.Memory.Extraction;
 
-internal static class CosineSimilarity
+public static class CosineSimilarity
 {
     /// <summary>Cosine similarity in [-1, 1]. Returns 0 for a zero-length or dimension-mismatched vector.</summary>
     public static double Compute(float[] a, float[] b)

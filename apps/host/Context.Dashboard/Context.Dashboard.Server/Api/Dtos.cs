@@ -25,6 +25,8 @@ public sealed record ProjectStatusDto(
 
 public sealed record IndexTriggerResponse(Guid ProjectId, bool Full, string Status);
 
+public sealed record RecreateEmbeddingsTriggerResponse(Guid ProjectId, Guid JobId, string Status);
+
 public sealed record HealthResponse(
     bool Healthy,
     bool DatabaseReachable,

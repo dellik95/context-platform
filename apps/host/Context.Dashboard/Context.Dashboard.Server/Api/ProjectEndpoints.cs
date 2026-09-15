@@ -1,8 +1,10 @@
 using Context.Application;
 using Context.Application.Abstractions;
 using Context.Application.Indexing;
+using Context.Application.Jobs;
 using Context.Claude.Installation;
 using Context.Domain.Entities;
+using Context.Domain.Enums;
 using Context.Dashboard.Server.BackgroundServices;
 using Context.Dashboard.Server.Security;
 using Context.Infrastructure.Abstractions;
@@ -37,6 +39,7 @@ public static class ProjectEndpoints
         group.MapGet("/{id:guid}", GetStatusAsync).AddEndpointFilter(RequireOwnProjectOrAdminAsync);
         group.MapPost("/{id:guid}/index", TriggerIndex).AddEndpointFilter(RequireOwnProjectOrAdminAsync);
         group.MapPost("/{id:guid}/index/cancel", CancelIndex).AddEndpointFilter(RequireOwnProjectOrAdminAsync);
+        group.MapPost("/{id:guid}/embeddings/recreate", TriggerRecreateEmbeddings).AddEndpointFilter(RequireOwnProjectOrAdminAsync);
         group.MapPost("/{id:guid}/token", ReissueTokenAsync).RequireAdminToken();
         group.MapDelete("/{id:guid}", DeleteProjectAsync).AddEndpointFilter(RequireOwnProjectOrAdminAsync);
     }
@@ -256,6 +259,18 @@ public static class ProjectEndpoints
     /// </summary>
     private static IResult CancelIndex(Guid id, ReindexCancellationRegistry reindexRegistry) =>
         reindexRegistry.Cancel(id) ? Results.Accepted() : Results.NotFound();
+
+    /// <summary>
+    /// Enqueues a <see cref="JobType.RecreateEmbeddings"/> job for <paramref name="id"/> and returns
+    /// immediately -- unlike <see cref="TriggerIndex"/>, there is no <c>Task.Run</c>/pipeline call
+    /// here: <see cref="JobDispatcher"/>'s own background worker picks the job up and does the
+    /// actual work, so this handler's only job is to enqueue it.
+    /// </summary>
+    private static async Task<IResult> TriggerRecreateEmbeddings(Guid id, IJobQueue jobQueue, CancellationToken ct)
+    {
+        var jobId = await jobQueue.EnqueueAsync(JobType.RecreateEmbeddings, new RecreateEmbeddingsPayload(id), projectId: id, ct: ct).ConfigureAwait(false);
+        return Results.Accepted(value: new RecreateEmbeddingsTriggerResponse(id, jobId, "queued"));
+    }
 
     /// <summary>
     /// Permanently removes a project from Context Platform's own database/index: cascade-deletes

@@ -56,4 +56,13 @@ public sealed record ProjectSettingsDto(
     // "hook invocations" counter, so the table grows forever with no natural cleanup point. <= 0
     // disables cleanup (today's only behavior). Default 30d - long enough to cover the dashboard's
     // recent-activity views, short enough that the table doesn't grow unbounded.
-    int HookInvocationRetentionDays = 30);
+    int HookInvocationRetentionDays = 30,
+    // MemoryCompactionScheduler periodically clusters and merges near-duplicate memories via
+    // JobType.CompactMemory. <= 0 disables periodic compaction (today's only behavior) - same
+    // shape as SessionSummaryIntervalMinutes above, one on/off+period knob rather than a separate
+    // enable flag.
+    int MemoryCompactionIntervalMinutes = 0,
+    DateTimeOffset? LastMemoryCompactionScheduledAt = null,
+    // Cosine similarity (embedding of "{Title}\n{Body}") above which two memories are clustered
+    // together for a single compaction merge.
+    double MemoryCompactionSimilarityThreshold = 0.90);

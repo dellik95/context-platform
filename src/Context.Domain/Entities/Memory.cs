@@ -35,6 +35,10 @@ public class Memory
     public bool Pinned { get; set; }
     public int ReinforcementCount { get; set; }
     public Guid? SupersededById { get; set; }
+    // Set on the merged memory a compaction pass produces (never on its sources, which are
+    // superseded instead) — stops it being picked as a merge source again in a future pass, since
+    // it's already a dense merge and re-merging it would be lossy.
+    public bool IsCompacted { get; set; }
     public Guid? CreatedFromSessionId { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset LastReinforcedAt { get; set; }

@@ -51,3 +51,21 @@ public sealed record DecayMemoryPayload;
 public sealed record BackupDbPayload;
 
 public sealed record ResolveRelationsPayload(Guid ProjectId);
+
+/// <summary>
+/// Drives <see cref="Handlers.RecreateEmbeddingsJobHandler"/>: force-regenerates every chunk's and
+/// memory's embedding for <see cref="ProjectId"/> under whatever provider/model
+/// <see cref="Context.Providers.Abstractions.IProviderResolver"/> currently resolves — used after
+/// switching embedding provider/model so the new provider's vector-index collection gets populated
+/// in bulk instead of only filling in lazily as files happen to get re-touched.
+/// </summary>
+public sealed record RecreateEmbeddingsPayload(Guid ProjectId);
+
+/// <summary>
+/// Drives <see cref="Handlers.CompactMemoryJobHandler"/>: clusters and merges near-duplicate
+/// memories for <see cref="ProjectId"/>. Per-project (unlike <see cref="DecayMemoryPayload"/>'s
+/// host-wide marker) since compaction's interval/threshold are per-project
+/// <see cref="Context.Application.Settings.ProjectSettingsDto"/> settings, fired by
+/// <see cref="Context.Application.Scheduling.MemoryCompactionScheduler"/>.
+/// </summary>
+public sealed record CompactMemoryPayload(Guid ProjectId);
