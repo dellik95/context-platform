@@ -145,10 +145,17 @@ public sealed class ContextMcpTools(
         => await memoryRepository.GetByIdAsync(memoryId, ct).ConfigureAwait(false);
 
     [McpServerTool(Name = "memory_remember")]
-    [Description("Explicitly stores something the user just asked to be remembered, bypassing the normal " +
-        "N-event/session-end extraction triggers. Call this the moment a user says things like 'remember " +
-        "that...', 'note for later...', or gives a standing instruction — do not wait for enough events to " +
-        "accumulate. You already have the full context, so fill in facts/topic/concepts/files yourself " +
+    [Description("Stores durable project knowledge, whether the user asked for it explicitly or you found it yourself. " +
+        "Call it the moment a user says 'remember that...', 'note for later...', or gives a standing instruction — don't " +
+        "wait for enough events to accumulate. Just as important: call it proactively, without being asked, whenever you " +
+        "surface something durable about THIS project that isn't already captured — a root cause found while " +
+        "investigating a bug, an architectural fact learned from reading unfamiliar files, a subagent's final report " +
+        "handing back a concrete finding (file:line pointers, a mechanism, a gotcha, a decision and its reasoning), or a " +
+        "conclusion from cross-file analysis. A subagent's own report is not itself persisted anywhere — if it contains " +
+        "something worth knowing next session, this is the only way it survives past this conversation. Don't call it " +
+        "for things that are cheap to re-derive from the code (file locations, current contents) or that are purely " +
+        "about this session (in-progress plans, what you intend to do next) — see memory_search's Topic guidance for " +
+        "what makes a memory durable. You already have the full context, so fill in facts/topic/concepts/files yourself " +
         "rather than leaving this an unstructured narrative dump — the same structured shape the automatic " +
         "session-summary extraction produces, so this memory is just as useful when it resurfaces later.")]
     public async Task<Context.Domain.Entities.Memory> MemoryRememberAsync(
