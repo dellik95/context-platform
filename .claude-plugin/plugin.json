@@ -1,0 +1,6 @@
+{
+  "name": "context-platform",
+  "version": "0.1.0",
+  "description": "Persistent memory and code-intelligence context platform for Claude Code: cross-session project memory, AST/code-graph navigation, and semantic search surfaced via MCP tools and lifecycle hooks.",
+  "hookVersion": "0.1.0"
+}

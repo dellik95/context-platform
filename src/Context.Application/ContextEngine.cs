@@ -55,6 +55,7 @@ public sealed class ContextEngine(
     IMemoryStore memoryStore,
     IMemoryConsolidator memoryConsolidator,
     IMemoryVectorIndex memoryVectorIndex,
+    ISessionSummaryVectorIndex sessionSummaryVectorIndex,
     IProviderResolver providerResolver) : IContextEngine
 {
     private const int SummaryCharLimit = 800;
@@ -217,6 +218,70 @@ public sealed class ContextEngine(
         return (SemanticMatchWeight * matchScore) + ((1 - SemanticMatchWeight) * RelevanceOf(memory, now));
     }
 
+    /// <summary>
+    /// Hybrid lexical + semantic search over <see cref="SessionSummaryChunk"/>s, mirroring
+    /// <see cref="SearchMemoryAsync"/> exactly (see its own remarks) — a lexical substring hit still
+    /// counts as a maximal match, a semantic-only hit uses its min-max-normalized cosine similarity.
+    /// Unlike memories, chunks have no decay/pinned/type-bonus concept to blend in as a tie-breaker,
+    /// so the match score alone decides ranking.
+    /// </summary>
+    public async Task<IReadOnlyList<SessionSummaryChunk>> SearchSessionSummariesAsync(
+        Guid projectId, string query, CancellationToken ct, Guid? sessionId = null, int limit = 20)
+    {
+        var lexicalHits = await sessionRepository.SearchSummaryChunksAsync(projectId, query, limit, ct, sessionId).ConfigureAwait(false);
+        var lexicalIds = lexicalHits.Select(c => c.Id).ToHashSet();
+
+        var semanticScores = await SemanticSearchSessionSummariesAsync(projectId, query, sessionId, ct).ConfigureAwait(false);
+
+        var byId = lexicalHits.ToDictionary(c => c.Id);
+        var missingIds = semanticScores.Keys.Where(id => !byId.ContainsKey(id)).ToList();
+        foreach (var id in missingIds)
+        {
+            // Fetched one at a time via the existing single-chunk lookup rather than adding a new
+            // batched repository method - a semantic-only hit that isn't also a lexical hit is the
+            // uncommon case, and SemanticSearchLimit already caps how many of these there can be.
+            var chunk = await sessionRepository.GetSummaryChunkByIdAsync(projectId, id, ct).ConfigureAwait(false);
+            if (chunk is not null && (sessionId is null || chunk.SessionId == sessionId))
+            {
+                byId[chunk.Id] = chunk;
+            }
+        }
+
+        if (byId.Count == 0)
+        {
+            return [];
+        }
+
+        var normalizedSemantic = NormalizeSemanticScores(semanticScores);
+
+        return [.. byId.Values.OrderByDescending(c => CombinedChunkScore(c, lexicalIds, normalizedSemantic)).Take(limit)];
+    }
+
+    private async Task<Dictionary<Guid, double>> SemanticSearchSessionSummariesAsync(Guid projectId, string query, Guid? sessionId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return [];
+        }
+
+        var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
+        var embeddingResult = await embeddingGenerator.GenerateAsync(query, InteractiveEmbeddingOptions, ct).ConfigureAwait(false);
+
+        var hits = await sessionSummaryVectorIndex.SearchAsync(
+            projectId, embeddingGenerator.GetProviderModelKey(), embeddingResult.Vector.ToArray(), SemanticSearchLimit, ct, sessionId)
+            .ConfigureAwait(false);
+
+        return hits.ToDictionary(h => h.ChunkId, h => h.Score);
+    }
+
+    /// <summary>Same "lexical hit is a maximal match" rule as <see cref="CombinedScore"/>, without a
+    /// decay/type-bonus term to blend in — chunks have no analogous concept.</summary>
+    private static double CombinedChunkScore(SessionSummaryChunk chunk, HashSet<Guid> lexicalIds, IReadOnlyDictionary<Guid, double> normalizedSemantic)
+    {
+        var semanticScore = normalizedSemantic.TryGetValue(chunk.Id, out var s) ? s : 0.0;
+        return lexicalIds.Contains(chunk.Id) ? Math.Max(semanticScore, 1.0) : semanticScore;
+    }
+
     public async Task<Guid> StartSessionAsync(Guid projectId, string? claudeSessionId, CancellationToken ct, string? cwd = null)
     {
         // Claude Code fires SessionStart more than once per real session (resume, /clear,
@@ -290,6 +355,14 @@ public sealed class ContextEngine(
         // SummarizeSessionJobHandler chains into ExtractMemory itself once the summary is ready -
         // see CONTRACTS.md §10's "enqueues SummarizeSession -> ExtractMemory".
         await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(sessionId, IsSessionEnd: true), session.ProjectId, ct: ct).ConfigureAwait(false);
+    }
+
+    public async Task RequestSessionSummaryAsync(Guid projectId, Guid sessionId, CancellationToken ct)
+    {
+        var session = await sessionRepository.GetByIdAsync(projectId, sessionId, ct).ConfigureAwait(false)
+            ?? throw new KeyNotFoundException($"Session {sessionId} was not found.");
+
+        await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(sessionId, IsSessionEnd: false), session.ProjectId, ct: ct).ConfigureAwait(false);
     }
 
     public async Task<object> ProjectInfoAsync(Guid projectId, CancellationToken ct)

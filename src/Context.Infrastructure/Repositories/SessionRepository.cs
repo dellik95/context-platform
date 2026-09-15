@@ -213,4 +213,33 @@ public class SessionRepository(ContextDbContext db) : ISessionRepository
 
         return [.. page.Select(s => new SessionListItem(s, titles.GetValueOrDefault(s.Id)))];
     }
+
+    public async Task<IReadOnlyList<SessionSummaryChunk>> SearchSummaryChunksAsync(
+        Guid projectId, string query, int limit, CancellationToken ct, Guid? sessionId = null)
+    {
+        // Unlike GetSummaryChunksAsync/GetSummaryChunkByIdAsync above, this is a project-wide
+        // search with no single known sessionId to pre-check ownership of, so ProjectId scoping
+        // is done with an actual join through Session instead.
+        var pattern = $"%{query}%";
+        var q = db.SessionSummaryChunks.AsNoTracking()
+            .Join(db.Sessions.AsNoTracking(), c => c.SessionId, s => s.Id, (c, s) => new { Chunk = c, s.ProjectId })
+            .Where(x => x.ProjectId == projectId &&
+                (EF.Functions.Like(x.Chunk.Title, pattern) ||
+                 EF.Functions.Like(x.Chunk.Completed, pattern) ||
+                 EF.Functions.Like(x.Chunk.Discovered, pattern) ||
+                 EF.Functions.Like(x.Chunk.Decisions, pattern) ||
+                 EF.Functions.Like(x.Chunk.OpenIssues, pattern) ||
+                 EF.Functions.Like(x.Chunk.NextSteps, pattern)))
+            .Select(x => x.Chunk);
+
+        if (sessionId is not null)
+        {
+            q = q.Where(c => c.SessionId == sessionId);
+        }
+
+        // Same SQLite/DateTimeOffset ORDER BY limitation as GetEventsAsync above: filter
+        // server-side, sort the (bounded, lexically-filtered) result client-side.
+        var results = await q.ToListAsync(ct);
+        return [.. results.OrderByDescending(c => c.GeneratedAt).Take(limit)];
+    }
 }

@@ -145,19 +145,70 @@
                   </mat-panel-title>
                 </mat-expansion-panel-header>
 
-                <ul class="chunk-list">
+                <mat-accordion class="chunk-accordion" multi>
                   @for (chunk of summaryChunks(); track chunk.id) {
-                    <li class="chunk-item">
-                      <span class="chunk-sequence">#{{ chunk.sequenceNumber }}</span>
-                      <div class="chunk-body">
-                        <span class="chunk-title">{{ chunk.title ?? 'Untitled chunk' }}</span>
-                        <span class="chunk-range">
+                    <mat-expansion-panel>
+                      <mat-expansion-panel-header>
+                        <mat-panel-title>
+                          <span class="chunk-sequence">#{{ chunk.sequenceNumber }}</span>
+                          {{ chunk.title ?? 'Untitled chunk' }}
+                        </mat-panel-title>
+                        <mat-panel-description>
                           {{ chunk.fromEventAt | date: 'short' }} – {{ chunk.toEventAt | date: 'short' }}
-                        </span>
-                      </div>
-                    </li>
+                        </mat-panel-description>
+                      </mat-expansion-panel-header>
+
+                      @if (chunk.completed) {
+                        <section class="detail-section">
+                          <h3>Completed</h3>
+                          <p>{{ chunk.completed }}</p>
+                        </section>
+                      }
+                      @if (chunk.discovered) {
+                        <section class="detail-section">
+                          <h3>Discovered</h3>
+                          <p>{{ chunk.discovered }}</p>
+                        </section>
+                      }
+                      @if (chunk.decisions) {
+                        <section class="detail-section">
+                          <h3>Decisions</h3>
+                          <p>{{ chunk.decisions }}</p>
+                        </section>
+                      }
+                      @if (chunk.openIssues) {
+                        <section class="detail-section">
+                          <h3>Open issues</h3>
+                          <p>{{ chunk.openIssues }}</p>
+                        </section>
+                      }
+                      @if (chunk.nextSteps) {
+                        <section class="detail-section">
+                          <h3>Next steps</h3>
+                          <p>{{ chunk.nextSteps }}</p>
+                        </section>
+                      }
+                      @if (parseChangedFiles(chunk.changedFilesJson); as files) {
+                        <section class="detail-section">
+                          <h3>Changed files</h3>
+                          @if (files.kind === 'list') {
+                            @if (files.items.length === 0) {
+                              <p class="muted">No files recorded.</p>
+                            } @else {
+                              <ul class="file-list">
+                                @for (file of files.items; track file) {
+                                  <li>{{ file }}</li>
+                                }
+                              </ul>
+                            }
+                          } @else {
+                            <pre class="raw-json">{{ files.raw }}</pre>
+                          }
+                        </section>
+                      }
+                    </mat-expansion-panel>
                   }
-                </ul>
+                </mat-accordion>
               </mat-expansion-panel>
             }
           </div>

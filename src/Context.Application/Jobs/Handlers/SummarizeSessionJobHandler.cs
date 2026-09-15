@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Context.Application.Abstractions;
 using Context.Application.Memory.Triggers;
 using Context.Application.Notifications;
 using Context.Application.Settings;
@@ -7,6 +8,9 @@ using Context.Domain.Enums;
 using Context.Infrastructure.Abstractions;
 using Context.Memory.Abstractions;
 using Context.Memory.Summarization;
+using Context.Providers;
+using Context.Providers.Abstractions;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace Context.Application.Jobs.Handlers;
@@ -17,6 +21,8 @@ public sealed class SummarizeSessionJobHandler(
     ISessionRepository sessionRepository,
     IJobQueue jobQueue,
     IProjectSettingsService settingsService,
+    IProviderResolver providerResolver,
+    ISessionSummaryVectorIndex sessionSummaryVectorIndex,
     IProjectActivityNotifier? activityNotifier = null,
     IEnumerable<IMemoryExtractionTrigger>? extractionTriggers = null,
     ILogger<SummarizeSessionJobHandler>? logger = null) : IJobHandler
@@ -85,6 +91,8 @@ public sealed class SummarizeSessionJobHandler(
         var newChunk = await summarizer.SummarizeAsync(projectId, payload.SessionId, since, ct).ConfigureAwait(false);
         var savedChunk = await sessionRepository.AddSummaryChunkAsync(newChunk, ct).ConfigureAwait(false);
 
+        await EmbedAndIndexChunkAsync(projectId, savedChunk, ct).ConfigureAwait(false);
+
         // Everything up to this chunk's own ToEventAt is now fully covered by it - ExtractMemory
         // (below) reads only the chunk, never raw events, so it's safe to drop them here rather than
         // let SessionEvents grow unbounded. Opt-in: the dashboard's session detail view and the MCP
@@ -139,5 +147,24 @@ public sealed class SummarizeSessionJobHandler(
                 session?.ProjectId,
                 ct: ct).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Embeds <paramref name="chunk"/>'s text and upserts it into
+    /// <see cref="ISessionSummaryVectorIndex"/> so <c>session_summary_search</c> can rank it by
+    /// semantic similarity -- mirrors <see cref="Context.Application.Adapters.MemoryStoreAdapter"/>'s
+    /// inline embed-then-upsert. Skipped when there's nothing worth embedding (every field blank),
+    /// same "nothing to summarize" spirit as this handler's own event-count gate above.</summary>
+    private async Task EmbedAndIndexChunkAsync(Guid projectId, SessionSummaryChunk chunk, CancellationToken ct)
+    {
+        var chunkText = $"{chunk.Title}\n{chunk.Completed}\n{chunk.Discovered}\n{chunk.Decisions}\n{chunk.OpenIssues}\n{chunk.NextSteps}";
+        if (string.IsNullOrWhiteSpace(chunkText.Replace("\n", string.Empty)))
+        {
+            return;
+        }
+
+        var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
+        var embeddingResult = await embeddingGenerator.GenerateAsync(chunkText, cancellationToken: ct).ConfigureAwait(false);
+        await sessionSummaryVectorIndex.UpsertAsync(
+            chunk.Id, projectId, chunk.SessionId, embeddingGenerator.GetProviderModelKey(), embeddingResult.Vector.ToArray(), ct).ConfigureAwait(false);
     }
 }

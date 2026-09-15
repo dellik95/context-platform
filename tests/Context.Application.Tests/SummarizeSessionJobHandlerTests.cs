@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Context.Application.Abstractions;
 using Context.Application.Jobs;
 using Context.Application.Jobs.Handlers;
 using Context.Application.Settings;
@@ -6,7 +7,9 @@ using Context.Domain.Entities;
 using Context.Domain.Enums;
 using Context.Infrastructure.Abstractions;
 using Context.Memory.Abstractions;
+using Context.Providers.Abstractions;
 using FluentAssertions;
+using Microsoft.Extensions.AI;
 using Moq;
 
 namespace Context.Application.Tests;
@@ -27,11 +30,36 @@ public sealed class SummarizeSessionJobHandlerTests
     private readonly Mock<ISessionRepository> _sessionRepository = new();
     private readonly Mock<IJobQueue> _jobQueue = new();
     private readonly Mock<IProjectSettingsService> _settingsService = new();
+    private readonly Mock<IProviderResolver> _providerResolver = new();
+    private readonly Mock<ISessionSummaryVectorIndex> _sessionSummaryVectorIndex = new();
     private readonly SummarizeSessionJobHandler _sut;
 
     public SummarizeSessionJobHandlerTests()
     {
-        _sut = new SummarizeSessionJobHandler(_summarizer.Object, _sessionRepository.Object, _jobQueue.Object, _settingsService.Object);
+        // Loose: every test that reaches AddSummaryChunkAsync also reaches the embed-and-index step
+        // right after it, so the resolver must always hand back something GenerateAsync-able rather
+        // than Moq's default null (which would NullReferenceException on the very next line).
+        _providerResolver.Setup(p => p.GetEmbeddingGeneratorAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FakeEmbeddingGenerator([0.1f, 0.2f, 0.3f]));
+
+        _sut = new SummarizeSessionJobHandler(
+            _summarizer.Object, _sessionRepository.Object, _jobQueue.Object, _settingsService.Object,
+            _providerResolver.Object, _sessionSummaryVectorIndex.Object);
+    }
+
+    /// <summary>Always returns <paramref name="vector"/>, regardless of the input text — same shape
+    /// as CompactMemoryJobHandlerTests.FakeEmbeddingGenerator.</summary>
+    private sealed class FakeEmbeddingGenerator(float[] vector) : IEmbeddingGenerator<string, Embedding<float>>
+    {
+        public Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(
+            IEnumerable<string> values, EmbeddingGenerationOptions? options = null, CancellationToken ct = default) =>
+            Task.FromResult(new GeneratedEmbeddings<Embedding<float>>(values.Select(_ => new Embedding<float>(vector))));
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
     }
 
     private static Job MakeJob(Guid projectId, Guid sessionId, bool isSessionEnd) => new()

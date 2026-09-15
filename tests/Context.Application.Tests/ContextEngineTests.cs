@@ -40,6 +40,7 @@ public sealed class ContextEngineTests
     private readonly Mock<IMemoryStore> _memoryStore = new();
     private readonly Mock<IMemoryConsolidator> _memoryConsolidator = new();
     private readonly Mock<IMemoryVectorIndex> _memoryVectorIndex = new();
+    private readonly Mock<ISessionSummaryVectorIndex> _sessionSummaryVectorIndex = new();
     private readonly Mock<IProviderResolver> _providerResolver = new();
     private readonly Mock<IEmbeddingGenerator<string, Embedding<float>>> _embeddingGenerator = new();
     private readonly SessionDeliveryCache _deliveryCache = new();
@@ -65,6 +66,7 @@ public sealed class ContextEngineTests
             _memoryStore.Object,
             _memoryConsolidator.Object,
             _memoryVectorIndex.Object,
+            _sessionSummaryVectorIndex.Object,
             _providerResolver.Object);
 
         // Neutral defaults so tests only need to configure what they actually exercise.

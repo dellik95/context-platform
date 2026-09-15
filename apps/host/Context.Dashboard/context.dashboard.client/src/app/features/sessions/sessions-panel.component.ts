@@ -120,18 +120,9 @@ export class SessionsPanelComponent {
 
   protected readonly sessionGroups = computed(() => groupSessionsByDay(dedupeSessions(this.sessions())));
 
-  protected readonly changedFiles = computed<ChangedFiles | null>(() => {
-    const json = this.detail()?.changedFilesJson;
-    if (!json) {
-      return null;
-    }
-    try {
-      const parsed = JSON.parse(json);
-      return Array.isArray(parsed) ? { kind: 'list', items: parsed as string[] } : { kind: 'raw', raw: json };
-    } catch {
-      return { kind: 'raw', raw: json };
-    }
-  });
+  protected readonly changedFiles = computed<ChangedFiles | null>(() =>
+    this.parseChangedFiles(this.detail()?.changedFilesJson ?? null),
+  );
 
   constructor() {
     // Switching projects invalidates whatever session was selected for the previous one.
@@ -186,5 +177,20 @@ export class SessionsPanelComponent {
 
   protected selectSession(entry: SessionListItemDto): void {
     this.selectedId.set(entry.session.id);
+  }
+
+  /** Shared by the top-level merged summary and each per-chunk panel in the History accordion --
+   *  changedFilesJson is a free-form field the CLI writes, so a parse failure is expected (not
+   *  exceptional) and falls back to showing the raw string. */
+  protected parseChangedFiles(json: string | null | undefined): ChangedFiles | null {
+    if (!json) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(json);
+      return Array.isArray(parsed) ? { kind: 'list', items: parsed as string[] } : { kind: 'raw', raw: json };
+    } catch {
+      return { kind: 'raw', raw: json };
+    }
   }
 }

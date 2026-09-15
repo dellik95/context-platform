@@ -33,6 +33,23 @@ public interface IContextEngine
     /// <paramref name="reason"/> (optional, trailing) is the SessionEnd hook's <c>reason</c> field, persisted verbatim.</summary>
     Task EndSessionAsync(Guid projectId, Guid sessionId, CancellationToken ct, string? reason = null);
 
+    /// <summary>
+    /// Enqueues <c>SummarizeSession</c> with <c>IsSessionEnd: false</c> — a mid-session checkpoint
+    /// (fired by the <c>PostCompact</c> hook), not a final summary. Unlike <see cref="EndSessionAsync"/>,
+    /// leaves <see cref="Context.Domain.Entities.Session.Status"/>/<c>EndedAt</c> untouched and still
+    /// respects <c>SummarizeSessionJobHandler</c>'s minimum-events gate, same as
+    /// <see cref="Context.Application.Scheduling.SessionSummaryScheduler"/>'s periodic pass.
+    /// </summary>
+    Task RequestSessionSummaryAsync(Guid projectId, Guid sessionId, CancellationToken ct);
+
+    /// <summary>
+    /// Hybrid lexical + semantic search over a project's <see cref="Context.Domain.Entities.SessionSummaryChunk"/>s
+    /// — same shape as <see cref="SearchMemoryAsync"/>, applied to session summaries instead of memories.
+    /// <paramref name="sessionId"/> (optional) restricts results to one session's own chunks.
+    /// </summary>
+    Task<IReadOnlyList<Context.Domain.Entities.SessionSummaryChunk>> SearchSessionSummariesAsync(
+        Guid projectId, string query, CancellationToken ct, Guid? sessionId = null, int limit = 20);
+
     Task<object> ProjectInfoAsync(Guid projectId, CancellationToken ct);
 
     /// <summary>

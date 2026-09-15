@@ -13,5 +13,6 @@ internal sealed record HookDefinition(string ClaudeEventName, string FileBaseNam
         new("UserPromptSubmit", "user-prompt-submit", "user-prompt-submit"),
         new("PostToolUse", "post-tool-use", "post-tool-use"),
         new("SessionEnd", "session-end", "session-end"),
+        new("PostCompact", "post-compact", "post-compact"),
     ];
 }

@@ -317,6 +317,15 @@ public sealed class ContextMcpTools(
         return new SessionDetailDto(session, events, summary, chunks);
     }
 
+    [McpServerTool(Name = "session_summary_search")]
+    [Description("Searches this project's session-summary chunks (per-session checkpoints covering completed work, discoveries, decisions, open issues, next steps) by hybrid lexical + semantic similarity — use for cross-session context (\"what did we decide about X\", \"when did we last touch Y\").")]
+    public async Task<IReadOnlyList<Context.Domain.Entities.SessionSummaryChunk>> SessionSummarySearchAsync(
+        [Description("Search query.")] string query,
+        [Description("Optional session id to restrict the search to one session's chunks.")] Guid? sessionId = null,
+        [Description("Maximum chunks to return.")] int limit = DefaultSessionSearchLimit,
+        CancellationToken ct = default)
+        => await engine.SearchSessionSummariesAsync(currentProject.ProjectId, query, ct, sessionId, limit).ConfigureAwait(false);
+
     [McpServerTool(Name = "project_info")]
     [Description("Aggregate stats for a project: files indexed, symbols indexed, memory count, last-indexed time.")]
     public async Task<object> ProjectInfoAsync(CancellationToken ct = default)

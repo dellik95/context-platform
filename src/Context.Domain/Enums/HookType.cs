@@ -1,3 +1,3 @@
 namespace Context.Domain.Enums;
 
-public enum HookType { SessionStart, UserPromptSubmit, PostToolUse, SessionEnd }
+public enum HookType { SessionStart, UserPromptSubmit, PostToolUse, SessionEnd, PostCompact }

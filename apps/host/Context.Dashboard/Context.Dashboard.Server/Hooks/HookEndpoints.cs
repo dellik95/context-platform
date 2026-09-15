@@ -56,6 +56,7 @@ public static class HookEndpoints
         hooks.MapPost("/user-prompt-submit", UserPromptSubmitAsync);
         hooks.MapPost("/post-tool-use", PostToolUseAsync);
         hooks.MapPost("/session-end", SessionEndAsync);
+        hooks.MapPost("/post-compact", PostCompactAsync);
     }
 
     private static async Task<IResult> SessionStartAsync(
@@ -150,7 +151,29 @@ public static class HookEndpoints
     }
 
     /// <summary>
-    /// Records that one of the four hook endpoints fired, for the Dashboard's "Hook invocations"
+    /// A <c>/compact</c> (manual or auto) is a natural mid-session checkpoint, same idea as
+    /// <see cref="Context.Application.Scheduling.SessionSummaryScheduler"/>'s periodic pass but
+    /// event-driven instead of timer-driven — enqueues a new <see cref="Context.Domain.Entities.SessionSummaryChunk"/>
+    /// via <see cref="IContextEngine.RequestSessionSummaryAsync"/> without ending the session.
+    /// </summary>
+    private static async Task<IResult> PostCompactAsync(
+        PostCompactInput input,
+        IContextEngine engine,
+        CurrentProjectAccessor project,
+        ClaudeSessionMap sessionMap,
+        IHookInvocationRepository hookInvocations,
+        IHookInvocationNotifier hookNotifier,
+        CancellationToken ct)
+    {
+        await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.PostCompact, input, ct).ConfigureAwait(false);
+
+        var sessionId = await GetOrStartSessionAsync(engine, project, sessionMap, input.SessionId, ct).ConfigureAwait(false);
+        await engine.RequestSessionSummaryAsync(project.ProjectId, sessionId, ct).ConfigureAwait(false);
+        return Results.Ok(new HookOutput(AdditionalContext: null));
+    }
+
+    /// <summary>
+    /// Records that one of the hook endpoints fired, for the Dashboard's "Hook invocations"
     /// panel — persists the raw (already model-bound) payload, then pushes the new total count and
     /// this payload live over SignalR so the panel updates without polling.
     /// </summary>

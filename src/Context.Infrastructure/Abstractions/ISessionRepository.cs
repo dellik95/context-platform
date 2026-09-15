@@ -53,4 +53,14 @@ public interface ISessionRepository
     Task<SessionSummaryChunk?> GetSummaryChunkByIdAsync(Guid projectId, Guid chunkId, CancellationToken ct);
 
     Task<IReadOnlyList<SessionListItem>> ListByProjectAsync(Guid projectId, int limit, CancellationToken ct);
+
+    /// <summary>
+    /// Lexical substring match (Title/Completed/Discovered/Decisions/OpenIssues/NextSteps) over
+    /// <paramref name="projectId"/>'s session-summary chunks, newest first — the lexical half of
+    /// <see cref="Context.Application.ContextEngine.SearchSessionSummariesAsync"/>'s hybrid search,
+    /// mirroring <see cref="IMemoryRepository.SearchAsync"/>. <paramref name="sessionId"/> (optional)
+    /// restricts the match to one session's own chunks.
+    /// </summary>
+    Task<IReadOnlyList<SessionSummaryChunk>> SearchSummaryChunksAsync(
+        Guid projectId, string query, int limit, CancellationToken ct, Guid? sessionId = null);
 }
