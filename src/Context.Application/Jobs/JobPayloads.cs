@@ -13,7 +13,14 @@ public sealed record DeleteFilePayload(Guid ProjectId, string RelativePath);
 /// <see cref="Invalidate"/> is true the handler only removes the file's owned graph nodes/edges
 /// (used for deletes); otherwise it rebuilds them from the file's current Symbols.
 /// </summary>
-public sealed record UpdateGraphPayload(Guid ProjectId, Guid FileId, bool Invalidate);
+/// <param name="RelationDraftsJson">
+/// JSON-serialized <c>IReadOnlyList&lt;Context.Indexing.Abstractions.RelationDraft&gt;</c>, produced
+/// by <c>IndexingPipeline.IndexParsedFileAsync</c> from the same in-memory source text it already
+/// parsed for symbol extraction. Lets <c>UpdateGraphJobHandler</c> skip re-reading the file from disk
+/// and re-parsing it; null for jobs enqueued before this field existed, or when extraction failed, in
+/// which case the handler falls back to its old re-parse-from-disk path.
+/// </param>
+public sealed record UpdateGraphPayload(Guid ProjectId, Guid FileId, bool Invalidate, string? RelationDraftsJson = null);
 
 /// <summary>
 /// One job per distinct content hash needing embedding (dedup: two chunks with byte-identical

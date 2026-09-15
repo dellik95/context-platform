@@ -26,14 +26,14 @@ namespace Context.Application.Jobs.Handlers;
 /// independent from <c>RefId</c>.
 /// </para>
 /// <para>
-/// <b>Relation re-parsing:</b> <see cref="Domain.Entities.SymbolRelation"/> rows are never
-/// written (Context.Infrastructure exposes no repository for that entity — only
-/// <c>ISymbolRepository</c> — and <c>RelationDraft</c>s are otherwise a transient, in-pipeline
-/// value the indexing pass doesn't persist). So this handler recovers relations by re-reading the
-/// file from disk and re-running the matching <c>ILanguageParser</c>'s
-/// <c>ExtractRelations</c> — a deliberate simplification/duplication of work already done once
-/// during indexing, flagged as follow-up (passing serialized <c>RelationDraft</c>s through the
-/// job payload would avoid the second parse).
+/// <b>Relations:</b> <see cref="Domain.Entities.SymbolRelation"/> rows are never written
+/// (Context.Infrastructure exposes no repository for that entity — only
+/// <c>ISymbolRepository</c>). Relations instead come from <see cref="UpdateGraphPayload.RelationDraftsJson"/>
+/// — <c>IndexingPipeline.IndexParsedFileAsync</c> already extracts them from the same in-memory
+/// source text it parsed for symbols, and passes them through the job payload, so this handler
+/// normally does no disk I/O or re-parsing at all. <see cref="ReparseRelationsFromDiskAsync"/> is
+/// only a fallback for a null payload field (a job enqueued before this field existed, or an
+/// extraction failure during indexing).
 /// </para>
 /// <para>
 /// Cross-file relation targets are resolved best-effort against <c>ISymbolRepository</c> by name;
@@ -114,41 +114,22 @@ public sealed class UpdateGraphJobHandler(
             edges.Add(NewEdge(payload.ProjectId, containerId, symbol.Id, GraphEdgeKind.Contains, file.Id));
         }
 
-        await AddRelationEdgesAsync(payload.ProjectId, file, currentSymbols, nodes, nodesById, edges, ct).ConfigureAwait(false);
+        await AddRelationEdgesAsync(payload.ProjectId, file, currentSymbols, nodes, nodesById, edges, payload.RelationDraftsJson, ct).ConfigureAwait(false);
 
         await graphStore.UpsertAsync(nodes, edges, ct).ConfigureAwait(false);
     }
 
     private async Task AddRelationEdgesAsync(
         Guid projectId, DomainFile file, IReadOnlyList<Symbol> currentSymbols,
-        List<GraphNode> nodes, Dictionary<Guid, GraphNode> nodesById, List<GraphEdge> edges, CancellationToken ct)
+        List<GraphNode> nodes, Dictionary<Guid, GraphNode> nodesById, List<GraphEdge> edges,
+        string? relationDraftsJson, CancellationToken ct)
     {
         IReadOnlyList<RelationDraft> relationDrafts;
         try
         {
-            var project = await projects.GetByIdAsync(projectId, ct).ConfigureAwait(false);
-            if (project is null)
-            {
-                return;
-            }
-
-            var extension = Path.GetExtension(file.RelativePath);
-            var parser = parsers.FirstOrDefault(p => p.SupportedExtensions.Contains(extension));
-            if (parser is null)
-            {
-                return;
-            }
-
-            var absolutePath = Path.Combine(project.RootPath, file.RelativePath);
-            if (!System.IO.File.Exists(absolutePath))
-            {
-                return;
-            }
-
-            var sourceText = await System.IO.File.ReadAllTextAsync(absolutePath, ct).ConfigureAwait(false);
-            var ast = parser.Parse(sourceText);
-            var projectSymbolNames = await symbols.GetAllNamesAsync(projectId, ct).ConfigureAwait(false);
-            relationDrafts = parser.ExtractRelations(ast, projectSymbolNames);
+            relationDrafts = relationDraftsJson is not null
+                ? JsonSerializer.Deserialize<IReadOnlyList<RelationDraft>>(relationDraftsJson) ?? []
+                : await ReparseRelationsFromDiskAsync(projectId, file, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -157,8 +138,8 @@ public sealed class UpdateGraphJobHandler(
         catch (Exception ex)
         {
             // Relation extraction is a best-effort enrichment on top of the containment structure
-            // already built above; a re-parse failure must not fail the whole graph update.
-            logger?.LogWarning(ex, "Failed to re-derive relations for file {FileId} ({RelativePath}); keeping containment edges only.", file.Id, file.RelativePath);
+            // already built above; a failure here must not fail the whole graph update.
+            logger?.LogWarning(ex, "Failed to derive relations for file {FileId} ({RelativePath}); keeping containment edges only.", file.Id, file.RelativePath);
             return;
         }
 
@@ -193,6 +174,39 @@ public sealed class UpdateGraphJobHandler(
 
             edges.Add(NewEdge(projectId, sourceId, targetId.Value, edgeKind, file.Id));
         }
+    }
+
+    /// <summary>
+    /// Fallback for a null <see cref="UpdateGraphPayload.RelationDraftsJson"/>: re-reads the file
+    /// from disk and re-runs the matching <see cref="ILanguageParser"/>'s
+    /// <see cref="ILanguageParser.ExtractRelations"/> — the pre-payload behavior, kept only for a
+    /// job enqueued before this field existed or an extraction failure during indexing.
+    /// </summary>
+    private async Task<IReadOnlyList<RelationDraft>> ReparseRelationsFromDiskAsync(Guid projectId, DomainFile file, CancellationToken ct)
+    {
+        var project = await projects.GetByIdAsync(projectId, ct).ConfigureAwait(false);
+        if (project is null)
+        {
+            return [];
+        }
+
+        var extension = Path.GetExtension(file.RelativePath);
+        var parser = parsers.FirstOrDefault(p => p.SupportedExtensions.Contains(extension));
+        if (parser is null)
+        {
+            return [];
+        }
+
+        var absolutePath = Path.Combine(project.RootPath, file.RelativePath);
+        if (!System.IO.File.Exists(absolutePath))
+        {
+            return [];
+        }
+
+        var sourceText = await System.IO.File.ReadAllTextAsync(absolutePath, ct).ConfigureAwait(false);
+        var ast = parser.Parse(sourceText);
+        var projectSymbolNames = await symbols.GetAllNamesAsync(projectId, ct).ConfigureAwait(false);
+        return parser.ExtractRelations(ast, projectSymbolNames);
     }
 
     private async Task<Guid?> ResolveTargetAsync(

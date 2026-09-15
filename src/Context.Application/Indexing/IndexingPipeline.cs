@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Context.Application.Abstractions;
 using Context.Application.Jobs;
 using Context.Domain.Entities;
@@ -494,8 +495,45 @@ public sealed class IndexingPipeline(
         var hasStructuralChange = diff.Added.Count > 0 || diff.Changed.Count > 0 || diff.Removed.Count > 0;
         if (hasStructuralChange || isFirstIndex)
         {
-            await jobQueue.EnqueueAsync(JobType.UpdateGraph, new UpdateGraphPayload(projectId, fileEntity.Id, Invalidate: false), projectId, ct: ct)
+            var relationDraftsJson = await ExtractRelationDraftsJsonAsync(projectId, fileEntity.Id, parser, sourceText, ct).ConfigureAwait(false);
+            await jobQueue.EnqueueAsync(
+                    JobType.UpdateGraph,
+                    new UpdateGraphPayload(projectId, fileEntity.Id, Invalidate: false, relationDraftsJson),
+                    projectId, ct: ct)
                 .ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Extracts this file's <see cref="RelationDraft"/>s from a second, independent
+    /// <see cref="ParsedAst"/> over the same in-memory <paramref name="sourceText"/> already read
+    /// for symbol extraction above -- a fresh <c>Parse</c> call, but no second disk read, and no
+    /// second <c>UpdateGraph</c>-job-time fetch of the project/symbol-name lookup. A parser's
+    /// <see cref="ILanguageParser.ExtractSymbols"/>/<see cref="ILanguageParser.ExtractRelations"/>
+    /// each dispose their own <see cref="ParsedAst"/>'s underlying tree as the last thing they do
+    /// (see <c>TreeSitterParsedTree</c>), so the earlier <c>ast</c> used for symbols above must not
+    /// be reused here -- each extraction gets its own freshly-parsed tree instead.
+    /// </summary>
+    private async Task<string?> ExtractRelationDraftsJsonAsync(
+        Guid projectId, Guid fileId, ILanguageParser parser, string sourceText, CancellationToken ct)
+    {
+        try
+        {
+            var projectSymbolNames = await symbols.GetAllNamesAsync(projectId, ct).ConfigureAwait(false);
+            var relationAst = parser.Parse(sourceText);
+            var relationDrafts = parser.ExtractRelations(relationAst, projectSymbolNames);
+            return relationDrafts.Count > 0 ? JsonSerializer.Serialize(relationDrafts) : null;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Best-effort enrichment: if this fails, UpdateGraphJobHandler falls back to its own
+            // re-parse-from-disk path (RelationDraftsJson stays null) rather than failing indexing.
+            _logger.LogWarning(ex, "Failed to extract relation drafts for file {FileId}; UpdateGraph job will re-parse from disk instead.", fileId);
+            return null;
         }
     }
 
