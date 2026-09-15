@@ -77,6 +77,11 @@
          SqliteVec itself ships a build against a newer VectorData.Abstractions. -->
     <PackageVersion Include="Microsoft.Extensions.VectorData.Abstractions" Version="10.1.0" />
     <PackageVersion Include="Microsoft.SemanticKernel.Connectors.SqliteVec" Version="1.74.0-preview" />
+    <!-- Context.Application: token-aware overlapping-window chunking for whole-file doc/markdown
+         chunks (see IndexingPipeline.IndexUnparsedFileAsync), same 10.10.0 line as the
+         Microsoft.Extensions.AI packages above; still preview-only, no stable release exists yet. -->
+    <PackageVersion Include="Microsoft.Extensions.DataIngestion" Version="10.10.0-preview.1.26459.2" />
+    <PackageVersion Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
     <!-- Context.Host: run as a native OS service on either platform (both packages are no-ops
          when the process isn't actually launched by that platform's service manager). -->
     <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />

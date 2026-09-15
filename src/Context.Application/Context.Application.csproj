@@ -25,6 +25,10 @@
          (see Adapters/SqliteChunkVectorIndex.cs). -->
     <PackageReference Include="Microsoft.Extensions.VectorData.Abstractions" />
     <PackageReference Include="Microsoft.SemanticKernel.Connectors.SqliteVec" />
+    <!-- IndexingPipeline.IndexUnparsedFileAsync: DocumentTokenChunker for real multi-chunk splitting
+         of large doc/markdown/config files, instead of one whole-file chunk. -->
+    <PackageReference Include="Microsoft.Extensions.DataIngestion" />
+    <PackageReference Include="Microsoft.ML.Tokenizers" />
   </ItemGroup>
 
   <PropertyGroup>

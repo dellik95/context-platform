@@ -1,3 +1,4 @@
+using Context.Application.Abstractions;
 using Context.Application.Jobs;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
@@ -5,10 +6,12 @@ using Context.Graph.Abstractions;
 using Context.Infrastructure.Abstractions;
 using Context.Memory.Abstractions;
 using Context.Memory.Extraction;
+using Context.Providers.Abstractions;
 using Context.Retrieval;
 using Context.Retrieval.Abstractions;
 using Context.Application.Settings;
 using FluentAssertions;
+using Microsoft.Extensions.AI;
 using Moq;
 using DomainFile = Context.Domain.Entities.File;
 using DomainMemory = Context.Domain.Entities.Memory;
@@ -36,6 +39,9 @@ public sealed class ContextEngineTests
     private readonly Mock<IProjectSettingsService> _projectSettingsService = new();
     private readonly Mock<IMemoryStore> _memoryStore = new();
     private readonly Mock<IMemoryConsolidator> _memoryConsolidator = new();
+    private readonly Mock<IMemoryVectorIndex> _memoryVectorIndex = new();
+    private readonly Mock<IProviderResolver> _providerResolver = new();
+    private readonly Mock<IEmbeddingGenerator<string, Embedding<float>>> _embeddingGenerator = new();
     private readonly SessionDeliveryCache _deliveryCache = new();
     private readonly ContextEngine _sut;
 
@@ -57,7 +63,9 @@ public sealed class ContextEngineTests
             _deliveryCache,
             _projectSettingsService.Object,
             _memoryStore.Object,
-            _memoryConsolidator.Object);
+            _memoryConsolidator.Object,
+            _memoryVectorIndex.Object,
+            _providerResolver.Object);
 
         // Neutral defaults so tests only need to configure what they actually exercise.
         _symbolRepository.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
@@ -81,6 +89,17 @@ public sealed class ContextEngineTests
                 MaxMemoryNotesPerSection: 20));
         _searchEngine.Setup(s => s.SearchAsync(It.IsAny<SearchQuery>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<SearchHit>)[]);
+
+        // Semantic memory search always resolves a provider and calls SearchAsync (ContextEngine
+        // does not short-circuit on the "noop" provider) -- default it to return no hits so these
+        // tests keep exercising lexical-only ranking, same as before IMemoryVectorIndex existed.
+        _embeddingGenerator.Setup(g => g.GenerateAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<EmbeddingGenerationOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GeneratedEmbeddings<Embedding<float>>([new Embedding<float>(new float[] { 0f })]));
+        _providerResolver.Setup(p => p.GetEmbeddingGeneratorAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_embeddingGenerator.Object);
+        _memoryVectorIndex.Setup(v => v.SearchAsync(
+                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<int>(), It.IsAny<CancellationToken>(), It.IsAny<string?>()))
+            .ReturnsAsync((IReadOnlyList<(Guid MemoryId, double Score)>)[]);
     }
 
     private static DomainMemory MakeMemory(

@@ -8,9 +8,12 @@ using Context.Infrastructure.Abstractions;
 using Context.Providers;
 using Context.Providers.Abstractions;
 using Context.Shared;
+using Microsoft.Extensions.DataIngestion;
+using Microsoft.Extensions.DataIngestion.Chunkers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.ML.Tokenizers;
 using DomainFile = Context.Domain.Entities.File;
 
 namespace Context.Application.Indexing;
@@ -65,6 +68,24 @@ public sealed class IndexingPipeline(
 {
     /// <summary>Safety cap on a single chunk's text so one pathological symbol/file can't blow up storage/search.</summary>
     private const int MaxChunkChars = 20_000;
+
+    /// <summary>Safety cap on the whole document handed to <see cref="SplitUnparsedTextAsync"/> before
+    /// tokenizing/chunking -- larger than <see cref="MaxChunkChars"/> since the chunker itself now
+    /// splits the document into many chunks, each far under that per-chunk limit.</summary>
+    private const int MaxUnparsedDocChars = 200_000;
+
+    /// <summary>Target chunk size for <see cref="SplitUnparsedTextAsync"/>'s <see cref="DocumentTokenChunker"/> --
+    /// small enough that a query about one paragraph of a long README isn't diluted by the rest of
+    /// the document sharing its embedding.</summary>
+    private const int UnparsedChunkMaxTokens = 512;
+
+    /// <summary>Overlap between consecutive windows in <see cref="SplitUnparsedTextAsync"/>, so a
+    /// sentence spanning a chunk boundary still appears whole in at least one chunk.</summary>
+    private const int UnparsedChunkOverlapTokens = 64;
+
+    /// <summary>Shared, process-wide tokenizer for <see cref="SplitUnparsedTextAsync"/> -- built once
+    /// since constructing a <see cref="Tokenizer"/> isn't free and the instance is stateless/thread-safe.</summary>
+    private static readonly Lazy<Tokenizer> UnparsedDocTokenizer = new(() => TiktokenTokenizer.CreateForModel("gpt-4o"));
 
     /// <summary>Bounds how many files this process indexes at once during
     /// <see cref="ReindexProjectAsync"/> -- same core-count sizing JobDispatcher uses for its own
@@ -279,29 +300,73 @@ public sealed class IndexingPipeline(
 
     private async Task IndexUnparsedFileAsync(Guid projectId, DomainFile fileEntity, string sourceText, bool isFirstIndex, CancellationToken ct)
     {
-        // No ILanguageParser for this extension (e.g. JSON/markdown/config): still make the file
-        // lexically/semantically searchable as a single whole-file chunk, just with no symbols.
-        var text = Cap(sourceText, MaxChunkChars);
-        var chunk = new Chunk
+        // No ILanguageParser for this extension (e.g. JSON/markdown/docs): make the file lexically/
+        // semantically searchable via DocumentTokenChunker (see SplitUnparsedTextAsync) instead of
+        // one whole-file chunk -- a large README/markdown doc used to become a single oversized
+        // embedding that diluted a query's match against the one paragraph it was actually about.
+        // A short file still comes back as exactly one chunk, same as before.
+        var text = Cap(sourceText, MaxUnparsedDocChars);
+        var chunkTexts = await SplitUnparsedTextAsync(fileEntity.RelativePath, text, ct).ConfigureAwait(false);
+
+        var chunkEntities = chunkTexts.Select(chunkText => new Chunk
         {
             Id = Guid.NewGuid(),
             FileId = fileEntity.Id,
             SymbolId = null,
-            Text = text,
-            TokenCount = TokenEstimator.Estimate(text),
-            ContentHash = hasher.HashText(text)
-        };
+            Text = chunkText,
+            TokenCount = TokenEstimator.Estimate(chunkText),
+            ContentHash = hasher.HashText(chunkText)
+        }).ToList();
 
         await symbols.ReplaceForFileAsync(fileEntity.Id, [], ct).ConfigureAwait(false);
-        await chunks.ReplaceForFileAsync(fileEntity.Id, [chunk], ct).ConfigureAwait(false);
+        await chunks.ReplaceForFileAsync(fileEntity.Id, chunkEntities, ct).ConfigureAwait(false);
 
-        await EnqueueEmbedIfMissingAsync(projectId, [chunk], ct).ConfigureAwait(false);
+        await EnqueueEmbedIfMissingAsync(projectId, chunkEntities, ct).ConfigureAwait(false);
 
         if (isFirstIndex)
         {
             await jobQueue.EnqueueAsync(JobType.UpdateGraph, new UpdateGraphPayload(projectId, fileEntity.Id, Invalidate: false), projectId, ct: ct)
                 .ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Splits <paramref name="text"/> into overlapping token-bounded windows via
+    /// <see cref="DocumentTokenChunker"/> (Microsoft.Extensions.DataIngestion) instead of the
+    /// symbol-aware splitting <see cref="IndexParsedFileAsync"/> gets from an <see cref="ILanguageParser"/>
+    /// -- there's no AST for a doc/markdown/config file, so token-window chunking is the closest
+    /// equivalent to "one chunk per logical unit" available for it. Falls back to the whole text as
+    /// a single chunk if the chunker (a preview package) produces nothing usable.
+    /// </summary>
+    private static async Task<IReadOnlyList<string>> SplitUnparsedTextAsync(string identifier, string text, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return [text];
+        }
+
+        var document = new IngestionDocument(identifier);
+        var section = new IngestionDocumentSection(text);
+        section.Elements.Add(new IngestionDocumentParagraph(text));
+        document.Sections.Add(section);
+
+        var options = new IngestionChunkerOptions(UnparsedDocTokenizer.Value)
+        {
+            MaxTokensPerChunk = UnparsedChunkMaxTokens,
+            OverlapTokens = UnparsedChunkOverlapTokens,
+        };
+        var chunker = new DocumentTokenChunker(options);
+
+        var result = new List<string>();
+        await foreach (var chunk in chunker.ProcessAsync(document, ct).ConfigureAwait(false))
+        {
+            if (!string.IsNullOrWhiteSpace(chunk.Content))
+            {
+                result.Add(chunk.Content);
+            }
+        }
+
+        return result.Count > 0 ? result : [text];
     }
 
     private async Task IndexParsedFileAsync(
