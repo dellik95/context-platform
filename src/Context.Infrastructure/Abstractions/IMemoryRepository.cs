@@ -22,4 +22,10 @@ public interface IMemoryRepository
     Task<IReadOnlyList<Memory>> SearchAsync(Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null);
 
     Task<IReadOnlyList<Memory>> ListByProjectAsync(Guid projectId, bool includeSuperseded, CancellationToken ct);
+
+    /// <summary>Batch fetch by id, e.g. to materialize hits from a vector-search pass
+    /// (<c>IMemoryVectorIndex.SearchAsync</c>) that only returns ids/scores. Missing ids are
+    /// silently omitted rather than erroring — a stale vector-index record pointing at a since-
+    /// deleted memory should just drop out of the result set.</summary>
+    Task<IReadOnlyList<Memory>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct);
 }

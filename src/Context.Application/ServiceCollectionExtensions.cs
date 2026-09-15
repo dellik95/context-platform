@@ -115,6 +115,13 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IChunkVectorIndex>(sp =>
             new SqliteChunkVectorIndex(dbPath, sp.GetRequiredService<IDbContextFactory<ContextDbContext>>()));
 
+        // Same seam/lifetime reasoning as IChunkVectorIndex above, applied to Memory so
+        // memory_search can rank by semantic similarity instead of only substring matching
+        // (consumed by the Scoped MemoryStoreAdapter on the write side and by the Scoped
+        // ContextEngine on the read side, both fine to depend on a singleton).
+        services.AddSingleton<IMemoryVectorIndex>(sp =>
+            new SqliteMemoryVectorIndex(dbPath, sp.GetRequiredService<IDbContextFactory<ContextDbContext>>()));
+
         // Consumed by Context.Retrieval's singleton HybridSearchEngine -> must itself be a
         // singleton (see IDbContextFactory remark above).
         services.AddSingleton<ISearchIndex, SqliteSearchIndex>();

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Context.Application.Abstractions;
 using Context.Application.Jobs;
 using Context.Application.Settings;
 using Context.Domain.Entities;
@@ -8,10 +9,14 @@ using Context.Infrastructure.Abstractions;
 using Context.Memory.Abstractions;
 using Context.Memory.Decay;
 using Context.Memory.Extraction;
+using Context.Providers;
+using Context.Providers.Abstractions;
+using Context.Providers.Embeddings;
 using Context.Retrieval;
 using Context.Retrieval.Abstractions;
 using Context.Retrieval.Scoring;
 using Context.Shared;
+using Microsoft.Extensions.AI;
 using DomainFile = Context.Domain.Entities.File;
 
 namespace Context.Application;
@@ -48,13 +53,33 @@ public sealed class ContextEngine(
     SessionDeliveryCache deliveryCache,
     IProjectSettingsService projectSettingsService,
     IMemoryStore memoryStore,
-    IMemoryConsolidator memoryConsolidator) : IContextEngine
+    IMemoryConsolidator memoryConsolidator,
+    IMemoryVectorIndex memoryVectorIndex,
+    IProviderResolver providerResolver) : IContextEngine
 {
     private const int SummaryCharLimit = 800;
     private const int ExplicitRememberTitleCharLimit = 80;
     // The user explicitly asked for this to be remembered - high confidence by construction,
     // not LLM-judged (see docs/architecture/MEMORY_PIPELINE_PLAN.md §F).
     private const double ExplicitRememberConfidence = 0.95;
+
+    // memory_search previously ranked purely by decay+pinned+type bonus (RelevanceOf) -- a
+    // substring match only decided *inclusion*, never order, so the query text had zero influence
+    // on ranking. SemanticMatchWeight folds in real query relevance (lexical substring hit, or
+    // semantic cosine similarity from IMemoryVectorIndex) while still letting decay/pinned/type
+    // bonus break ties and demote stale matches, same spirit as HybridScorer for code search but
+    // with its own weight -- HybridScorer's weights are benchmark-tuned for code chunks
+    // (RetrievalQualityHarnessTests), not memory search, so they aren't reused here.
+    private const double SemanticMatchWeight = 0.6;
+    private const int SemanticSearchLimit = 50;
+
+    // Same pattern as EmbeddingLookupAdapter.InteractiveOptions / MemoryConsolidator.InteractiveOptions:
+    // flags a live memory_search query so OllamaEmbeddingGeneratorDecorator skips the concurrency
+    // gate it applies to background EmbedChunk/ExtractMemory jobs.
+    private static readonly EmbeddingGenerationOptions InteractiveEmbeddingOptions = new()
+    {
+        AdditionalProperties = new AdditionalPropertiesDictionary { [OllamaEmbeddingGeneratorDecorator.InteractiveRequestKey] = true }
+    };
 
     public async Task<ContextPack> SearchContextAsync(SearchQuery query, CancellationToken ct)
     {
@@ -98,12 +123,103 @@ public sealed class ContextEngine(
         return await graphTraversal.BlastRadiusAsync(symbolId, maxHops, ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Hybrid lexical + semantic memory search: <see cref="IMemoryRepository.SearchAsync"/>'s
+    /// substring match still decides which memories are eligible (cheap, exact, always available
+    /// offline), while <see cref="IMemoryVectorIndex"/> now also contributes semantically similar
+    /// memories the substring pass would miss entirely (paraphrase, synonym, no shared words).
+    /// Ranking blends both into <see cref="SemanticMatchWeight"/> vs. the decay/pinned/type-bonus
+    /// <see cref="RelevanceOf"/> score (see that constant's remarks).
+    /// </summary>
     public async Task<IReadOnlyList<Context.Domain.Entities.Memory>> SearchMemoryAsync(Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null)
     {
-        var results = await memoryRepository.SearchAsync(projectId, query, includeSuperseded, ct, topic).ConfigureAwait(false);
+        var lexicalHits = await memoryRepository.SearchAsync(projectId, query, includeSuperseded, ct, topic).ConfigureAwait(false);
+        var lexicalIds = lexicalHits.Select(m => m.Id).ToHashSet();
+
+        var semanticScores = await SemanticSearchAsync(projectId, query, ct).ConfigureAwait(false);
+
+        var byId = lexicalHits.ToDictionary(m => m.Id);
+        var missingIds = semanticScores.Keys.Where(id => !byId.ContainsKey(id)).ToList();
+        if (missingIds.Count > 0)
+        {
+            var fetched = await memoryRepository.GetByIdsAsync(missingIds, ct).ConfigureAwait(false);
+            foreach (var memory in fetched)
+            {
+                // The vector index only filters by ProjectId (see SqliteMemoryVectorIndex.SearchAsync) —
+                // apply the same includeSuperseded/topic filters the lexical pass already enforced,
+                // so a semantic-only hit can't bypass them.
+                if (!includeSuperseded && memory.SupersededById is not null)
+                {
+                    continue;
+                }
+
+                if (topic is { } t && !string.Equals(memory.Topic, t, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                byId[memory.Id] = memory;
+            }
+        }
+
+        if (byId.Count == 0)
+        {
+            return [];
+        }
+
+        var normalizedSemantic = NormalizeSemanticScores(semanticScores);
         var now = DateTimeOffset.UtcNow;
 
-        return [.. results.OrderByDescending(m => RelevanceOf(m, now))];
+        return [.. byId.Values.OrderByDescending(m => CombinedScore(m, lexicalIds, normalizedSemantic, now))];
+    }
+
+    private async Task<Dictionary<Guid, double>> SemanticSearchAsync(Guid projectId, string query, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return [];
+        }
+
+        var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
+        var embeddingResult = await embeddingGenerator.GenerateAsync(query, InteractiveEmbeddingOptions, ct).ConfigureAwait(false);
+
+        var hits = await memoryVectorIndex.SearchAsync(
+            projectId, embeddingGenerator.GetProviderModelKey(), embeddingResult.Vector.ToArray(), SemanticSearchLimit, ct)
+            .ConfigureAwait(false);
+
+        return hits.ToDictionary(h => h.MemoryId, h => h.Score);
+    }
+
+    private static IReadOnlyDictionary<Guid, double> NormalizeSemanticScores(Dictionary<Guid, double> raw)
+    {
+        if (raw.Count == 0)
+        {
+            return raw;
+        }
+
+        var ids = raw.Keys.ToList();
+        var normalized = HybridScorer.NormalizeMinMax([.. ids.Select(id => raw[id])]);
+
+        var result = new Dictionary<Guid, double>(raw.Count);
+        for (var i = 0; i < ids.Count; i++)
+        {
+            result[ids[i]] = normalized[i];
+        }
+
+        return result;
+    }
+
+    /// <summary>A lexical substring hit counts as a maximal match (1.0) regardless of its
+    /// (unrelated) semantic score — a direct text match is a strong signal on its own, and
+    /// shouldn't be buried under a merely-decent semantic-only hit. Semantic-only hits use their
+    /// min-max-normalized cosine similarity.</summary>
+    private static double CombinedScore(
+        Context.Domain.Entities.Memory memory, HashSet<Guid> lexicalIds, IReadOnlyDictionary<Guid, double> normalizedSemantic, DateTimeOffset now)
+    {
+        var semanticScore = normalizedSemantic.TryGetValue(memory.Id, out var s) ? s : 0.0;
+        var matchScore = lexicalIds.Contains(memory.Id) ? Math.Max(semanticScore, 1.0) : semanticScore;
+
+        return (SemanticMatchWeight * matchScore) + ((1 - SemanticMatchWeight) * RelevanceOf(memory, now));
     }
 
     public async Task<Guid> StartSessionAsync(Guid projectId, string? claudeSessionId, CancellationToken ct, string? cwd = null)

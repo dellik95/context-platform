@@ -75,4 +75,14 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
         var results = await q.ToListAsync(ct);
         return [.. results.OrderByDescending(m => m.Pinned).ThenByDescending(m => m.LastReinforcedAt)];
     }
+
+    public async Task<IReadOnlyList<Memory>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct)
+    {
+        if (ids.Count == 0)
+        {
+            return [];
+        }
+
+        return await db.Memories.AsNoTracking().Where(m => ids.Contains(m.Id)).ToListAsync(ct);
+    }
 }

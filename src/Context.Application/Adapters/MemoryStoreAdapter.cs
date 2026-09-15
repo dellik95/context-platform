@@ -1,8 +1,11 @@
+using Context.Application.Abstractions;
 using Context.Application.Support;
 using Context.Domain.Entities;
 using Context.Infrastructure;
 using Context.Infrastructure.Abstractions;
 using Context.Memory.Abstractions;
+using Context.Providers;
+using Context.Providers.Abstractions;
 using Microsoft.EntityFrameworkCore;
 
 namespace Context.Application.Adapters;
@@ -12,9 +15,17 @@ namespace Context.Application.Adapters;
 /// <see cref="Domain.Entities.MemoryEmbedding"/> has no repository interface of its own in
 /// Context.Infrastructure (CONTRACTS.md §9 only calls out <c>IMemoryRepository</c>), so this
 /// adapter talks to the injected <see cref="ContextDbContext"/> directly for that one entity —
-/// the same pragmatic choice documented on <see cref="GraphPersistenceAdapter"/>.
+/// the same pragmatic choice documented on <see cref="GraphPersistenceAdapter"/>. Also keeps
+/// <see cref="IMemoryVectorIndex"/> (sqlite-vec) in sync with the <c>MemoryEmbeddings</c> table on
+/// every write that supplies an embedding, so <c>memory_search</c> can query it — mirrors how
+/// <see cref="Jobs.Handlers.EmbedChunkJobHandler"/> keeps <see cref="IChunkVectorIndex"/> in sync
+/// for chunks.
 /// </summary>
-public sealed class MemoryStoreAdapter(IMemoryRepository memoryRepository, ContextDbContext db) : IMemoryStore
+public sealed class MemoryStoreAdapter(
+    IMemoryRepository memoryRepository,
+    ContextDbContext db,
+    IMemoryVectorIndex memoryVectorIndex,
+    IProviderResolver providerResolver) : IMemoryStore
 {
     public async Task<IReadOnlyList<ExistingMemoryWithEmbedding>> GetExistingWithEmbeddingsAsync(Guid projectId, CancellationToken ct)
     {
@@ -62,6 +73,10 @@ public sealed class MemoryStoreAdapter(IMemoryRepository memoryRepository, Conte
         }
 
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
+
+        var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(memory.ProjectId, ct).ConfigureAwait(false);
+        await memoryVectorIndex.UpsertAsync(
+            memory.Id, memory.ProjectId, embeddingGenerator.GetProviderModelKey(), embedding, ct).ConfigureAwait(false);
     }
 
     public async Task MarkSupersededAsync(Guid oldMemoryId, Guid newMemoryId, CancellationToken ct)
