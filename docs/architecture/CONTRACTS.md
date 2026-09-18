@@ -479,11 +479,16 @@ public interface IClaudeIntegrationInstaller
 - `ContextDbContextFactory : IDesignTimeDbContextFactory<ContextDbContext>` for
   `dotnet ef migrations` tooling.
 - Connection string: `Data Source={ProjectDataDir}/context.db` where `ProjectDataDir` is the
-  shared, machine-level data directory `SharedDataLocation.ResolveDataDir` resolves (Phase 2: no
-  longer per-project — `CONTEXT_PLATFORM_DATA_DIR` overrides it, else an OS-appropriate default such
-  as `%LocalAppData%\ContextPlatform` on Windows). Context.Dashboard.Server resolves through this
-  helper so every process agrees on one database file; a database found at the old
-  `<repo-root>/.context/context.db` location is copied forward automatically on first run.
+  shared data directory `SharedDataLocation.ResolveDataDir` resolves — one database for every
+  project, never per-project. `CONTEXT_PLATFORM_DATA_DIR` overrides it; otherwise it is
+  `AppContext.BaseDirectory`, i.e. the database sits alongside the host's own binaries. There is no
+  other fallback, so a deployment whose install directory isn't writable must set that variable.
+  Context.Dashboard.Server resolves through this helper so every process agrees on one database
+  file; a database found at a location earlier builds defaulted to — the machine-level app-data dirs
+  (`%LocalAppData%\ContextPlatform`, `$XDG_DATA_HOME/context-platform`,
+  `~/.local/share/context-platform`) or the older per-repo `<repo-root>/.context/context.db` — is
+  copied forward automatically on first run, `-wal`/`-shm` sidecars included, leaving the original
+  in place.
 - Repositories live here implementing interfaces declared in `Context.Application`
   (e.g. `IProjectRepository`, `IFileRepository`, `ISymbolRepository`, `IMemoryRepository`,
   `IJobRepository`) — Application depends only on the interfaces.

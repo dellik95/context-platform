@@ -4,11 +4,12 @@ using Microsoft.Extensions.Configuration;
 namespace Context.Shared;
 
 /// <summary>
-/// Resolves the single, persistent, OS-appropriate data directory Context.Dashboard.Server keeps the
-/// shared database in — machine-level app data rather than any one project's own repo, since the
-/// host serves multiple projects. Deliberately never
-/// falls back to the OS temp directory — temp dirs are periodically cleared by the OS/container
-/// runtime, which would risk silently losing a persistent memory database.
+/// Resolves the single, persistent data directory Context.Dashboard.Server keeps the shared database
+/// in — one database for every project the host serves, never any one project's own repo. Defaults to
+/// the application's own install directory (<see cref="AppContext.BaseDirectory"/>) so the database
+/// travels with the binaries. Deliberately never falls back to the OS temp directory — temp dirs are
+/// periodically cleared by the OS/container runtime, which would risk silently losing a persistent
+/// memory database.
 /// </summary>
 public static class SharedDataLocation
 {
@@ -23,11 +24,16 @@ public static class SharedDataLocation
 
     /// <summary>
     /// Resolves the data directory. Priority: <c>CONTEXT_PLATFORM_DATA_DIR</c> verbatim if set;
-    /// otherwise an OS-appropriate default (<c>%LocalAppData%\ContextPlatform</c> on Windows;
-    /// <c>$XDG_DATA_HOME/context-platform</c>, or <c>~/.local/share/context-platform</c> if
-    /// <c>XDG_DATA_HOME</c> is unset, elsewhere). Does not create the directory — callers create it
-    /// just before first use, same as <c>ContextHostOptions</c> does for its own dataDir.
+    /// otherwise <see cref="AppContext.BaseDirectory"/>, the directory the host's own binaries were
+    /// loaded from. Does not create the directory — callers create it just before first use, same as
+    /// <c>ContextHostOptions</c> does for its own dataDir.
     /// </summary>
+    /// <remarks>
+    /// The env override exists precisely for installs where the binaries sit somewhere the process
+    /// can't write (a Program Files-style location, a read-only container layer) — there is no
+    /// silent fallback, so such a deployment must set <c>CONTEXT_PLATFORM_DATA_DIR</c> explicitly
+    /// rather than have the database land somewhere the operator didn't choose.
+    /// </remarks>
     public static string ResolveDataDir(IConfiguration? configuration = null)
     {
         var overridden = configuration?[DataDirEnvVar];
@@ -36,21 +42,31 @@ public static class SharedDataLocation
             overridden = Environment.GetEnvironmentVariable(DataDirEnvVar);
         }
 
-        if (overridden is { Length: > 0 })
-        {
-            return overridden;
-        }
+        return overridden is { Length: > 0 } ? overridden : AppContext.BaseDirectory;
+    }
 
+    /// <summary>
+    /// The machine-level app-data directories this type used to default to, newest first. Retained
+    /// only so <see cref="EnsureMigratedFromLegacyLocation"/> can carry an existing database forward
+    /// out of them; nothing writes here any more.
+    /// </summary>
+    private static IEnumerable<string> FormerDefaultDataDirs()
+    {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            return Path.Combine(localAppData, "ContextPlatform");
+            if (localAppData is { Length: > 0 })
+            {
+                yield return Path.Combine(localAppData, "ContextPlatform");
+            }
+
+            yield break;
         }
 
         var xdgDataHome = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
         if (xdgDataHome is { Length: > 0 })
         {
-            return Path.Combine(xdgDataHome, "context-platform");
+            yield return Path.Combine(xdgDataHome, "context-platform");
         }
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -59,7 +75,10 @@ public static class SharedDataLocation
             home = Environment.GetEnvironmentVariable("HOME") ?? string.Empty;
         }
 
-        return Path.Combine(home, ".local", "share", "context-platform");
+        if (home is { Length: > 0 })
+        {
+            yield return Path.Combine(home, ".local", "share", "context-platform");
+        }
     }
 
     /// <summary>Convenience: <c>{ResolveDataDir(configuration)}/context.db</c>.</summary>
@@ -68,23 +87,33 @@ public static class SharedDataLocation
 
     /// <summary>
     /// One-time migration-forward safety check, invoked once at startup by the caller. If
-    /// <paramref name="newDbPath"/> doesn't exist yet, but an old-style
-    /// <c>{legacyProjectRoot}/.context/context.db</c> does, COPIES (never moves — the legacy file is
-    /// left in place as a safety net) it forward, so switching to the shared data dir doesn't silently
-    /// orphan an existing memory database. Returns the legacy path it copied from so the caller can log
-    /// the event via whatever logger is already in scope there (e.g. Context.Dashboard.Server's Serilog
-    /// <c>Log.Information</c>); returns <c>null</c> when no migration was needed or possible, in which
-    /// case the caller should not log anything.
+    /// <paramref name="newDbPath"/> doesn't exist yet but a database does at one of the locations this
+    /// host has previously defaulted to — a former machine-level app-data dir
+    /// (<see cref="FormerDefaultDataDirs"/>), or the even older per-repo
+    /// <c>{legacyProjectRoot}/.context/context.db</c> — COPIES (never moves — the legacy file is left
+    /// in place as a safety net) the newest such database forward, so relocating the data dir doesn't
+    /// silently orphan an existing memory database. Returns the legacy path it copied from so the
+    /// caller can log the event via whatever logger is already in scope there (e.g.
+    /// Context.Dashboard.Server's Serilog <c>Log.Information</c>); returns <c>null</c> when no
+    /// migration was needed or possible, in which case the caller should not log anything.
     /// </summary>
-    public static string? EnsureMigratedFromLegacyLocation(string newDbPath, string? legacyProjectRoot)
+    public static string? EnsureMigratedFromLegacyLocation(string newDbPath, string? legacyProjectRoot) =>
+        EnsureMigratedFromLegacyLocation(newDbPath, EnumerateLegacyDbPaths(legacyProjectRoot));
+
+    /// <summary>
+    /// The above with the candidate list supplied explicitly, so tests can exercise the copy without
+    /// depending on whether the machine running them happens to have a database sitting in one of the
+    /// real former default directories. See <c>InternalsVisibleTo</c> in Context.Shared.csproj.
+    /// </summary>
+    internal static string? EnsureMigratedFromLegacyLocation(string newDbPath, IEnumerable<string> legacyDbPaths)
     {
-        if (File.Exists(newDbPath) || legacyProjectRoot is not { Length: > 0 })
+        if (File.Exists(newDbPath))
         {
             return null;
         }
 
-        var legacyDbPath = Path.Combine(legacyProjectRoot, ".context", DbFileName);
-        if (!File.Exists(legacyDbPath))
+        var legacyDbPath = legacyDbPaths.FirstOrDefault(File.Exists);
+        if (legacyDbPath is null)
         {
             return null;
         }
@@ -95,7 +124,31 @@ public static class SharedDataLocation
             Directory.CreateDirectory(newDataDir);
         }
 
+        // The -wal sidecar holds every commit not yet checkpointed back into the main file, so
+        // copying context.db alone would silently drop the most recent writes. Carry the sidecars
+        // across too and let SQLite recover from them on first open.
         File.Copy(legacyDbPath, newDbPath);
+        foreach (var suffix in new[] { "-wal", "-shm" })
+        {
+            if (File.Exists(legacyDbPath + suffix))
+            {
+                File.Copy(legacyDbPath + suffix, newDbPath + suffix);
+            }
+        }
+
         return legacyDbPath;
+    }
+
+    internal static IEnumerable<string> EnumerateLegacyDbPaths(string? legacyProjectRoot)
+    {
+        foreach (var formerDataDir in FormerDefaultDataDirs())
+        {
+            yield return Path.Combine(formerDataDir, DbFileName);
+        }
+
+        if (legacyProjectRoot is { Length: > 0 })
+        {
+            yield return Path.Combine(legacyProjectRoot, ".context", DbFileName);
+        }
     }
 }

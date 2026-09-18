@@ -36,10 +36,18 @@ namespace Context.Application.Jobs;
 /// <b>Bounded concurrency, not one worker per job:</b> a single <see cref="DrainAsync"/> loop
 /// (woken by <see cref="IJobSignal"/> and by a fallback poll timer) repeatedly claims the next
 /// runnable job and hands it to <see cref="ProcessClaimedJobAsync"/> without awaiting it, gated by a
-/// <see cref="SemaphoreSlim"/> sized to <see cref="Environment.ProcessorCount"/> -- up to that many
-/// jobs run concurrently in this process, same as before, but claiming itself is single-threaded so
-/// there is exactly one <see cref="IJobRepository.DequeueNextAsync"/> call in flight at a time
-/// rather than every worker polling independently.
+/// <see cref="SemaphoreSlim"/> sized to <see cref="MaxConcurrentJobs"/> -- up to that many jobs run
+/// concurrently in this process, but claiming itself is single-threaded so there is exactly one
+/// <see cref="IJobRepository.DequeueNextAsync"/> call in flight at a time rather than every worker
+/// polling independently.
+/// <para>
+/// That size is half the core count, capped at 8, rather than the full core count: handlers spend
+/// their time in blocking file and SQLite I/O rather than on the CPU, some of them (reindex) fan out
+/// further internally, and Microsoft.Data.Sqlite has no true async path -- so an in-flight job
+/// generally means an occupied thread-pool thread. Sizing this to the core count let bursts outrun
+/// the pool's ~1-2-threads-per-second injection rate and starve unrelated callbacks, Redis pub/sub
+/// among them.
+/// </para>
 /// </remarks>
 /// <remarks>
 /// <b>Retry scheduling:</b> a failed job with attempts remaining goes back to
@@ -69,7 +77,11 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     private readonly ILogger<JobDispatcher> _logger;
     private readonly IJobCountsNotifier _jobCountsNotifier;
     private readonly IJobSignal _jobSignal;
-    private readonly SemaphoreSlim _concurrencyGate = new(Math.Max(1, Environment.ProcessorCount));
+    /// <summary>See this type's remarks on bounded concurrency for why this is well under
+    /// <see cref="Environment.ProcessorCount"/>.</summary>
+    private static readonly int MaxConcurrentJobs = Math.Clamp(Environment.ProcessorCount / 2, 1, 8);
+
+    private readonly SemaphoreSlim _concurrencyGate = new(MaxConcurrentJobs);
 
     private CancellationTokenSource? _lifetimeCts;
     private Task? _processingTask;

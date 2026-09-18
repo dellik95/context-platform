@@ -35,13 +35,24 @@ public sealed class RedisJobSignal : IJobSignal
     {
         try
         {
-            await _subscriber.PublishAsync(RedisChannel.Literal(ChannelName), RedisValue.EmptyString).ConfigureAwait(false);
+            // CommandFlags.FireAndForget makes the "in spirit" below literal: the command is written
+            // to the socket and the task completes without waiting for Redis's reply. Awaiting the
+            // reply gained nothing -- the catch below already discards the outcome -- but exposed
+            // this call to syncTimeout, so a thread-pool stall that delayed reading an *already
+            // delivered* response surfaced here as a RedisTimeoutException on a publish that had in
+            // fact succeeded.
+            await _subscriber.PublishAsync(
+                RedisChannel.Literal(ChannelName),
+                RedisValue.EmptyString,
+                CommandFlags.FireAndForget).ConfigureAwait(false);
         }
         catch (RedisException)
         {
             // Fire-and-forget in spirit (see IJobSignal's remarks): a publish Redis couldn't
             // deliver right now only costs listeners the next poll-timer fallback, never
             // correctness, so it must never fail the caller's enqueue/retry request over it.
+            // Still reachable despite FireAndForget -- e.g. RedisConnectionException when the
+            // multiplexer has no usable connection to write to at all.
         }
     }
 

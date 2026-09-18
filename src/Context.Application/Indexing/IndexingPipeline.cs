@@ -89,9 +89,16 @@ public sealed class IndexingPipeline(
     private static readonly Lazy<Tokenizer> UnparsedDocTokenizer = new(() => TiktokenTokenizer.CreateForModel("gpt-4o"));
 
     /// <summary>Bounds how many files this process indexes at once during
-    /// <see cref="ReindexProjectAsync"/> -- same core-count sizing JobDispatcher uses for its own
-    /// concurrency gate.</summary>
-    private static readonly int MaxReindexParallelism = Math.Max(1, Environment.ProcessorCount);
+    /// <see cref="ReindexProjectAsync"/>.</summary>
+    /// <remarks>
+    /// Deliberately much lower than <see cref="Environment.ProcessorCount"/>, and lower than
+    /// JobDispatcher's own gate, because this fan-out *nests inside* it: a reindex job already holds
+    /// one of the dispatcher's concurrency slots, so core-count here multiplied against core-count
+    /// there to put hundreds of thread-pool-blocking work items in flight on a 16-core box. The work
+    /// is blocking file and SQLite I/O rather than CPU, and SQLite serialises writers anyway, so the
+    /// extra parallelism bought queueing rather than throughput.
+    /// </remarks>
+    private static readonly int MaxReindexParallelism = Math.Clamp(Environment.ProcessorCount / 4, 1, 4);
 
     private readonly ILogger<IndexingPipeline> _logger = logger ?? NullLogger<IndexingPipeline>.Instance;
     private readonly IIndexingProgressReporter _progressReporter = progressReporter ?? NullIndexingProgressReporter.Instance;

@@ -20,6 +20,18 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Serilog;
 
+// Raise the thread-pool floor before anything schedules work. Microsoft.Data.Sqlite has no true
+// async path — every awaited DB call blocks the pool thread it runs on for the duration of the
+// file I/O — and the indexing pipeline reads source files off whatever (possibly slow, e.g. a WSL
+// /mnt/c drvfs mount) filesystem the project lives on. Past the floor the pool only injects one or
+// two threads per second, so a burst of blocking work starves unrelated *non*-blocking callbacks
+// for seconds: the symptom is a StackExchange.Redis RedisTimeoutException whose counters show the
+// response already sat unread in the socket (`in:` non-zero) while WORKER Busy exceeded Min.
+{
+    ThreadPool.GetMinThreads(out var minWorkerThreads, out var minCompletionPortThreads);
+    ThreadPool.SetMinThreads(Math.Max(minWorkerThreads, 128), Math.Max(minCompletionPortThreads, 128));
+}
+
 var startupConfiguration = new ConfigurationBuilder()
     .SetBasePath(Directory.GetCurrentDirectory())
     .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
