@@ -7,7 +7,7 @@ namespace Context.Providers.Abstractions;
 /// specific project should use, per that project's own saved settings — replaces the old model of
 /// one process-wide singleton pair chosen once at host startup (see
 /// <c>ServiceCollectionExtensions.AddContextProviders</c>, still used only by the single-project
-/// default/<c>Context.Cli</c> path). Implemented by <c>Context.Application.Providers.
+/// default path). Implemented by <c>Context.Application.Providers.
 /// ProjectProviderResolver</c>, which reads <c>IProjectSettingsService.GetAsync(projectId, ct)</c>
 /// fresh on every call — this is what lets a Settings-tab save take effect immediately, no host
 /// restart needed.

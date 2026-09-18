@@ -6,12 +6,16 @@ namespace Context.Dashboard.Server.Api;
 /// <summary>
 /// <c>/api/projects/{id}/settings</c> — thin wrapper over <see cref="IProjectSettingsService"/>
 /// backing the Dashboard's Settings tab, per CONTRACTS.md §12.
+/// <para/>
+/// Gated by <see cref="ProjectScopeAuth.RequireOwnProjectFilter"/>, not plain bearer auth: both
+/// handlers act on the <c>{id}</c> route value, so merely holding <em>a</em> valid token would let
+/// one project read and rewrite another's settings.
 /// </summary>
 public static class SettingsEndpoints
 {
     public static void MapSettingsEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/projects/{id:guid}/settings").RequireBearerToken();
+        var group = app.MapGroup("/api/projects/{id:guid}/settings").RequireOwnProject();
 
         group.MapGet("/", GetAsync);
         group.MapPut("/", UpdateAsync);

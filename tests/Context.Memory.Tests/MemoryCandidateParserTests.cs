@@ -20,7 +20,7 @@ public class MemoryCandidateParserTests
             END_MEMORY
             """;
 
-        var candidates = MemoryCandidateParser.Parse(response);
+        var candidates = MemoryCandidateParser.Parse(response).Candidates;
 
         candidates.Should().ContainSingle();
         candidates[0].Topic.Should().Be("Search indexing");
@@ -39,7 +39,7 @@ public class MemoryCandidateParserTests
             END_MEMORY
             """;
 
-        var candidates = MemoryCandidateParser.Parse(response);
+        var candidates = MemoryCandidateParser.Parse(response).Candidates;
 
         candidates.Should().ContainSingle();
         candidates[0].Topic.Should().BeNull();
@@ -66,7 +66,7 @@ public class MemoryCandidateParserTests
             END_MEMORY
             """;
 
-        var candidates = MemoryCandidateParser.Parse(response);
+        var candidates = MemoryCandidateParser.Parse(response).Candidates;
 
         candidates.Should().HaveCount(2);
         candidates[0].Type.Should().Be(MemoryType.Decision);
@@ -91,7 +91,7 @@ public class MemoryCandidateParserTests
             END_MEMORY
             """;
 
-        var candidates = MemoryCandidateParser.Parse(response);
+        var candidates = MemoryCandidateParser.Parse(response).Candidates;
 
         candidates.Should().ContainSingle();
         candidates[0].ScopePath.Should().Be("src/Context.Application/Jobs");
@@ -110,9 +110,56 @@ public class MemoryCandidateParserTests
             END_MEMORY
             """;
 
-        var candidates = MemoryCandidateParser.Parse(response);
+        var candidates = MemoryCandidateParser.Parse(response).Candidates;
 
         candidates.Should().ContainSingle();
         candidates[0].ScopePath.Should().BeNull();
+    }
+
+    [Fact]
+    public void Parse_keeps_a_candidate_whose_TITLE_precedes_its_TYPE()
+    {
+        const string response = """
+            MEMORY 1
+            TITLE: Title came first
+            TYPE: Decision
+            BODY: A concrete, specific body sentence.
+            END_MEMORY
+            """;
+
+        var result = MemoryCandidateParser.Parse(response);
+
+        result.Candidates.Should().ContainSingle();
+        result.Candidates[0].Title.Should().Be("Title came first");
+        result.Candidates[0].Type.Should().Be(MemoryType.Decision);
+        result.DiscardedBlocks.Should().Be(0);
+    }
+
+    [Fact]
+    public void Parse_counts_a_block_that_carried_content_but_named_no_TYPE_or_TITLE()
+    {
+        const string response = """
+            MEMORY 1
+            BODY: The model drifted and emitted a body with no type or title.
+            END_MEMORY
+            """;
+
+        var result = MemoryCandidateParser.Parse(response);
+
+        result.Candidates.Should().BeEmpty();
+        result.DiscardedBlocks.Should().Be(1);
+    }
+
+    [Fact]
+    public void Parse_does_not_count_empty_blocks_as_discarded()
+    {
+        const string response = """
+            MEMORY_COUNT: 0
+            """;
+
+        var result = MemoryCandidateParser.Parse(response);
+
+        result.Candidates.Should().BeEmpty();
+        result.DiscardedBlocks.Should().Be(0);
     }
 }

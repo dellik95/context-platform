@@ -80,9 +80,10 @@ public class ContextPackBuilderTests
 
         var pack = await builder.BuildAsync(Query(0), CancellationToken.None);
 
-        // TokenEstimator.Estimate floors every string - including the empty architecture
-        // summary - at 1 token, so a zero budget still reports 1 estimated token overall.
-        pack.EstimatedTokens.Should().Be(1);
+        // An absent section costs nothing, despite TokenEstimator.Estimate flooring every string
+        // at 1 token: ContextPackBuilder special-cases the empty summary, or the phantom token
+        // would also be subtracted from every later section by the carry-forward.
+        pack.EstimatedTokens.Should().Be(0);
         pack.PrimaryHits.Should().BeEmpty();
         pack.Truncated.Should().BeTrue();
         pack.MoreAvailable.Should().Be(1);
@@ -96,7 +97,7 @@ public class ContextPackBuilderTests
 
         var pack = await builder.BuildAsync(Query(-100), CancellationToken.None);
 
-        pack.EstimatedTokens.Should().Be(1); // see the token-floor note above
+        pack.EstimatedTokens.Should().Be(0); // see the empty-section note above
         pack.PrimaryHits.Should().BeEmpty();
     }
 

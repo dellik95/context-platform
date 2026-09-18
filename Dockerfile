@@ -18,10 +18,8 @@ WORKDIR /src
 # across rebuilds that only touch source, not project references or package versions.
 COPY global.json Directory.Build.props Directory.Packages.props ./
 COPY apps/host/Context.Dashboard/Context.Dashboard.Server/Context.Dashboard.Server.csproj apps/host/Context.Dashboard/Context.Dashboard.Server/
-COPY apps/cli/Context.Cli/Context.Cli.csproj apps/cli/Context.Cli/
 COPY src/ src/
-RUN dotnet restore apps/host/Context.Dashboard/Context.Dashboard.Server/Context.Dashboard.Server.csproj -r linux-x64 \
- && dotnet restore apps/cli/Context.Cli/Context.Cli.csproj -r linux-x64
+RUN dotnet restore apps/host/Context.Dashboard/Context.Dashboard.Server/Context.Dashboard.Server.csproj -r linux-x64
 
 COPY apps/ apps/
 
@@ -29,9 +27,7 @@ COPY apps/ apps/
 # dev-only SpaProxy wiring) — the dashboard-build stage above already produced the exact output
 # this needs, copied straight into wwwroot in the runtime stage below.
 RUN dotnet publish apps/host/Context.Dashboard/Context.Dashboard.Server/Context.Dashboard.Server.csproj \
-      -c Release -r linux-x64 --self-contained false --no-restore -o /app/host \
- && dotnet publish apps/cli/Context.Cli/Context.Cli.csproj \
-      -c Release -r linux-x64 --self-contained false --no-restore -o /app/cli
+      -c Release -r linux-x64 --self-contained false --no-restore -o /app/host
 
 # ---- runtime ----------------------------------------------------------------
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
@@ -45,17 +41,10 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/host ./host
-COPY --from=build /app/cli ./cli
 COPY --from=dashboard-build /dashboard/dist/dashboard/browser ./host/wwwroot
 
-# `context ...` on PATH so `docker exec <container> context index` etc. work exactly like the
-# bare-metal CLI, without needing to know the published dll's path.
-RUN printf '#!/bin/sh\nexec dotnet /app/cli/Context.Cli.dll "$@"\n' > /usr/local/bin/context \
- && chmod +x /usr/local/bin/context
-
-# CONTEXT_PLATFORM_ROOT points at the mounted project (see docker-compose.yml); Context.Dashboard.Server and
-# every `context ...` CLI invocation via the wrapper above default to it, so no --root flag is
-# needed inside the container. ContextHostOptions.FromEnvironment also auto-detects
+# CONTEXT_PLATFORM_ROOT points at the mounted project (see docker-compose.yml).
+# ContextHostOptions.FromEnvironment also auto-detects
 # DOTNET_RUNNING_IN_CONTAINER (set by this base image) and binds Kestrel to 0.0.0.0 instead of
 # 127.0.0.1 for that reason alone — do not rely on that as the security boundary, publish the
 # container's port bound to the *host's* 127.0.0.1 instead (see docker-compose.yml).

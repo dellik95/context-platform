@@ -28,4 +28,25 @@ public interface IMemoryRepository
     /// silently omitted rather than erroring — a stale vector-index record pointing at a since-
     /// deleted memory should just drop out of the result set.</summary>
     Task<IReadOnlyList<Memory>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct);
+
+    /// <summary>Points <paramref name="oldMemoryId"/> at <paramref name="newMemoryId"/> and nothing
+    /// else. False when the row no longer exists.</summary>
+    /// <remarks>Single-column update rather than read-modify-<see cref="UpdateAsync"/>: the latter
+    /// writes back every column of a stale snapshot, reverting whatever else changed meanwhile.</remarks>
+    Task<bool> MarkSupersededAsync(Guid oldMemoryId, Guid newMemoryId, CancellationToken ct);
+
+    /// <summary>Points every id in <paramref name="oldMemoryIds"/> at <paramref name="newMemoryId"/>
+    /// in one statement. Returns the number of rows updated; ids that no longer exist are ignored.</summary>
+    /// <remarks>One statement rather than a loop over <see cref="MarkSupersededAsync"/> so a
+    /// compaction merge can supersede a whole cluster inside the transaction that inserted the
+    /// merged memory — a partial loop would otherwise leave some sources pointing at the merge and
+    /// the rest still active, i.e. the same fact live twice.</remarks>
+    Task<int> MarkSupersededBatchAsync(IReadOnlyCollection<Guid> oldMemoryIds, Guid newMemoryId, CancellationToken ct);
+
+    /// <summary>Atomically increments <see cref="Memory.ReinforcementCount"/>, stamps
+    /// <see cref="Memory.LastReinforcedAt"/>, and promotes the memory to
+    /// <see cref="Domain.Enums.MemoryTier.LongTerm"/> at or above
+    /// <paramref name="promotionReinforcementThreshold"/> (or when pinned). Returns the new count,
+    /// or null when the row no longer exists.</summary>
+    Task<int?> ReinforceAsync(Guid memoryId, DateTimeOffset reinforcedAt, int promotionReinforcementThreshold, CancellationToken ct);
 }

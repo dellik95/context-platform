@@ -17,4 +17,11 @@ public sealed class HybridSearchOptions
     public double SemanticStrongMatchThreshold { get; set; } = HybridSearchEngine.DefaultSemanticStrongMatchThreshold;
 
     public double SemanticBoostFactor { get; set; } = HybridSearchEngine.DefaultSemanticBoostFactor;
+
+    /// <summary>
+    /// Minimum raw cosine similarity for a vector hit to count as a signal at all. Below it the
+    /// candidate's vector score is zeroed, and a candidate with no lexical match either is dropped
+    /// rather than min-max normalized back up into the results.
+    /// </summary>
+    public double VectorRelevanceFloor { get; set; } = HybridSearchEngine.DefaultVectorRelevanceFloor;
 }

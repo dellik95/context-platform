@@ -65,6 +65,7 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         await AssertCorsAllowListAsync(client);
         var project = await AssertProjectCreateAndRoundTripAsync(client);
         await AssertProtectedEndpointRequiresBearerTokenAsync(client);
+        await AssertCrossProjectAccessIsRejectedAsync(client, project);
         await AssertHookAuthAsync(client);
         await AssertSearchSmokeAsync(client, project);
     }
@@ -108,7 +109,7 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
     /// <summary>
     /// POST /api/projects (admin-token-gated — a brand-new project has no bearer token of its own
     /// yet) then GET /api/projects/{id} using the project's OWN freshly-minted token (proving
-    /// <see cref="ProjectEndpoints"/>'s <c>RequireOwnProjectOrAdminAsync</c> filter's per-project
+    /// <c>ProjectScopeAuth.RequireOwnProjectFilter</c>'s per-project
     /// path, not just its admin fallback): the created project round-trips through the real
     /// repository/DB.
     /// </summary>
@@ -208,6 +209,89 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
     }
 
     /// <summary>
+    /// A valid bearer token authenticates one project, and only that project. This fixture has two
+    /// real projects in the same database — the pre-seeded "Hook Project" and the "Widget Service"
+    /// just created — so it can prove the cross-tenant case for both ways a route names a project:
+    /// the <c>{id}</c> route value (settings, Claude install) and the <c>projectId</c> query
+    /// parameter (memories, jobs, usage, hooks status, symbols). Each is asserted to be rejected
+    /// with the *other* project's token, and accepted with its own.
+    /// </summary>
+    private async Task AssertCrossProjectAccessIsRejectedAsync(HttpClient client, ProjectDto project)
+    {
+        var otherId = _factory.ProjectId;
+        var ownToken = project.Token!;
+
+        string[] foreignRouteIdUrls =
+        [
+            $"/api/projects/{otherId}/settings",
+            $"/api/projects/{otherId}",
+        ];
+
+        foreach (var url in foreignRouteIdUrls)
+        {
+            using var request = CreateAuthorizedRequest(HttpMethod.Get, url, ownToken);
+            var response = await client.SendAsync(request);
+            response.StatusCode.Should().Be(HttpStatusCode.Forbidden,
+                "{0} names a project this bearer token does not authorize", url);
+        }
+
+        using (var installRequest = CreateAuthorizedRequest(
+            HttpMethod.Post, $"/api/projects/{otherId}/claude/install", ownToken, new { }))
+        {
+            var installResponse = await client.SendAsync(installRequest);
+            installResponse.StatusCode.Should().Be(HttpStatusCode.Forbidden,
+                "installing into another project's root would rewrite that project's .mcp.json and hook scripts");
+        }
+
+        // The admin token acts on any project — except here, where the authenticating token is also
+        // the value written into the project's own on-disk integration files.
+        using (var adminInstallRequest = CreateAuthorizedRequest(
+            HttpMethod.Post, $"/api/projects/{otherId}/claude/install", _factory.AdminToken, new { }))
+        {
+            var adminInstallResponse = await client.SendAsync(adminInstallRequest);
+            adminInstallResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized,
+                "the admin token is not a project token, and must never be written into a repo's .mcp.json");
+        }
+
+        string[] foreignQueryUrls =
+        [
+            $"/api/memories?projectId={otherId}&q=anything",
+            $"/api/jobs?projectId={otherId}",
+            $"/api/usage?projectId={otherId}",
+            $"/api/hooks/status?projectId={otherId}",
+            $"/api/symbols?projectId={otherId}&q=anything",
+        ];
+
+        foreach (var url in foreignQueryUrls)
+        {
+            using var request = CreateAuthorizedRequest(HttpMethod.Get, url, ownToken);
+            var response = await client.SendAsync(request);
+            response.StatusCode.Should().Be(HttpStatusCode.Forbidden,
+                "{0} carries another project's id in its query string", url);
+        }
+
+        // Same routes, own project: the scoping must not have locked callers out of their own data.
+        string[] ownUrls =
+        [
+            $"/api/projects/{project.Id}/settings",
+            $"/api/memories?projectId={project.Id}&q=anything",
+            "/api/memories?q=anything",
+            $"/api/jobs?projectId={project.Id}",
+            "/api/jobs",
+            $"/api/usage?projectId={project.Id}",
+            $"/api/hooks/status?projectId={project.Id}",
+        ];
+
+        foreach (var url in ownUrls)
+        {
+            using var request = CreateAuthorizedRequest(HttpMethod.Get, url, ownToken);
+            var response = await client.SendAsync(request);
+            response.IsSuccessStatusCode.Should().BeTrue(
+                "{0} names the caller's own project (or no project at all, which defaults to it)", url);
+        }
+    }
+
+    /// <summary>
     /// With CORS restricted to an explicit dev allow-list (BACKLOG-01), a request from an allowed
     /// dev origin gets that exact origin echoed back in Access-Control-Allow-Origin; a request from
     /// an origin NOT on the list gets no such header at all — never a wildcard, never silently
@@ -242,12 +326,9 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
     /// itself) must therefore exist before that first access, and a fixture constructor — run once
     /// by xunit before any test in the class executes — is exactly that point.
     /// <para/>
-    /// <b>Why the database is migrated by hand here:</b> <c>Context.Dashboard.Server</c>'s own <c>Program.cs</c>
-    /// never calls <c>Database.Migrate()</c> — in real usage that is the CLI's job (see
-    /// <c>Context.Cli</c>'s <c>InitializeAsync(root, migrate: true, ...)</c>, run once by
-    /// <c>context claude install</c>/<c>context init</c> before the host is ever started). Without
-    /// this, <c>InitializeHostProjectContextAsync</c> would throw querying a schema-less database
-    /// before a single route is even mapped.
+    /// <b>Why the database is migrated by hand here:</b> <c>Program.cs</c> does migrate at startup,
+    /// but this fixture has to seed its pre-Phase-3 <c>Project</c> row (see below) into a schema
+    /// that exists <i>before</i> the host is ever built — so the schema has to be created here.
     /// <para/>
     /// <b>Why only one instance is ever live:</b> <c>Program.cs</c> sets the global static
     /// <c>Serilog.Log.Logger</c>; a second concurrently-running instance would race on it. This

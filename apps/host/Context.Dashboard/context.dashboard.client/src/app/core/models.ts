@@ -20,8 +20,9 @@ export type GraphEdgeKind =
   | 'Extends' | 'Implements' | 'Uses' | 'Tests' | 'DependsOn';
 
 export type JobType =
-  | 'IndexFile' | 'DeleteFile' | 'ParseFile' | 'ResolveRelations' | 'UpdateGraph'
-  | 'EmbedChunk' | 'SummarizeSession' | 'ExtractMemory' | 'DecayMemory' | 'BackupDb';
+  | 'IndexFile' | 'ResolveRelations' | 'UpdateGraph'
+  | 'EmbedChunk' | 'SummarizeSession' | 'ExtractMemory' | 'DecayMemory' | 'BackupDb'
+  | 'RecreateEmbeddings' | 'CompactMemory';
 
 export type JobStatus = 'Pending' | 'Running' | 'Done' | 'Failed';
 

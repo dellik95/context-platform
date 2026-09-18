@@ -52,33 +52,40 @@ public sealed class ContextPackBuilder : IContextPackBuilder
         var hits = await _searchEngine.SearchAsync(query, ct).ConfigureAwait(false);
 
         var budget = Math.Max(0, query.TokenBudget);
-        var architectureBudget = (int)(budget * _options.ArchitectureReserveRatio);
-        var primaryBudget = (int)(budget * _options.PrimaryReserveRatio);
-        var historicalBudget = (int)(budget * _options.HistoricalReserveRatio);
-        var openIssuesBudget = (int)(budget * _options.OpenIssuesReserveRatio);
         // The safety reserve (~10%) is intentionally never spent — it is headroom, not a section.
-
+        // Every other section hands what it did not spend to the next one, and primary hits are
+        // filled last so they inherit all of it: historical notes and open issues are empty on the
+        // IContextPackBuilder-contract overload and frequently empty in practice, and without a
+        // carry-forward their 35% of the budget was simply burned, returning a pack a third smaller
+        // than the caller asked for while the search had more hits to give.
+        var architectureBudget = (int)(budget * _options.ArchitectureReserveRatio);
         var architectureSummary = BuildArchitectureSummary(hits, architectureBudget);
+        var architectureTokens = EstimateSection(architectureSummary);
+        var unspent = Math.Max(0, architectureBudget - architectureTokens);
 
+        // Query-intent detection: a "what's still pending?" style query re-prioritizes
+        // pending-work/next-steps flavored notes ahead of the caller's relevance order within each
+        // section, before the budget knapsack decides what actually fits -- see QueryIntent's
+        // remarks for why "recall" intent is handled by the caller
+        // (Context.Application.ContextEngine) instead, which has the memory timestamps this layer
+        // does not.
+        var pendingWorkIntent = QueryIntent.IsPendingWork(query.Text);
+
+        var historicalBudget = (int)(budget * _options.HistoricalReserveRatio) + unspent;
+        var (historicalSelected, historicalTokens, historicalTruncated, historicalMore) =
+            GreedyKnapsackOrdered(PrioritizeIfPendingWork(historicalNotes ?? [], pendingWorkIntent), TokenEstimator.Estimate, historicalBudget);
+        unspent = Math.Max(0, historicalBudget - historicalTokens);
+
+        var openIssuesBudget = (int)(budget * _options.OpenIssuesReserveRatio) + unspent;
+        var (openIssuesSelected, openIssuesTokens, openIssuesTruncated, openIssuesMore) =
+            GreedyKnapsackOrdered(PrioritizeIfPendingWork(openIssues ?? [], pendingWorkIntent), TokenEstimator.Estimate, openIssuesBudget);
+        unspent = Math.Max(0, openIssuesBudget - openIssuesTokens);
+
+        var primaryBudget = (int)(budget * _options.PrimaryReserveRatio) + unspent;
         var (primaryHits, primaryTokens, primaryTruncated, primaryMore) =
             GreedyKnapsack(hits, h => h.Score, h => TokenEstimator.Estimate(h.Snippet ?? h.Label), primaryBudget);
 
-        // Query-intent detection (ROADMAP.md's hybrid pack re-ranking refinements): a "what's
-        // still pending?" style query re-prioritizes pending-work/next-steps flavored notes ahead
-        // of the caller's relevance order within each section, before the budget knapsack decides
-        // what actually fits -- see QueryIntent's remarks for why "recall" intent is handled by
-        // the caller (Context.Application.ContextEngine) instead, which has the memory timestamps
-        // this layer does not.
-        var pendingWorkIntent = QueryIntent.IsPendingWork(query.Text);
-
-        var (historicalSelected, historicalTokens, historicalTruncated, historicalMore) =
-            GreedyKnapsackOrdered(PrioritizeIfPendingWork(historicalNotes ?? [], pendingWorkIntent), TokenEstimator.Estimate, historicalBudget);
-
-        var (openIssuesSelected, openIssuesTokens, openIssuesTruncated, openIssuesMore) =
-            GreedyKnapsackOrdered(PrioritizeIfPendingWork(openIssues ?? [], pendingWorkIntent), TokenEstimator.Estimate, openIssuesBudget);
-
-        var estimatedTokens =
-            TokenEstimator.Estimate(architectureSummary) + primaryTokens + historicalTokens + openIssuesTokens;
+        var estimatedTokens = architectureTokens + primaryTokens + historicalTokens + openIssuesTokens;
 
         var truncated = primaryTruncated || historicalTruncated || openIssuesTruncated;
         var moreAvailable = primaryMore + historicalMore + openIssuesMore;
@@ -105,6 +112,13 @@ public sealed class ContextPackBuilder : IContextPackBuilder
     /// </summary>
     private static IReadOnlyList<string> PrioritizeIfPendingWork(IReadOnlyList<string> items, bool pendingWorkIntent) =>
         pendingWorkIntent ? [.. items.OrderByDescending(QueryIntent.IsPendingWorkFlavored)] : items;
+
+    /// <summary>
+    /// <see cref="TokenEstimator.Estimate(string)"/> floors at 1 token, so an absent section would
+    /// otherwise bill the pack — and, via the carry-forward, shrink every section after it.
+    /// </summary>
+    private static int EstimateSection(string text) =>
+        string.IsNullOrEmpty(text) ? 0 : TokenEstimator.Estimate(text);
 
     private static string BuildArchitectureSummary(IReadOnlyList<SearchHit> hits, int budgetTokens)
     {

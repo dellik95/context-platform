@@ -40,4 +40,12 @@ public interface IMemoryVectorIndex
     /// <see cref="IChunkVectorIndex.DeleteByProjectAsync"/>.
     /// </summary>
     Task DeleteByProjectAsync(Guid projectId, CancellationToken ct);
+
+    /// <summary>
+    /// Removes the records for <paramref name="memoryIds"/> from every embedding-provider
+    /// collection. Ids that aren't indexed are ignored. Same recall argument as
+    /// <see cref="IChunkVectorIndex.DeleteAsync"/>: a deleted memory drops out of the join anyway,
+    /// but until its vector goes too it keeps consuming a top-K slot.
+    /// </summary>
+    Task DeleteAsync(IReadOnlyCollection<Guid> memoryIds, CancellationToken ct);
 }

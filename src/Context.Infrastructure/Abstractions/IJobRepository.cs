@@ -36,6 +36,23 @@ public interface IJobRepository
     /// job with nothing left to act on, and this is the only way to shrink that table back down.
     /// </summary>
     Task<int> DeleteByStatusAsync(JobStatus status, Guid? projectId, CancellationToken ct);
+
+    /// <summary>
+    /// Deletes terminal (<see cref="JobStatus.Done"/> / <see cref="JobStatus.Failed"/>) jobs that
+    /// finished before <paramref name="cutoff"/>, host-wide, returning how many rows went. The
+    /// manual <see cref="DeleteByStatusAsync"/> cleanup exists but nothing calls it on its own, so
+    /// this is what keeps the table from growing by one permanent row per embedded chunk forever
+    /// on a host nobody clicks buttons on.
+    /// </summary>
+    Task<int> DeleteFinishedOlderThanAsync(DateTimeOffset cutoff, CancellationToken ct);
+
+    /// <summary>
+    /// When a job of <paramref name="type"/> was last enqueued host-wide, or null if none ever was.
+    /// Lets the daily maintenance scheduler derive its own cadence from the queue instead of from
+    /// process uptime — a host restarted more often than the interval would otherwise never reach
+    /// its first tick and silently skip backups forever.
+    /// </summary>
+    Task<DateTimeOffset?> GetLastEnqueuedAtAsync(JobType type, CancellationToken ct);
 }
 
 public sealed record JobStatusCounts(int Pending, int Running, int Failed, int Done);

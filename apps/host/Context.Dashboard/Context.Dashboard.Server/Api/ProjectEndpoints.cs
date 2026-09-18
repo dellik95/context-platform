@@ -23,10 +23,9 @@ namespace Context.Dashboard.Server.Api;
 /// (only the admin token can authorize minting its first one), and the project list itself is
 /// cross-tenant information no single project's own token should be able to read on a host shared
 /// by many projects. <c>GetStatusAsync</c>/<c>TriggerIndex</c> operate on one already-known project
-/// and are gated by <see cref="RequireOwnProjectOrAdminAsync"/>: either the caller's bearer token
-/// resolves (via <see cref="BearerTokenAuth"/>) to the same project as the <c>{id}</c> route value —
-/// stashed for <see cref="CurrentProjectAccessor"/> exactly like <see cref="BearerTokenAuth.RequireBearerTokenFilter"/>
-/// does — or the caller presents the admin token, which can act on any project.
+/// and are gated by <see cref="ProjectScopeAuth.RequireOwnProjectFilter"/>: either the caller's
+/// bearer token resolves to the same project as the <c>{id}</c> route value, or the caller presents
+/// the admin token, which can act on any project.
 /// </summary>
 public static class ProjectEndpoints
 {
@@ -36,45 +35,12 @@ public static class ProjectEndpoints
 
         group.MapPost("/", CreateAsync).RequireAdminToken();
         group.MapGet("/", ListAsync).RequireAdminToken();
-        group.MapGet("/{id:guid}", GetStatusAsync).AddEndpointFilter(RequireOwnProjectOrAdminAsync);
-        group.MapPost("/{id:guid}/index", TriggerIndex).AddEndpointFilter(RequireOwnProjectOrAdminAsync);
-        group.MapPost("/{id:guid}/index/cancel", CancelIndex).AddEndpointFilter(RequireOwnProjectOrAdminAsync);
-        group.MapPost("/{id:guid}/embeddings/recreate", TriggerRecreateEmbeddings).AddEndpointFilter(RequireOwnProjectOrAdminAsync);
+        group.MapGet("/{id:guid}", GetStatusAsync).RequireOwnProject();
+        group.MapPost("/{id:guid}/index", TriggerIndex).RequireOwnProject();
+        group.MapPost("/{id:guid}/index/cancel", CancelIndex).RequireOwnProject();
+        group.MapPost("/{id:guid}/embeddings/recreate", TriggerRecreateEmbeddings).RequireOwnProject();
         group.MapPost("/{id:guid}/token", ReissueTokenAsync).RequireAdminToken();
-        group.MapDelete("/{id:guid}", DeleteProjectAsync).AddEndpointFilter(RequireOwnProjectOrAdminAsync);
-    }
-
-    /// <summary>
-    /// Endpoint filter for the <c>{id:guid}</c> routes above: authorized when either the admin token
-    /// is presented, or the caller's bearer token resolves to the very project named by the route's
-    /// <c>id</c> value. A bearer token that resolves to a *different* project is rejected — the
-    /// route id is not itself an authorization credential.
-    /// </summary>
-    private static async ValueTask<object?> RequireOwnProjectOrAdminAsync(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)
-    {
-        var http = ctx.HttpContext;
-        var adminToken = http.RequestServices.GetRequiredService<AdminTokenProvider>();
-        if (AdminTokenAuth.IsAuthorized(http, adminToken))
-        {
-            return await next(ctx).ConfigureAwait(false);
-        }
-
-        var projects = http.RequestServices.GetRequiredService<IProjectRepository>();
-        var project = await BearerTokenAuth.TryResolveProjectAsync(http, projects, http.RequestAborted).ConfigureAwait(false);
-        if (project is null)
-        {
-            return Results.Unauthorized();
-        }
-
-        var requestedId = http.Request.RouteValues["id"] as string;
-        if (!Guid.TryParse(requestedId, out var id) || id != project.Id)
-        {
-            return Results.Problem("This bearer token does not authorize access to the requested project.", statusCode: StatusCodes.Status403Forbidden);
-        }
-
-        http.Items[CurrentProjectAccessor.HttpContextItemKey] = project;
-
-        return await next(ctx).ConfigureAwait(false);
+        group.MapDelete("/{id:guid}", DeleteProjectAsync).RequireOwnProject();
     }
 
     /// <summary>

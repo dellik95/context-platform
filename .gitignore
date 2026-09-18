@@ -25,3 +25,10 @@ apps/host/Context.Host/wwwroot/
 .claude/context-platform.local.json
 .claude/hooks.log
 refs/
+
+# Written by the installer with a live bearer token in the Authorization header.
+.mcp.json
+.claude/.backup/
+
+# Bootstrap script fetched by the Dockerfile / deploy scripts, not source.
+dotnet-install.sh

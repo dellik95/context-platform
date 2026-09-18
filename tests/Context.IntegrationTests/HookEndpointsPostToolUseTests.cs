@@ -62,4 +62,42 @@ public class HookEndpointsPostToolUseTests
             e => e.RecordEventAsync(sessionId, SessionEventType.FileRead, It.IsAny<object>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
+
+    [Fact]
+    public async Task PostToolUseAsync_RecordsRepoRelativePathLiftedOutOfToolInput()
+    {
+        var projectId = Guid.NewGuid();
+        var claudeSessionId = $"claude-session-{Guid.NewGuid():N}";
+        var sessionId = Guid.NewGuid();
+        var root = OperatingSystem.IsWindows() ? @"C:\hook-project" : "/hook-project";
+
+        var sessionMap = new ClaudeSessionMap();
+        sessionMap.Set(claudeSessionId, projectId, sessionId);
+
+        object? recordedPayload = null;
+        var engine = new Mock<IContextEngine>(MockBehavior.Strict);
+        engine
+            .Setup(e => e.RecordEventAsync(sessionId, SessionEventType.FileEdit, It.IsAny<object>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, SessionEventType, object, CancellationToken>((_, _, payload, _) => recordedPayload = payload)
+            .Returns(Task.CompletedTask);
+
+        var project = new Project { Id = projectId, Name = "Hook Project", RootPath = root, CreatedAt = DateTimeOffset.UtcNow };
+        var httpContext = new DefaultHttpContext();
+        httpContext.Items[CurrentProjectAccessor.HttpContextItemKey] = project;
+        var httpContextAccessor = new Mock<IHttpContextAccessor>();
+        httpContextAccessor.Setup(a => a.HttpContext).Returns(httpContext);
+        var currentProject = new CurrentProjectAccessor(httpContextAccessor.Object);
+
+        var editedFile = Path.Combine(root, "src", "Context.Memory", "X.cs");
+        var toolInput = System.Text.Json.JsonSerializer.Serialize(new { file_path = editedFile });
+        var input = new PostToolUseInput(claudeSessionId, "Edit", toolInput, "{}");
+
+        await HookEndpoints.PostToolUseAsync(
+            input, engine.Object, currentProject, sessionMap,
+            new Mock<IHookInvocationRepository>().Object, NullHookInvocationNotifier.Instance, CancellationToken.None);
+
+        recordedPayload.Should().NotBeNull();
+        using var payload = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(recordedPayload));
+        payload.RootElement.GetProperty("path").GetString().Should().Be("src/Context.Memory/X.cs");
+    }
 }

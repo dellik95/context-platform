@@ -325,9 +325,9 @@ namespace Context.Infrastructure.Migrations
 
                     b.HasIndex("NextRetryAt");
 
-                    b.HasIndex("Status");
-
                     b.HasIndex("ProjectId", "Status");
+
+                    b.HasIndex("Status", "Priority");
 
                     b.HasIndex("Type", "Status");
 

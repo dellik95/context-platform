@@ -69,10 +69,11 @@ Administrator.
 
 ## 3. Add a project and point Claude Code at it
 
-Open the Dashboard (`http://127.0.0.1:47923`), create a project pointing at the repo you want
-indexed, then run `context claude install --project <id>` (Context.Cli) from that repo — it writes
-`.mcp.json` and the hook scripts assuming Context.Dashboard.Server listens on `127.0.0.1:47923` (or
-`CONTEXT_PLATFORM_PORT` if you overrode it).
+Open the Dashboard (`http://127.0.0.1:47923`) and create a project pointing at the repo you want
+indexed. Creating it installs the Claude Code integration into that repo automatically — `.mcp.json`
+plus the hook scripts, written against `127.0.0.1:47923` (or `CONTEXT_PLATFORM_PORT` if you
+overrode it). To re-run the install later (after moving the repo, or rotating the token), `POST
+/api/projects/{id}/claude/install`.
 
 ## Multi-instance job dispatch (optional)
 

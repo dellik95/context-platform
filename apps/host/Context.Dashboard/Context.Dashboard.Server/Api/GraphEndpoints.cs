@@ -16,8 +16,13 @@ public sealed record SymbolSummaryDto(Guid Id, string Name, string QualifiedName
 /// <c>/api/graph/impact</c> and <c>/api/symbols</c> — the latter exists purely so the Dashboard's
 /// Graph panel can resolve a human-typed name to the <see cref="Context.Domain.Entities.Symbol.Id"/>
 /// <c>/api/graph/impact</c> actually needs (CONTRACTS.md's IContextEngine facade has no
-/// name-search method of its own — this goes straight to <see cref="ISymbolRepository"/>, same as
-/// Context.Cli's own symbol/graph command does).
+/// name-search method of its own — this goes straight to <see cref="ISymbolRepository"/>).
+/// <para/>
+/// Every id here arrives from the caller, and neither <see cref="IGraphTraversal"/> (keyed purely
+/// by node id) nor <see cref="ISymbolRepository"/> filters by project on its own, so each handler
+/// scopes its own input to the project the caller's bearer token resolved to: the <c>projectId</c>
+/// query parameter via <see cref="ProjectScopeAuth.RequireMatchingProjectIdFilter"/>, a node id via
+/// <see cref="ResolveProjectIdForNodeAsync"/>.
 /// </summary>
 public static class GraphEndpoints
 {
@@ -27,15 +32,23 @@ public static class GraphEndpoints
 
     public static void MapGraphEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("").RequireBearerToken();
+        var group = app.MapGroup("").RequireBearerToken().RequireMatchingProjectId();
         group.MapGet("/api/graph/impact", ImpactAsync);
         group.MapGet("/api/graph/neighborhood", NeighborhoodAsync);
         group.MapGet("/api/graph/full", FullGraphAsync);
         group.MapGet("/api/symbols", SearchSymbolsAsync);
     }
 
-    private static async Task<IResult> ImpactAsync(Guid symbolId, int? maxHops, IContextEngine engine, CancellationToken ct)
+    private static async Task<IResult> ImpactAsync(
+        Guid symbolId, int? maxHops, IContextEngine engine,
+        ISymbolRepository symbols, IFileRepository files, CurrentProjectAccessor currentProject,
+        CancellationToken ct)
     {
+        if (!await OwnsNodeAsync(symbolId, symbols, files, currentProject, ct).ConfigureAwait(false))
+        {
+            return Results.NotFound();
+        }
+
         var impact = await engine.GraphImpactAsync(symbolId, maxHops ?? DefaultMaxHops, ct).ConfigureAwait(false);
         return Results.Ok(impact);
     }
@@ -43,17 +56,20 @@ public static class GraphEndpoints
     private static async Task<IResult> NeighborhoodAsync(
         Guid nodeId, int? hops, string[]? kinds,
         IGraphTraversal graphTraversal, IGraphCacheProvider graphCacheProvider,
-        ISymbolRepository symbols, IFileRepository files, CancellationToken ct)
+        ISymbolRepository symbols, IFileRepository files, CurrentProjectAccessor currentProject,
+        CancellationToken ct)
     {
         // IGraphTraversal is keyed purely by node id with no ProjectId of its own, and only warms a
         // project's InMemoryGraphCache on the first access that project ever gets (see Context.
         // Graph.GraphCacheProvider) - mirrors ContextEngine.GraphImpactAsync's/ContextMcpTools'
         // WarmGraphCacheForNodeAsync dance so a cold, never-touched project's graph is found too.
         var projectId = await ResolveProjectIdForNodeAsync(nodeId, symbols, files, ct).ConfigureAwait(false);
-        if (projectId is { } id)
+        if (projectId != currentProject.ProjectId)
         {
-            await graphCacheProvider.GetOrCreateAsync(id, ct).ConfigureAwait(false);
+            return Results.NotFound();
         }
+
+        await graphCacheProvider.GetOrCreateAsync(projectId.Value, ct).ConfigureAwait(false);
 
         var neighborhood = await graphTraversal.NeighborhoodAsync(
             nodeId, ParseEdgeKinds(kinds), hops ?? DefaultNeighborhoodHops, ct).ConfigureAwait(false);
@@ -61,11 +77,24 @@ public static class GraphEndpoints
     }
 
     private static async Task<IResult> FullGraphAsync(
-        Guid projectId, string[]? kinds, IGraphTraversal graphTraversal, CancellationToken ct)
+        Guid? projectId, string[]? kinds, IGraphTraversal graphTraversal,
+        CurrentProjectAccessor currentProject, CancellationToken ct)
     {
-        var fullGraph = await graphTraversal.FullGraphAsync(projectId, ParseEdgeKinds(kinds), ct).ConfigureAwait(false);
+        var fullGraph = await graphTraversal
+            .FullGraphAsync(projectId ?? currentProject.ProjectId, ParseEdgeKinds(kinds), ct)
+            .ConfigureAwait(false);
         return Results.Ok(fullGraph);
     }
+
+    /// <summary>
+    /// Whether <paramref name="nodeId"/> is a symbol or file of the caller's own project. A node of
+    /// another project — or one that doesn't exist — is reported the same way, 404: a caller must
+    /// not be able to probe another project's graph for which ids are real.
+    /// </summary>
+    private static async Task<bool> OwnsNodeAsync(
+        Guid nodeId, ISymbolRepository symbols, IFileRepository files,
+        CurrentProjectAccessor currentProject, CancellationToken ct) =>
+        await ResolveProjectIdForNodeAsync(nodeId, symbols, files, ct).ConfigureAwait(false) == currentProject.ProjectId;
 
     private static async Task<Guid?> ResolveProjectIdForNodeAsync(
         Guid nodeId, ISymbolRepository symbols, IFileRepository files, CancellationToken ct)
@@ -101,14 +130,17 @@ public static class GraphEndpoints
     }
 
     private static async Task<IResult> SearchSymbolsAsync(
-        Guid projectId, string q, int? limit, ISymbolRepository symbols, CancellationToken ct)
+        Guid? projectId, string q, int? limit, ISymbolRepository symbols,
+        CurrentProjectAccessor currentProject, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(q))
         {
             return Results.Ok(Array.Empty<SymbolSummaryDto>());
         }
 
-        var results = await symbols.SearchByNameAsync(projectId, q, limit ?? DefaultSymbolSearchLimit, ct).ConfigureAwait(false);
+        var results = await symbols
+            .SearchByNameAsync(projectId ?? currentProject.ProjectId, q, limit ?? DefaultSymbolSearchLimit, ct)
+            .ConfigureAwait(false);
         return Results.Ok(results.Select(SymbolSummaryDto.FromEntity));
     }
 }

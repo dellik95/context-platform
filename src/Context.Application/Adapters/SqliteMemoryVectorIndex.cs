@@ -70,12 +70,11 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
 
     public async Task DeleteByProjectAsync(Guid projectId, CancellationToken ct)
     {
-        var tableNames = await ListMemoryVectorTableNamesAsync(ct).ConfigureAwait(false);
+        var tableNames = await SqliteVectorTables.ListAsync(_connectionString, TableNamePrefix, ct).ConfigureAwait(false);
 
         foreach (var tableName in tableNames)
         {
-            using var collection = new SqliteCollection<Guid, MemoryVectorRecord>(
-                _connectionString, tableName, new SqliteCollectionOptions { Definition = BuildDeleteOnlyDefinition() });
+            using var collection = OpenForDelete(tableName);
             await collection.EnsureCollectionExistsAsync(ct).ConfigureAwait(false);
 
             var memoryIds = new List<Guid>();
@@ -92,23 +91,28 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
         }
     }
 
-    private async Task<IReadOnlyList<string>> ListMemoryVectorTableNamesAsync(CancellationToken ct)
+    public async Task DeleteAsync(IReadOnlyCollection<Guid> memoryIds, CancellationToken ct)
     {
-        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection(_connectionString);
-        await connection.OpenAsync(ct).ConfigureAwait(false);
-
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'memory\\_vectors\\_%' ESCAPE '\\';";
-
-        var names = new List<string>();
-        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        if (memoryIds.Count == 0)
         {
-            names.Add(reader.GetString(0));
+            return;
         }
 
-        return names;
+        // Every provider collection, not just the one this memory was last embedded into: the
+        // embedding provider can change between the upsert and the delete, and a key that isn't
+        // there is a no-op delete anyway.
+        var tableNames = await SqliteVectorTables.ListAsync(_connectionString, TableNamePrefix, ct).ConfigureAwait(false);
+
+        foreach (var tableName in tableNames)
+        {
+            using var collection = OpenForDelete(tableName);
+            await collection.EnsureCollectionExistsAsync(ct).ConfigureAwait(false);
+            await collection.DeleteAsync(memoryIds, ct).ConfigureAwait(false);
+        }
     }
+
+    private SqliteCollection<Guid, MemoryVectorRecord> OpenForDelete(string tableName) =>
+        new(_connectionString, tableName, new SqliteCollectionOptions { Definition = BuildDeleteOnlyDefinition() });
 
     private static VectorStoreCollectionDefinition BuildDeleteOnlyDefinition() => new()
     {
@@ -207,10 +211,12 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
             _connectionString, CollectionNameFor(provider), new SqliteCollectionOptions { Definition = definition });
     }
 
+    private const string TableNamePrefix = "memory_vectors_";
+
     private static string CollectionNameFor(string provider)
     {
         var sanitized = new string(provider.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
-        return $"memory_vectors_{(sanitized.Length > 0 ? sanitized : "default")}";
+        return $"{TableNamePrefix}{(sanitized.Length > 0 ? sanitized : "default")}";
     }
 
     private sealed class MemoryVectorRecord

@@ -23,39 +23,19 @@ namespace Context.Application.Scheduling;
 /// shape as <c>Context.Dashboard.Server.Api.ProjectEndpoints.TriggerIndex</c> — so one project's failure or
 /// slowness can never block another project's turn or delay the next poll.
 /// </remarks>
-public sealed class ReindexSchedulerService : BackgroundService
+public sealed class ReindexSchedulerService(
+    IServiceScopeFactory scopeFactory,
+    TimeProvider? timeProvider = null,
+    ILogger<ReindexSchedulerService>? logger = null)
+    : PeriodicScheduler(PollInterval, timeProvider ?? TimeProvider.System, logger ?? NullLogger<ReindexSchedulerService>.Instance)
 {
     // TimeSpan isn't a compile-time constant, so this follows the same static-readonly-in-place-of-
     // const convention JobDispatcher already uses for its own TimeSpan constants.
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(60);
 
-    private readonly IServiceScopeFactory _scopeFactory;
-    private readonly ILogger<ReindexSchedulerService> _logger;
+    private readonly IServiceScopeFactory _scopeFactory = scopeFactory;
 
-    public ReindexSchedulerService(IServiceScopeFactory scopeFactory, ILogger<ReindexSchedulerService>? logger = null)
-    {
-        _scopeFactory = scopeFactory;
-        _logger = logger ?? NullLogger<ReindexSchedulerService>.Instance;
-    }
-
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            await PollOnceAsync(stoppingToken).ConfigureAwait(false);
-
-            try
-            {
-                await Task.Delay(PollInterval, stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-        }
-    }
-
-    private async Task PollOnceAsync(CancellationToken ct)
+    protected internal override async Task PollOnceAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var projectRepository = scope.ServiceProvider.GetRequiredService<IProjectRepository>();
@@ -71,7 +51,7 @@ public sealed class ReindexSchedulerService : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to evaluate reindex schedule for project {ProjectId}.", project.Id);
+                Logger.LogError(ex, "Failed to evaluate reindex schedule for project {ProjectId}.", project.Id);
             }
         }
     }
@@ -85,13 +65,13 @@ public sealed class ReindexSchedulerService : BackgroundService
         }
 
         var due = settings.LastReindexScheduledAt is null
-            || DateTimeOffset.UtcNow - settings.LastReindexScheduledAt.Value >= TimeSpan.FromMinutes(settings.ReindexIntervalMinutes);
+            || TimeProvider.GetUtcNow() - settings.LastReindexScheduledAt.Value >= TimeSpan.FromMinutes(settings.ReindexIntervalMinutes);
         if (!due)
         {
             return;
         }
 
-        await settingsService.UpdateAsync(projectId, settings with { LastReindexScheduledAt = DateTimeOffset.UtcNow }, ct)
+        await settingsService.UpdateAsync(projectId, settings with { LastReindexScheduledAt = TimeProvider.GetUtcNow() }, ct)
             .ConfigureAwait(false);
 
         FireReindex(projectId);
@@ -106,11 +86,11 @@ public sealed class ReindexSchedulerService : BackgroundService
             try
             {
                 await pipeline.ReindexProjectAsync(projectId, full: false, CancellationToken.None).ConfigureAwait(false);
-                _logger.LogInformation("Scheduled reindex of project {ProjectId} completed.", projectId);
+                Logger.LogInformation("Scheduled reindex of project {ProjectId} completed.", projectId);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Scheduled reindex of project {ProjectId} failed.", projectId);
+                Logger.LogError(ex, "Scheduled reindex of project {ProjectId} failed.", projectId);
             }
         });
     }

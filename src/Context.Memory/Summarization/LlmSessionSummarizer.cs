@@ -52,7 +52,7 @@ public sealed class LlmSessionSummarizer(
         {
             var chatResponse = await chatClient.GetResponseAsync(messages, cancellationToken: ct).ConfigureAwait(false);
             rawResponse = chatResponse.Text;
-            await RecordUsageAsync(projectId, sessionId, chatClient, chatResponse.Usage, ct).ConfigureAwait(false);
+            await usageRecorder.RecordChatUsageAsync(projectId, sessionId, "SessionSummary", chatClient, chatResponse.Usage, logger, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -86,32 +86,6 @@ public sealed class LlmSessionSummarizer(
             NextSteps = parsed.NextSteps,
             GeneratedAt = now
         };
-    }
-
-    // Best-effort: a failure recording token usage must not affect the summary already produced,
-    // so every exception here (other than cancellation) is logged and swallowed rather than
-    // propagated to the caller.
-    private async Task RecordUsageAsync(Guid projectId, Guid sessionId, IChatClient chatClient, UsageDetails? usage, CancellationToken ct)
-    {
-        try
-        {
-            await usageRecorder.RecordAsync(new UsageRecord
-            {
-                ProjectId = projectId,
-                SessionId = sessionId,
-                Purpose = "SessionSummary",
-                Provider = chatClient.GetProviderName(),
-                Model = chatClient.GetModelId(),
-                PromptTokens = (int?)usage?.InputTokenCount,
-                CompletionTokens = (int?)usage?.OutputTokenCount,
-                TotalTokens = (int?)usage?.TotalTokenCount,
-                CreatedAt = DateTimeOffset.UtcNow
-            }, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger?.LogWarning(ex, "Failed to record token usage for session {SessionId}.", sessionId);
-        }
     }
 
     // HeuristicSessionSummaryBuilder still returns the flat SessionSummary shape (Context.Memory's

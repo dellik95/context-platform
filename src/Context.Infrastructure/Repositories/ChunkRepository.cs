@@ -23,11 +23,12 @@ public class ChunkRepository(ContextDbContext db) : IChunkRepository
             .Join(db.Files.AsNoTracking().Where(f => f.ProjectId == projectId && !f.IsDeleted), c => c.FileId, f => f.Id, (c, f) => c)
             .ToListAsync(ct);
 
-    public async Task ReplaceForFileAsync(Guid fileId, IReadOnlyList<Chunk> chunks, CancellationToken ct)
+    public async Task<IReadOnlyList<Guid>> ReplaceForFileAsync(Guid fileId, IReadOnlyList<Chunk> chunks, CancellationToken ct)
     {
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         var existing = await db.Chunks.Where(c => c.FileId == fileId).ToListAsync(ct);
+        var removedIds = existing.Select(c => c.Id).ToList();
         db.Chunks.RemoveRange(existing);
 
         foreach (var chunk in chunks)
@@ -43,5 +44,7 @@ public class ChunkRepository(ContextDbContext db) : IChunkRepository
         await db.Chunks.AddRangeAsync(chunks, ct);
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
+
+        return removedIds;
     }
 }

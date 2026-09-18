@@ -25,7 +25,7 @@ namespace Context.IntegrationTests;
 /// index a real (tiny) source tree, search for a symbol in it, run a session that edits a file,
 /// end the session, and confirm the resulting memory can be found again by a later search.
 ///
-/// No mocks anywhere: this composes the exact same DI graph apps/cli/Context.Cli/Program.cs builds
+/// No mocks anywhere: this composes the exact same DI graph the host builds
 /// (AddContextInfrastructure -> AddContextIndexing -> AddContextGraph -> AddContextProviders ->
 /// AddContextRetrieval -> AddContextMemory -> AddContextApplication), pointed at a fresh temp
 /// directory that plays the role of both the indexed project root and the SQLite database
@@ -99,7 +99,7 @@ public sealed class GoldenPathE2ETests : IAsyncLifetime
         var dbPath = Path.Combine(dataDir, "context.db");
 
         // ---------------------------------------------------------------------------------------
-        // Compose the real DI container, matching Context.Cli/Program.cs's InitializeAsync exactly
+        // Compose the real DI container, matching the host's own composition exactly
         // (AddContextProviders with no options => every provider defaults to noop/lexical-overlap, so
         // no API key and no network access is ever required).
         // ---------------------------------------------------------------------------------------
@@ -245,7 +245,7 @@ public sealed class GoldenPathE2ETests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Mirrors Context.Cli/Program.cs's WaitForJobsToDrainAsync: polls IJobRepository until no
+    /// Polls IJobRepository until no
     /// Pending/Running jobs remain, bounded by <paramref name="timeout"/> so a genuine regression
     /// (a job stuck retrying, or a handler that never completes) fails the test instead of hanging.
     /// </summary>

@@ -215,5 +215,11 @@ public sealed class RecreateEmbeddingsJobHandlerTests
         }
 
         public Task MarkSupersededAsync(Guid oldMemoryId, Guid newMemoryId, CancellationToken ct) => Task.CompletedTask;
+
+        public Task SaveMergedAsync(Context.Domain.Entities.Memory merged, float[] embedding, IReadOnlyCollection<Guid> supersededIds, CancellationToken ct) =>
+            throw new NotSupportedException("Only CompactMemoryJobHandler merges memories.");
+
+        public Task<int?> ReinforceAsync(Guid memoryId, DateTimeOffset reinforcedAt, int promotionReinforcementThreshold, CancellationToken ct) =>
+            Task.FromResult<int?>(null);
     }
 }

@@ -32,6 +32,15 @@ describe('SettingsPanelComponent cloud provider disclosure', () => {
     minEventsForMemoryExtraction: 20,
     explicitRememberEnabled: true,
     staleSessionTimeoutMinutes: 240,
+    deleteSessionEventsAfterSummary: false,
+    hookInvocationRetentionDays: 30,
+    memoryCompactionIntervalMinutes: 0,
+    lastMemoryCompactionScheduledAt: null,
+    memoryCompactionSimilarityThreshold: 0.9,
+    memoryConsolidationSimilarityThreshold: 0.92,
+    memoryConsolidationLowSimilarityThreshold: 0.8,
+    memoryConsolidationPromotionReinforcementThreshold: 2,
+    memoryConsolidationTopKForDedup: 3,
   };
 
   function fakeSettingsResource(settings: ProjectSettingsDto) {

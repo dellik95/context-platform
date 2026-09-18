@@ -22,23 +22,49 @@ public sealed class LlmMemoryExtractor(
     IUsageRecorder usageRecorder,
     ILogger<LlmMemoryExtractor>? logger = null) : IMemoryExtractor
 {
+    internal const int MaxCandidatesPerChunk = 25;
+
     public async Task<IReadOnlyList<Context.Domain.Entities.Memory>> ExtractAsync(Guid projectId, SessionSummaryChunk chunk, CancellationToken ct)
     {
         var chatClient = await providerResolver.GetChatClientAsync(projectId, ct).ConfigureAwait(false);
+        var usedLlm = !chatClient.IsNoOp();
 
-        var candidates = chatClient.IsNoOp()
-            ? MemoryCandidateHeuristics.FromSummary(chunk)
-            : await ExtractCandidatesViaLlmAsync(chunk, projectId, chatClient, ct).ConfigureAwait(false);
+        var candidates = usedLlm
+            ? await ExtractCandidatesViaLlmAsync(chunk, projectId, chatClient, ct).ConfigureAwait(false)
+            : MemoryCandidateHeuristics.FromSummary(chunk);
+
+        candidates = Validate(candidates, chunk.SessionId);
+
+        if (candidates.Count > MaxCandidatesPerChunk)
+        {
+            logger?.LogWarning(
+                "Extraction produced {CandidateCount} candidates for session {SessionId}, above the per-chunk cap of {Cap}; the excess is dropped.",
+                candidates.Count, chunk.SessionId, MaxCandidatesPerChunk);
+            candidates = [.. candidates.Take(MaxCandidatesPerChunk)];
+        }
 
         // IDs/counts only, never candidate Title/Body text (MEMORY_PIPELINE_PLAN.md §D.5/Gap #5) -
         // matches the discipline already used by this class's LogWarning calls below.
-        logger?.LogInformation(
-            "Extracted {CandidateCount} candidate memories for session {SessionId}.", candidates.Count, chunk.SessionId);
-
         if (candidates.Count == 0)
         {
+            // A live LLM returning nothing usable is a failure worth alerting on; the offline
+            // heuristic legitimately finds nothing in a thin summary.
+            if (usedLlm)
+            {
+                logger?.LogWarning(
+                    "LLM provider {Provider} produced no usable candidate memories for session {SessionId}.",
+                    chatClient.GetProviderName(), chunk.SessionId);
+            }
+            else
+            {
+                logger?.LogInformation("No candidate memories for session {SessionId}.", chunk.SessionId);
+            }
+
             return [];
         }
+
+        logger?.LogInformation(
+            "Extracted {CandidateCount} candidate memories for session {SessionId}.", candidates.Count, chunk.SessionId);
 
         var existing = (await memoryStore.GetExistingWithEmbeddingsAsync(projectId, ct).ConfigureAwait(false)).ToList();
         var results = new List<Context.Domain.Entities.Memory>();
@@ -74,40 +100,51 @@ public sealed class LlmMemoryExtractor(
         {
             var chatResponse = await chatClient.GetResponseAsync(messages, cancellationToken: ct).ConfigureAwait(false);
             response = chatResponse.Text;
-            await RecordUsageAsync(projectId, chunk.SessionId, "MemoryExtraction", chatClient, chatResponse.Usage, ct).ConfigureAwait(false);
+            await usageRecorder.RecordChatUsageAsync(projectId, chunk.SessionId, "MemoryExtraction", chatClient, chatResponse.Usage, logger, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // Rethrown, not swallowed: the job handler's retry/backoff is the only thing that can
+            // recover a transient provider failure, and it can only see one that reaches it.
             logger?.LogWarning(ex, "LLM provider {Provider} failed to extract candidate memories for session {SessionId}.", chatClient.GetProviderName(), chunk.SessionId);
-            return [];
+            throw;
         }
 
-        return MemoryCandidateParser.Parse(response);
+        var parsed = MemoryCandidateParser.Parse(response);
+        if (parsed.DiscardedBlocks > 0)
+        {
+            logger?.LogWarning(
+                "Parser discarded {DiscardedBlocks} block(s) with content but no TYPE/TITLE for session {SessionId}; provider {Provider} drifted from the requested format.",
+                parsed.DiscardedBlocks, chunk.SessionId, chatClient.GetProviderName());
+        }
+
+        return parsed.Candidates;
     }
 
-    // Best-effort: a failure recording token usage must not affect extraction, so every
-    // exception here (other than cancellation) is logged and swallowed rather than propagated
-    // to the caller.
-    private async Task RecordUsageAsync(Guid projectId, Guid sessionId, string purpose, IChatClient chatClient, UsageDetails? usage, CancellationToken ct)
+    private IReadOnlyList<MemoryCandidate> Validate(IReadOnlyList<MemoryCandidate> candidates, Guid sessionId)
     {
-        try
+        var accepted = new List<MemoryCandidate>(candidates.Count);
+        var rejected = new List<string>();
+
+        foreach (var candidate in candidates)
         {
-            await usageRecorder.RecordAsync(new Context.Domain.Entities.UsageRecord
+            var normalized = MemoryCandidateValidator.Normalize(candidate, out var reason);
+            if (normalized is null)
             {
-                ProjectId = projectId,
-                SessionId = sessionId,
-                Purpose = purpose,
-                Provider = chatClient.GetProviderName(),
-                Model = chatClient.GetModelId(),
-                PromptTokens = (int?)usage?.InputTokenCount,
-                CompletionTokens = (int?)usage?.OutputTokenCount,
-                TotalTokens = (int?)usage?.TotalTokenCount,
-                CreatedAt = DateTimeOffset.UtcNow
-            }, ct).ConfigureAwait(false);
+                rejected.Add(reason!);
+                continue;
+            }
+
+            accepted.Add(normalized);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+
+        if (rejected.Count > 0)
         {
-            logger?.LogWarning(ex, "Failed to record token usage (purpose={Purpose}) for session {SessionId}.", purpose, sessionId);
+            logger?.LogWarning(
+                "Rejected {RejectedCount} malformed candidate memories for session {SessionId}: {Reasons}.",
+                rejected.Count, sessionId, string.Join(", ", rejected.Distinct()));
         }
+
+        return accepted;
     }
 }

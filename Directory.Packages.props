@@ -32,7 +32,6 @@
          SpaRoot/SpaProxyServerUrl/SpaProxyLaunchCommand properties in the csproj. -->
     <PackageVersion Include="Microsoft.AspNetCore.SpaProxy" Version="10.0.12" />
     <!-- CLI -->
-    <PackageVersion Include="System.CommandLine" Version="2.0.12" />
     <!-- MCP - bumped off the 0.2.0-preview API surface onto the 2.x stable release; needs a
          build/test pass, the API shape moved significantly since that preview. -->
     <PackageVersion Include="ModelContextProtocol" Version="2.2.0" />

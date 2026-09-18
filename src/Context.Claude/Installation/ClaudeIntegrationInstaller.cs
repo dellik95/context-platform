@@ -163,7 +163,7 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         var mcpConfig = await ReadOrCreateJsonObjectAsync(mcpPath, ct).ConfigureAwait(false);
         var mcpUrl = $"http://127.0.0.1:{_options.HostPort}{_options.McpPath}";
         SettingsJsonMerger.MergeMcpServer(mcpConfig, mcpUrl, resolvedToken);
-        await WriteJsonAsync(mcpPath, mcpConfig, ct).ConfigureAwait(false);
+        await WriteSecretJsonAsync(mcpPath, mcpConfig, ct).ConfigureAwait(false);
     }
 
     /// <summary>Bearer token + local config file. Shared by <see cref="InstallAsync"/>'s step 5 and <see cref="InstallMcpOnlyAsync"/>.</summary>
@@ -178,7 +178,7 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
             ["bearerToken"] = resolvedToken,
             ["generatedAt"] = DateTimeOffset.UtcNow.ToString("O"),
         };
-        await WriteJsonAsync(localConfigPath, localConfig, ct).ConfigureAwait(false);
+        await WriteSecretJsonAsync(localConfigPath, localConfig, ct).ConfigureAwait(false);
     }
 
     public async Task InstallSkillAsync(Guid projectId, string projectRoot, CancellationToken ct)
@@ -328,6 +328,35 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         await File.WriteAllTextAsync(path, json + "\n", ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// <see cref="WriteJsonAsync"/> for the two files that carry the raw bearer token
+    /// (<c>.mcp.json</c> and <c>context-platform.local.json</c>). Unix creates them 0644, which
+    /// hands every other account on the machine a credential with full API access to this project.
+    /// </summary>
+    private static async Task WriteSecretJsonAsync(string path, JsonNode node, CancellationToken ct)
+    {
+        await WriteJsonAsync(path, node, ct).ConfigureAwait(false);
+        RestrictToOwner(path);
+    }
+
+    private static void RestrictToOwner(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            // Best-effort: filesystems without POSIX modes (a WSL drvfs mount of an NTFS drive, a
+            // CIFS share) reject the chmod. Failing the whole install over it would be worse.
+        }
+    }
+
     private static async Task WriteTextAsync(string path, string content, CancellationToken ct) =>
         await File.WriteAllTextAsync(path, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), ct)
             .ConfigureAwait(false);
@@ -343,6 +372,9 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         var destination = Path.Combine(backupRoot, relative);
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         File.Copy(path, destination, overwrite: true);
+
+        // Backups of .mcp.json / context-platform.local.json contain the same token as the originals.
+        RestrictToOwner(destination);
     }
 
     private static void TryMarkExecutable(string path)

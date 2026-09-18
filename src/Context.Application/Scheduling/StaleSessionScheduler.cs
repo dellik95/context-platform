@@ -23,14 +23,17 @@ namespace Context.Application.Scheduling;
 /// Same fire-and-forget-per-project shape as <see cref="ReindexSchedulerService"/>: one project (or
 /// one session within it) failing must never block another's turn or delay the next poll.
 /// </remarks>
-public sealed class StaleSessionScheduler : BackgroundService
+public sealed class StaleSessionScheduler(
+    IServiceScopeFactory scopeFactory,
+    TimeProvider? timeProvider = null,
+    ILogger<StaleSessionScheduler>? logger = null)
+    : PeriodicScheduler(PollInterval, timeProvider ?? TimeProvider.System, logger ?? NullLogger<StaleSessionScheduler>.Instance)
 {
     private const string StaleReason = "stale-timeout";
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(60);
     private const int MaxSessionsPerProjectPerPoll = 100;
 
-    private readonly IServiceScopeFactory _scopeFactory;
-    private readonly ILogger<StaleSessionScheduler> _logger;
+    private readonly IServiceScopeFactory _scopeFactory = scopeFactory;
 
     // Guards against reprocessing a session already ended this poll before its DB write (from a
     // prior poll's EndSessionAsync) is visible to the next ListByProjectAsync read - same shape as
@@ -38,33 +41,7 @@ public sealed class StaleSessionScheduler : BackgroundService
     // (harmless, idempotent) EndSessionAsync call.
     private readonly HashSet<Guid> _endedThisPoll = new();
 
-    public StaleSessionScheduler(IServiceScopeFactory scopeFactory, ILogger<StaleSessionScheduler>? logger = null)
-    {
-        _scopeFactory = scopeFactory;
-        _logger = logger ?? NullLogger<StaleSessionScheduler>.Instance;
-    }
-
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            await PollOnceAsync(stoppingToken).ConfigureAwait(false);
-
-            try
-            {
-                await Task.Delay(PollInterval, stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-        }
-    }
-
-    // Internal (see InternalsVisibleTo in Context.Application.csproj) so
-    // StaleSessionSchedulerTests can drive one poll deterministically without waiting on
-    // ExecuteAsync's PollInterval loop.
-    internal async Task PollOnceAsync(CancellationToken ct)
+    protected internal override async Task PollOnceAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var projectRepository = scope.ServiceProvider.GetRequiredService<IProjectRepository>();
@@ -84,7 +61,7 @@ public sealed class StaleSessionScheduler : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to evaluate stale-session cleanup for project {ProjectId}.", project.Id);
+                Logger.LogError(ex, "Failed to evaluate stale-session cleanup for project {ProjectId}.", project.Id);
             }
         }
     }
@@ -117,7 +94,7 @@ public sealed class StaleSessionScheduler : BackgroundService
             {
                 var events = await sessionRepository.GetEventsAsync(projectId, session.Id, ct).ConfigureAwait(false);
                 var lastActivity = events.Count > 0 ? events[^1].Timestamp : session.StartedAt;
-                if (DateTimeOffset.UtcNow - lastActivity < timeout)
+                if (TimeProvider.GetUtcNow() - lastActivity < timeout)
                 {
                     continue;
                 }
@@ -127,7 +104,7 @@ public sealed class StaleSessionScheduler : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to end stale session {SessionId}.", session.Id);
+                Logger.LogError(ex, "Failed to end stale session {SessionId}.", session.Id);
             }
         }
     }

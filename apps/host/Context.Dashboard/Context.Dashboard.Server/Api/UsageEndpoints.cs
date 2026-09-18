@@ -14,17 +14,19 @@ public static class UsageEndpoints
 
     public static void MapUsageEndpoints(this WebApplication app)
     {
-        app.MapGet("/api/usage", GetSummaryAsync).RequireBearerToken();
+        app.MapGet("/api/usage", GetSummaryAsync).RequireBearerToken().RequireMatchingProjectId();
     }
 
     private static async Task<IResult> GetSummaryAsync(
-        Guid projectId, int? days, IUsageRecorder usage, CancellationToken ct)
+        Guid? projectId, int? days, IUsageRecorder usage, CurrentProjectAccessor currentProject, CancellationToken ct)
     {
         var effectiveDays = days is > 0 ? days.Value : DefaultDays;
         var to = DateTimeOffset.UtcNow;
         var from = to.AddDays(-effectiveDays);
 
-        var summary = await usage.GetSummaryAsync(projectId, from, to, ct).ConfigureAwait(false);
+        var summary = await usage
+            .GetSummaryAsync(projectId ?? currentProject.ProjectId, from, to, ct)
+            .ConfigureAwait(false);
         return Results.Ok(UsageSummaryDto.FromSummary(summary));
     }
 }

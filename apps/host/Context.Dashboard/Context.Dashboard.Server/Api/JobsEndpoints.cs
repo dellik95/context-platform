@@ -12,8 +12,14 @@ namespace Context.Dashboard.Server.Api;
 /// tab: which jobs failed and why, a manual re-trigger for a permanently
 /// <see cref="JobStatus.Failed"/> job, and a tail of this host's own log file. All three are the
 /// read/act surface over what <see cref="JobDispatcher"/> and Serilog already track — no new
-/// tracking is introduced here. <c>/api/jobs</c> takes an optional <c>projectId</c> to scope the
-/// list to one project; omitting it (the log tail always behaves this way) stays host-wide.
+/// tracking is introduced here.
+/// <para/>
+/// <c>projectId</c> is optional on every job route but never widening: supplied, it must name the
+/// caller's own project (<see cref="ProjectScopeAuth.RequireMatchingProjectIdFilter"/>); omitted, it
+/// defaults to that same project rather than to every project on the host. Host-wide maintenance
+/// jobs (<see cref="Job.ProjectId"/> null — backup, memory decay) therefore don't appear in this
+/// per-project list; they are visible to <see cref="RetryAsync"/> by id, since
+/// <see cref="IJobRepository.GetByIdAsync"/> treats a host-wide job as belonging to every project.
 /// </summary>
 public static class JobsEndpoints
 {
@@ -23,7 +29,7 @@ public static class JobsEndpoints
 
     public static void MapJobsEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("").RequireBearerToken();
+        var group = app.MapGroup("").RequireBearerToken().RequireMatchingProjectId();
         group.MapGet("/api/jobs", ListAsync);
         group.MapPost("/api/jobs/{id:guid}/retry", RetryAsync);
         group.MapPost("/api/jobs/retry-all", RetryAllAsync);
@@ -32,21 +38,30 @@ public static class JobsEndpoints
     }
 
     private static async Task<IResult> ListAsync(
-        JobStatus? status, Guid? projectId, int? limit, IJobRepository jobs, CancellationToken ct)
+        JobStatus? status, Guid? projectId, int? limit, IJobRepository jobs,
+        CurrentProjectAccessor currentProject, CancellationToken ct)
     {
         // Failed is the primary use case this feature exists for (finding/retrying broken jobs),
         // so it's the default when the caller doesn't ask for a specific status.
         var effectiveStatus = status ?? JobStatus.Failed;
         var effectiveLimit = limit is > 0 ? limit.Value : DefaultListLimit;
 
-        // projectId is optional: omitting it (or a host-wide maintenance job with no ProjectId)
-        // still shows up as "all projects" — the Dashboard passes the currently-selected project.
-        var results = await jobs.ListByStatusAsync(effectiveStatus, projectId, ct).ConfigureAwait(false);
+        var results = await jobs
+            .ListByStatusAsync(effectiveStatus, projectId ?? currentProject.ProjectId, ct)
+            .ConfigureAwait(false);
         return Results.Ok(results.Take(effectiveLimit).Select(JobDto.FromEntity));
     }
 
-    private static async Task<IResult> RetryAsync(Guid id, IJobQueue jobQueue, CancellationToken ct)
+    private static async Task<IResult> RetryAsync(
+        Guid id, IJobRepository jobs, IJobQueue jobQueue, CurrentProjectAccessor currentProject, CancellationToken ct)
     {
+        // Existence is checked against the caller's own project first, so a job id belonging to
+        // another project is 404 rather than something this caller can requeue.
+        if (await jobs.GetByIdAsync(id, ct, currentProject.ProjectId).ConfigureAwait(false) is null)
+        {
+            return Results.NotFound(new { message = $"No job with id '{id}' exists." });
+        }
+
         try
         {
             await jobQueue.RequeueAsync(id, ct).ConfigureAwait(false);
@@ -69,9 +84,13 @@ public static class JobsEndpoints
     /// rendered, so a job that finished/changed status between page load and this click is simply
     /// skipped (not retryable) instead of erroring the whole batch.
     /// </summary>
-    private static async Task<IResult> RetryAllAsync(Guid? projectId, IJobRepository jobs, IJobQueue jobQueue, CancellationToken ct)
+    private static async Task<IResult> RetryAllAsync(
+        Guid? projectId, IJobRepository jobs, IJobQueue jobQueue,
+        CurrentProjectAccessor currentProject, CancellationToken ct)
     {
-        var failed = await jobs.ListByStatusAsync(JobStatus.Failed, projectId, ct).ConfigureAwait(false);
+        var failed = await jobs
+            .ListByStatusAsync(JobStatus.Failed, projectId ?? currentProject.ProjectId, ct)
+            .ConfigureAwait(false);
 
         var retried = 0;
         foreach (var job in failed)
@@ -106,7 +125,8 @@ public static class JobsEndpoints
     /// explicitly rather than it being bundled into the default cleanup.
     /// </summary>
     private static async Task<IResult> CleanupAsync(
-        JobStatus? status, Guid? projectId, IJobRepository jobs, IJobCountsNotifier jobCountsNotifier, CancellationToken ct)
+        JobStatus? status, Guid? projectId, IJobRepository jobs, IJobCountsNotifier jobCountsNotifier,
+        CurrentProjectAccessor currentProject, CancellationToken ct)
     {
         var effectiveStatus = status ?? JobStatus.Done;
         if (!CleanableStatuses.Contains(effectiveStatus))
@@ -117,17 +137,15 @@ public static class JobsEndpoints
             });
         }
 
-        var removed = await jobs.DeleteByStatusAsync(effectiveStatus, projectId, ct).ConfigureAwait(false);
+        var scopedProjectId = projectId ?? currentProject.ProjectId;
+        var removed = await jobs.DeleteByStatusAsync(effectiveStatus, scopedProjectId, ct).ConfigureAwait(false);
 
         // Same per-project counts push JobDispatcher does after every status change -- otherwise the
         // System tab's stat tiles stay stale (showing the pre-cleanup count) until its next slow
-        // reconciliation poll. A host-wide cleanup (no projectId) has no single project tile to push
-        // to, so it's skipped -- same as JobDispatcher.PublishJobCountsAsync for a null ProjectId.
-        if (projectId is { } pid)
-        {
-            var counts = await jobs.CountByStatusAsync(pid, ct).ConfigureAwait(false);
-            await jobCountsNotifier.NotifyAsync(pid, new JobCounts(counts.Pending, counts.Running, counts.Failed, counts.Done), ct).ConfigureAwait(false);
-        }
+        // reconciliation poll.
+        var counts = await jobs.CountByStatusAsync(scopedProjectId, ct).ConfigureAwait(false);
+        await jobCountsNotifier.NotifyAsync(
+            scopedProjectId, new JobCounts(counts.Pending, counts.Running, counts.Failed, counts.Done), ct).ConfigureAwait(false);
 
         return Results.Ok(new { removed, status = effectiveStatus });
     }

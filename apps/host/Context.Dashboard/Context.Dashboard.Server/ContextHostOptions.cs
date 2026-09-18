@@ -59,6 +59,17 @@ public sealed class ContextHostOptions
     /// in-memory job signaling (see <see cref="Context.Application.Jobs.IJobSignal"/>).</summary>
     public string? RedisConnectionString { get; init; }
 
+    /// <summary>
+    /// Host header values this process will answer to, enforced by <c>UseHostFiltering</c>.
+    /// Binding to loopback keeps remote sockets out but does nothing about DNS rebinding: an
+    /// attacker's page re-resolves its own domain to 127.0.0.1 and the victim's browser then talks
+    /// to this host from script, with a Host header of <c>evil.example</c>. Rejecting unknown Host
+    /// values closes that, so the loopback default is the exact set of names that legitimately
+    /// resolve to loopback. A non-loopback bind (containers) can't know its own external name, so
+    /// it defaults to <c>*</c> — set <c>CONTEXT_PLATFORM_ALLOWED_HOSTS</c> (';'-separated) there.
+    /// </summary>
+    public required IReadOnlyList<string> AllowedHosts { get; init; }
+
     public static ContextHostOptions FromEnvironment(IConfiguration configuration)
     {
         var root = Path.GetFullPath(
@@ -85,6 +96,10 @@ public sealed class ContextHostOptions
             ? configuredRedis
             : null;
 
+        var allowedHosts = configuration["CONTEXT_PLATFORM_ALLOWED_HOSTS"] is { Length: > 0 } configuredAllowedHosts
+            ? ParseAllowedHosts(configuredAllowedHosts)
+            : DefaultAllowedHosts(bindHost);
+
         return new ContextHostOptions
         {
             ProjectRoot = root,
@@ -92,9 +107,18 @@ public sealed class ContextHostOptions
             DbPath = dbPath,
             Port = port,
             BindHost = bindHost,
-            RedisConnectionString = redisConnectionString
+            RedisConnectionString = redisConnectionString,
+            AllowedHosts = allowedHosts
         };
     }
+
+    private static IReadOnlyList<string> ParseAllowedHosts(string configured) =>
+        [.. configured.Split([';', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
+
+    private static IReadOnlyList<string> DefaultAllowedHosts(string bindHost) =>
+        System.Net.IPAddress.TryParse(bindHost, out var address) && System.Net.IPAddress.IsLoopback(address)
+            ? ["localhost", "127.0.0.1", "[::1]"]
+            : ["*"];
 
     // `dotnet run` (unlike Visual Studio's F5) does NOT apply launchSettings.json's
     // "workingDirectory", so Directory.GetCurrentDirectory() depends on whatever folder the shell

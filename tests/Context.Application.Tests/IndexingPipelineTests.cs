@@ -60,7 +60,7 @@ public sealed class IndexingPipelineTests : IDisposable
         _chunkRepository.Setup(c => c.ListByFileAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<Chunk>)[]);
         _chunkRepository.Setup(c => c.ReplaceForFileAsync(It.IsAny<Guid>(), It.IsAny<IReadOnlyList<Chunk>>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
+            .ReturnsAsync((IReadOnlyList<Guid>)[]);
 
         // No missing embeddings -> EnqueueEmbedIfMissingAsync short-circuits, keeping this test
         // focused on the per-file failure isolation rather than the embedding side-channel.

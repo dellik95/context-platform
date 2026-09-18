@@ -75,6 +75,15 @@ try
     builder.Host.UseWindowsService(o => o.ServiceName = "ContextPlatformHost");
     builder.Host.UseSystemd();
 
+    builder.Services.Configure<Microsoft.AspNetCore.HostFiltering.HostFilteringOptions>(o =>
+    {
+        o.AllowedHosts = [.. hostOptions.AllowedHosts];
+        // Kept at the framework default: a missing/empty Host header is an HTTP/1.0 or raw-socket
+        // client, never a browser, so it is not a rebinding vector — and the hook scripts' curl
+        // calls must keep working.
+        o.AllowEmptyHosts = true;
+    });
+
     builder.Services.AddSingleton(hostOptions);
     builder.Services.AddSingleton<ClaudeSessionMap>();
     builder.Services.AddSingleton<AdminTokenProvider>();
@@ -193,6 +202,21 @@ try
         // why this runs once here rather than lazily inside BearerTokenAuth's lookup path.
         var projectsForBackfill = migrationScope.ServiceProvider.GetRequiredService<IProjectRepository>();
         await ProjectTokenBackfill.ReconcileAsync(projectsForBackfill, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    // First in the pipeline, before anything can act on the request: rejects Host headers outside
+    // ContextHostOptions.AllowedHosts, which is what stops a DNS-rebinding page from driving this
+    // loopback-bound API from a victim's browser. Skipped when the allow-list is "*" (a container
+    // bind that has not been told its own name) so the middleware isn't paid for nothing.
+    if (!hostOptions.AllowedHosts.Contains("*"))
+    {
+        app.UseHostFiltering();
+    }
+    else
+    {
+        Log.Warning(
+            "Host filtering is disabled (allowed hosts '*') for bind address {BindHost} — set CONTEXT_PLATFORM_ALLOWED_HOSTS to the names this host is reached by.",
+            hostOptions.BindHost);
     }
 
     if (app.Environment.IsDevelopment())

@@ -1,10 +1,10 @@
-import { CommonModule } from '@angular/common';
 import { Component, computed, effect, inject, signal } from '@angular/core';
 import { FormField, form, max, min } from '@angular/forms/signals';
 import { Router } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
+import { MatExpansionModule } from '@angular/material/expansion';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
@@ -20,10 +20,10 @@ import { ProjectContextService } from '../projects/project-context.service';
 @Component({
   selector: 'app-settings-panel',
   imports: [
-    CommonModule,
     FormField,
     MatCardModule,
     MatButtonModule,
+    MatExpansionModule,
     MatIconModule,
     MatFormFieldModule,
     MatInputModule,
@@ -99,8 +99,12 @@ export class SettingsPanelComponent {
     const m = this.settingsModel();
     return m.embeddingProvider === 'ollama' || m.llmProvider === 'ollama';
   });
-  protected readonly showOllamaEmbeddingModel = computed(() => this.settingsModel().embeddingProvider === 'ollama');
-  protected readonly showOllamaChatModel = computed(() => this.settingsModel().llmProvider === 'ollama');
+  protected readonly showOllamaEmbeddingModel = computed(
+    () => this.settingsModel().embeddingProvider === 'ollama',
+  );
+  protected readonly showOllamaChatModel = computed(
+    () => this.settingsModel().llmProvider === 'ollama',
+  );
 
   /**
    * BACKLOG-09 / SEC-5: a user picking `openai`/`anthropic` gets no explanation of what leaves
@@ -111,7 +115,50 @@ export class SettingsPanelComponent {
   private static readonly CloudProviders = new Set(['openai', 'anthropic']);
   protected readonly showCloudDisclosure = computed(() => {
     const m = this.settingsModel();
-    return SettingsPanelComponent.CloudProviders.has(m.embeddingProvider) || SettingsPanelComponent.CloudProviders.has(m.llmProvider);
+    return (
+      SettingsPanelComponent.CloudProviders.has(m.embeddingProvider) ||
+      SettingsPanelComponent.CloudProviders.has(m.llmProvider)
+    );
+  });
+
+  // Collapsed-panel headers: each section states its current effect so the page can be read
+  // top-to-bottom without expanding anything.
+  protected readonly reindexSummary = computed(() => {
+    const m = this.settingsModel();
+    return m.reindexEnabled ? `Every ${m.reindexIntervalMinutes} min` : 'Off';
+  });
+
+  protected readonly sessionSummarySummary = computed(() => {
+    const m = this.settingsModel();
+    return m.sessionSummaryEnabled
+      ? `Every ${m.sessionSummaryIntervalMinutes} min after ${m.minEventsForSessionSummary} events`
+      : 'Only when a session ends';
+  });
+
+  protected readonly memoryRetrievalSummary = computed(() => {
+    const m = this.settingsModel();
+    const remember = m.explicitRememberEnabled ? 'agent writes on' : 'agent writes off';
+    return `From ${m.minEventsForMemoryExtraction} events · ${m.maxMemoryNotesPerSection} per section · ${remember}`;
+  });
+
+  protected readonly memoryMergingSummary = computed(() => {
+    const m = this.settingsModel();
+    const compaction = m.memoryCompactionEnabled
+      ? `compaction every ${m.memoryCompactionIntervalMinutes} min`
+      : 'compaction off';
+    return `Dedup at ${m.memoryConsolidationSimilarityThreshold} · ${compaction}`;
+  });
+
+  protected readonly retentionSummary = computed(() => {
+    const m = this.settingsModel();
+    const parts = [
+      m.staleSessionCleanupEnabled
+        ? `stale sessions ${m.staleSessionTimeoutMinutes} min`
+        : 'stale sessions kept',
+      m.deleteSessionEventsAfterSummary ? 'events dropped after summary' : 'events kept',
+      m.hookInvocationRetentionEnabled ? `hooks ${m.hookInvocationRetentionDays} d` : 'hooks kept',
+    ];
+    return parts.join(' · ');
   });
 
   private readonly resource = this.api.settingsResource(this.ctx.projectId);
@@ -134,22 +181,30 @@ export class SettingsPanelComponent {
         reindexEnabled: settings.reindexEnabled,
         reindexIntervalMinutes: settings.reindexIntervalMinutes,
         sessionSummaryEnabled: settings.sessionSummaryIntervalMinutes > 0,
-        sessionSummaryIntervalMinutes: settings.sessionSummaryIntervalMinutes > 0 ? settings.sessionSummaryIntervalMinutes : 30,
+        sessionSummaryIntervalMinutes:
+          settings.sessionSummaryIntervalMinutes > 0 ? settings.sessionSummaryIntervalMinutes : 30,
         minEventsForSessionSummary: settings.minEventsForSessionSummary,
         maxMemoryNotesPerSection: settings.maxMemoryNotesPerSection,
         minEventsForMemoryExtraction: settings.minEventsForMemoryExtraction,
         explicitRememberEnabled: settings.explicitRememberEnabled,
         staleSessionCleanupEnabled: settings.staleSessionTimeoutMinutes > 0,
-        staleSessionTimeoutMinutes: settings.staleSessionTimeoutMinutes > 0 ? settings.staleSessionTimeoutMinutes : 240,
+        staleSessionTimeoutMinutes:
+          settings.staleSessionTimeoutMinutes > 0 ? settings.staleSessionTimeoutMinutes : 240,
         deleteSessionEventsAfterSummary: settings.deleteSessionEventsAfterSummary,
         hookInvocationRetentionEnabled: settings.hookInvocationRetentionDays > 0,
-        hookInvocationRetentionDays: settings.hookInvocationRetentionDays > 0 ? settings.hookInvocationRetentionDays : 30,
+        hookInvocationRetentionDays:
+          settings.hookInvocationRetentionDays > 0 ? settings.hookInvocationRetentionDays : 30,
         memoryCompactionEnabled: settings.memoryCompactionIntervalMinutes > 0,
-        memoryCompactionIntervalMinutes: settings.memoryCompactionIntervalMinutes > 0 ? settings.memoryCompactionIntervalMinutes : 60,
+        memoryCompactionIntervalMinutes:
+          settings.memoryCompactionIntervalMinutes > 0
+            ? settings.memoryCompactionIntervalMinutes
+            : 60,
         memoryCompactionSimilarityThreshold: settings.memoryCompactionSimilarityThreshold,
         memoryConsolidationSimilarityThreshold: settings.memoryConsolidationSimilarityThreshold,
-        memoryConsolidationLowSimilarityThreshold: settings.memoryConsolidationLowSimilarityThreshold,
-        memoryConsolidationPromotionReinforcementThreshold: settings.memoryConsolidationPromotionReinforcementThreshold,
+        memoryConsolidationLowSimilarityThreshold:
+          settings.memoryConsolidationLowSimilarityThreshold,
+        memoryConsolidationPromotionReinforcementThreshold:
+          settings.memoryConsolidationPromotionReinforcementThreshold,
         memoryConsolidationTopKForDedup: settings.memoryConsolidationTopKForDedup,
       });
     });
@@ -178,23 +233,38 @@ export class SettingsPanelComponent {
   }
 
   protected setExplicitRememberEnabled(event: MatSlideToggleChange): void {
-    this.settingsModel.update((current) => ({ ...current, explicitRememberEnabled: event.checked }));
+    this.settingsModel.update((current) => ({
+      ...current,
+      explicitRememberEnabled: event.checked,
+    }));
   }
 
   protected setStaleSessionCleanupEnabled(event: MatSlideToggleChange): void {
-    this.settingsModel.update((current) => ({ ...current, staleSessionCleanupEnabled: event.checked }));
+    this.settingsModel.update((current) => ({
+      ...current,
+      staleSessionCleanupEnabled: event.checked,
+    }));
   }
 
   protected setDeleteSessionEventsAfterSummary(event: MatSlideToggleChange): void {
-    this.settingsModel.update((current) => ({ ...current, deleteSessionEventsAfterSummary: event.checked }));
+    this.settingsModel.update((current) => ({
+      ...current,
+      deleteSessionEventsAfterSummary: event.checked,
+    }));
   }
 
   protected setHookInvocationRetentionEnabled(event: MatSlideToggleChange): void {
-    this.settingsModel.update((current) => ({ ...current, hookInvocationRetentionEnabled: event.checked }));
+    this.settingsModel.update((current) => ({
+      ...current,
+      hookInvocationRetentionEnabled: event.checked,
+    }));
   }
 
   protected setMemoryCompactionEnabled(event: MatSlideToggleChange): void {
-    this.settingsModel.update((current) => ({ ...current, memoryCompactionEnabled: event.checked }));
+    this.settingsModel.update((current) => ({
+      ...current,
+      memoryCompactionEnabled: event.checked,
+    }));
   }
 
   protected save(): void {
@@ -212,20 +282,29 @@ export class SettingsPanelComponent {
       reindexEnabled: raw.reindexEnabled,
       reindexIntervalMinutes: raw.reindexIntervalMinutes,
       lastReindexScheduledAt: this.lastReindexScheduledAt,
-      sessionSummaryIntervalMinutes: raw.sessionSummaryEnabled ? raw.sessionSummaryIntervalMinutes : 0,
+      sessionSummaryIntervalMinutes: raw.sessionSummaryEnabled
+        ? raw.sessionSummaryIntervalMinutes
+        : 0,
       minEventsForSessionSummary: raw.minEventsForSessionSummary,
       maxMemoryNotesPerSection: raw.maxMemoryNotesPerSection,
       minEventsForMemoryExtraction: raw.minEventsForMemoryExtraction,
       explicitRememberEnabled: raw.explicitRememberEnabled,
-      staleSessionTimeoutMinutes: raw.staleSessionCleanupEnabled ? raw.staleSessionTimeoutMinutes : 0,
+      staleSessionTimeoutMinutes: raw.staleSessionCleanupEnabled
+        ? raw.staleSessionTimeoutMinutes
+        : 0,
       deleteSessionEventsAfterSummary: raw.deleteSessionEventsAfterSummary,
-      hookInvocationRetentionDays: raw.hookInvocationRetentionEnabled ? raw.hookInvocationRetentionDays : 0,
-      memoryCompactionIntervalMinutes: raw.memoryCompactionEnabled ? raw.memoryCompactionIntervalMinutes : 0,
+      hookInvocationRetentionDays: raw.hookInvocationRetentionEnabled
+        ? raw.hookInvocationRetentionDays
+        : 0,
+      memoryCompactionIntervalMinutes: raw.memoryCompactionEnabled
+        ? raw.memoryCompactionIntervalMinutes
+        : 0,
       lastMemoryCompactionScheduledAt: this.lastMemoryCompactionScheduledAt,
       memoryCompactionSimilarityThreshold: raw.memoryCompactionSimilarityThreshold,
       memoryConsolidationSimilarityThreshold: raw.memoryConsolidationSimilarityThreshold,
       memoryConsolidationLowSimilarityThreshold: raw.memoryConsolidationLowSimilarityThreshold,
-      memoryConsolidationPromotionReinforcementThreshold: raw.memoryConsolidationPromotionReinforcementThreshold,
+      memoryConsolidationPromotionReinforcementThreshold:
+        raw.memoryConsolidationPromotionReinforcementThreshold,
       memoryConsolidationTopKForDedup: raw.memoryConsolidationTopKForDedup,
     };
 

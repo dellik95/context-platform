@@ -44,10 +44,16 @@ public class JobRepository(ContextDbContext db) : IJobRepository
         await db.SaveChangesAsync(ct);
     }
 
+    /// <summary>
+    /// The candidate-selection projection. Selecting whole <see cref="Job"/> rows here would pull
+    /// <see cref="Job.PayloadJson"/> for up to <see cref="DequeueBatchSize"/> jobs on every single
+    /// claim, and the payload is the one column that can be large (a whole file's parsed relation
+    /// drafts, for instance) — it is only needed for the one job actually won.
+    /// </summary>
+    private sealed record ClaimCandidate(Guid Id, int Priority, DateTimeOffset CreatedAt, DateTimeOffset? NextRetryAt);
+
     public async Task<Job?> DequeueNextAsync(CancellationToken ct)
     {
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
-
         var now = DateTimeOffset.UtcNow;
         // SQLite's EF Core provider cannot translate comparisons or ORDER BY over DateTimeOffset
         // columns (NextRetryAt, CreatedAt) -- attempting the `NextRetryAt <= now` comparison
@@ -57,30 +63,49 @@ public class JobRepository(ContextDbContext db) : IJobRepository
         // server-side); the backoff check and the CreatedAt tie-break both move to client-side,
         // over just the top DequeueBatchSize by priority rather than every Pending row (see that
         // constant's remarks).
-        var candidates = await db.Jobs
+        var candidates = await db.Jobs.AsNoTracking()
             .Where(j => j.Status == JobStatus.Pending)
             .OrderByDescending(j => j.Priority)
             .Take(DequeueBatchSize)
+            .Select(j => new ClaimCandidate(j.Id, j.Priority, j.CreatedAt, j.NextRetryAt))
             .ToListAsync(ct);
 
-        var job = candidates
-            .Where(j => j.NextRetryAt == null || j.NextRetryAt <= now)
-            .OrderByDescending(j => j.Priority)
-            .ThenBy(j => j.CreatedAt)
-            .FirstOrDefault();
+        var runnable = candidates
+            .Where(c => c.NextRetryAt == null || c.NextRetryAt <= now)
+            .OrderByDescending(c => c.Priority)
+            .ThenBy(c => c.CreatedAt);
 
-        if (job is null)
+        foreach (var candidate in runnable)
         {
-            await tx.CommitAsync(ct);
-            return null;
+            // Conditional UPDATE ... WHERE Status = Pending, and the affected-row count decides the
+            // race. A read-then-SaveChanges inside a transaction did NOT: SQLite opens a DEFERRED
+            // transaction, so the SELECT takes only a shared read lock and a second dispatcher —
+            // another thread here, or the second host process this design explicitly supports via
+            // CONTEXT_PLATFORM_REDIS — could read the same Pending row and write Running over it,
+            // running one job twice. Losing the race costs one no-op UPDATE and moves to the next
+            // candidate, so a contended queue still drains at full rate.
+            var claimed = await db.Jobs
+                .Where(j => j.Id == candidate.Id && j.Status == JobStatus.Pending)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(j => j.Status, JobStatus.Running)
+                        .SetProperty(j => j.StartedAt, now)
+                        .SetProperty(j => j.Attempts, j => j.Attempts + 1),
+                    ct);
+
+            if (claimed == 0)
+            {
+                continue;
+            }
+
+            var job = await db.Jobs.AsNoTracking().FirstOrDefaultAsync(j => j.Id == candidate.Id, ct);
+            if (job is not null)
+            {
+                return job;
+            }
         }
 
-        job.Status = JobStatus.Running;
-        job.StartedAt = now;
-        job.Attempts += 1;
-        await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
-        return job;
+        return null;
     }
 
     public async Task<IReadOnlyList<Job>> ListByStatusAsync(JobStatus status, Guid? projectId, CancellationToken ct)
@@ -107,6 +132,48 @@ public class JobRepository(ContextDbContext db) : IJobRepository
             CountFor(JobStatus.Running),
             CountFor(JobStatus.Failed),
             CountFor(JobStatus.Done));
+    }
+
+    /// <summary>Keeps one retention sweep's DELETE statements off SQLite's parameter limit.</summary>
+    private const int RetentionDeleteBatchSize = 500;
+
+    public async Task<int> DeleteFinishedOlderThanAsync(DateTimeOffset cutoff, CancellationToken ct)
+    {
+        // Only the two columns the cutoff needs are materialized. The DateTimeOffset comparison has
+        // to run client-side (same provider limitation DequeueNextAsync documents), and Jobs is
+        // precisely the table that reaches six figures, so pulling whole entities — PayloadJson
+        // included — just to decide what to delete would cost more than the rows being freed.
+        var terminal = await db.Jobs.AsNoTracking()
+            .Where(j => j.Status == JobStatus.Done || j.Status == JobStatus.Failed)
+            .Select(j => new { j.Id, j.FinishedAt, j.CreatedAt })
+            .ToListAsync(ct);
+
+        // FinishedAt should always be set on a terminal job; falling back to CreatedAt means a row
+        // that somehow missed it still ages out instead of pinning itself in the table forever.
+        var expired = terminal
+            .Where(j => (j.FinishedAt ?? j.CreatedAt) < cutoff)
+            .Select(j => j.Id)
+            .ToList();
+
+        var deleted = 0;
+        foreach (var batch in expired.Chunk(RetentionDeleteBatchSize))
+        {
+            deleted += await db.Jobs.Where(j => batch.Contains(j.Id)).ExecuteDeleteAsync(ct);
+        }
+
+        return deleted;
+    }
+
+    public async Task<DateTimeOffset?> GetLastEnqueuedAtAsync(JobType type, CancellationToken ct)
+    {
+        // Max()/OrderBy over a DateTimeOffset column is untranslatable on SQLite, so the aggregate
+        // runs client-side over just that one column, filtered by the (Type, Status) index.
+        var createdAt = await db.Jobs.AsNoTracking()
+            .Where(j => j.Type == type)
+            .Select(j => j.CreatedAt)
+            .ToListAsync(ct);
+
+        return createdAt.Count == 0 ? null : createdAt.Max();
     }
 
     public Task<int> DeleteByStatusAsync(JobStatus status, Guid? projectId, CancellationToken ct) =>

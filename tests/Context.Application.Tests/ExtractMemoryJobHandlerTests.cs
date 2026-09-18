@@ -45,7 +45,7 @@ public sealed class ExtractMemoryJobHandlerTests
 
         var store = new FakeMemoryStore();
         var resolver = new FakeProviderResolver(CandidateResponse());
-        var consolidator = new MemoryConsolidator(store, resolver, new FakeUsageRecorder());
+        var consolidator = new MemoryConsolidator(store, resolver, new FakeUsageRecorder(), new FakeSettingsProvider());
         var extractor = new LlmMemoryExtractor(store, consolidator, resolver, new FakeUsageRecorder());
         var sut = new ExtractMemoryJobHandler(extractor, sessionRepository.Object);
 
@@ -164,6 +164,12 @@ public sealed class ExtractMemoryJobHandlerTests
         public Task RecordAsync(UsageRecord record, CancellationToken ct) => Task.CompletedTask;
     }
 
+    private sealed class FakeSettingsProvider : IMemoryConsolidationSettingsProvider
+    {
+        public Task<MemoryConsolidationSettings> GetAsync(Guid projectId, CancellationToken ct) =>
+            Task.FromResult(new MemoryConsolidationSettings());
+    }
+
     /// <summary>In-memory <see cref="IMemoryStore"/> that actually accumulates saved memories (and
     /// returns them from <see cref="GetExistingWithEmbeddingsAsync"/>) so the second HandleAsync
     /// pass in this test sees what the first one inserted - unlike MemoryConsolidatorTests's fake,
@@ -176,6 +182,7 @@ public sealed class ExtractMemoryJobHandlerTests
 
         public List<(Context.Domain.Entities.Memory Memory, float[]? Embedding)> Saved { get; } = [];
         public List<(Guid OldId, Guid NewId)> Superseded { get; } = [];
+        public List<Guid> Reinforced { get; } = [];
 
         public Task<IReadOnlyList<ExistingMemoryWithEmbedding>> GetExistingWithEmbeddingsAsync(Guid projectId, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<ExistingMemoryWithEmbedding>>(
@@ -204,6 +211,27 @@ public sealed class ExtractMemoryJobHandlerTests
             }
 
             return Task.CompletedTask;
+        }
+
+        public Task SaveMergedAsync(Context.Domain.Entities.Memory merged, float[] embedding, IReadOnlyCollection<Guid> supersededIds, CancellationToken ct) =>
+            throw new NotSupportedException("Only CompactMemoryJobHandler merges memories.");
+
+        public Task<int?> ReinforceAsync(Guid memoryId, DateTimeOffset reinforcedAt, int promotionReinforcementThreshold, CancellationToken ct)
+        {
+            if (!_byId.TryGetValue(memoryId, out var entry))
+            {
+                return Task.FromResult<int?>(null);
+            }
+
+            entry.Memory.ReinforcementCount++;
+            entry.Memory.LastReinforcedAt = reinforcedAt;
+            if (entry.Memory.Pinned || entry.Memory.ReinforcementCount >= promotionReinforcementThreshold)
+            {
+                entry.Memory.Tier = Context.Domain.Enums.MemoryTier.LongTerm;
+            }
+
+            Reinforced.Add(memoryId);
+            return Task.FromResult<int?>(entry.Memory.ReinforcementCount);
         }
     }
 }

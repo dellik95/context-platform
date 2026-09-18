@@ -36,6 +36,7 @@ public sealed class SqliteSearchIndex(
     private const int LexicalLimit = 50;
     private const int VectorLimit = 50;
     private const int SnippetLength = 400;
+    private const int MaxScopeTerms = 16;
 
     // Instance-level, not static: SqliteSearchIndex is a singleton per DI container in production
     // (one instance == one database file, so this is still effectively "once per process" there),
@@ -48,13 +49,15 @@ public sealed class SqliteSearchIndex(
     private volatile bool _ftsInitialized;
 
     public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score)>> LexicalSearchAsync(
-        Guid projectId, string text, CancellationToken ct)
+        Guid projectId, string text, IReadOnlyList<string>? scope, CancellationToken ct)
     {
         var matchExpression = BuildMatchExpression(text);
         if (matchExpression is null)
         {
             return [];
         }
+
+        var scopeTerms = NormalizeScope(scope);
 
         await using var db = await dbContextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
         await EnsureFtsInitializedAsync(db, ct).ConfigureAwait(false);
@@ -66,17 +69,21 @@ public sealed class SqliteSearchIndex(
         // bm25() in FTS5 is "lower/more negative is better"; negate it so, like CosineScore,
         // a higher value here always means "more relevant" — the convention HybridSearchEngine's
         // min-max normalization assumes for every raw signal it merges.
-        command.CommandText = """
+        // The scope predicate is applied here rather than to the result list so the LIMIT is spent
+        // on in-scope rows; filtering afterwards would let out-of-scope hits consume the top 50 and
+        // return far fewer results than the scope actually contains.
+        command.CommandText = $"""
             SELECT c."Id", c."FileId", c."SymbolId", sy."Kind", substr(c."Text", 1, @snippetLength) AS Snippet, -bm25(chunks_fts) AS Score
             FROM chunks_fts
             JOIN "Chunks" c ON c."rowid" = chunks_fts."rowid"
             JOIN "Files" f ON f."Id" = c."FileId"
             LEFT JOIN "Symbols" sy ON sy."Id" = c."SymbolId"
-            WHERE chunks_fts MATCH @match AND f."ProjectId" = @projectId AND f."IsDeleted" = 0
+            WHERE chunks_fts MATCH @match AND f."ProjectId" = @projectId AND f."IsDeleted" = 0{BuildScopeSql(scopeTerms)}
             ORDER BY bm25(chunks_fts)
             LIMIT @limit;
             """;
         AddParameter(command, "@match", matchExpression);
+        AddScopeParameters(command, scopeTerms);
         // EF Core's Sqlite provider persists Guid columns as upper-invariant TEXT (confirmed
         // against this project's own on-disk data: e.g. Files."ProjectId" is stored as
         // "4FE55277-...", not "4fe55277-..."). This command runs on the raw ADO.NET connection,
@@ -116,7 +123,7 @@ public sealed class SqliteSearchIndex(
     }
 
     public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore)>> VectorSearchAsync(
-        Guid projectId, float[] queryEmbedding, CancellationToken ct)
+        Guid projectId, float[] queryEmbedding, IReadOnlyList<string>? scope, CancellationToken ct)
     {
         var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
         var hits = await vectorIndex.SearchAsync(projectId, embeddingGenerator.GetProviderModelKey(), queryEmbedding, VectorLimit, ct)
@@ -141,10 +148,18 @@ public sealed class SqliteSearchIndex(
             join sy in db.Symbols.AsNoTracking() on c.SymbolId equals (Guid?)sy.Id into symbolJoin
             from sy in symbolJoin.DefaultIfEmpty()
             where chunkIds.Contains(c.Id) && f.ProjectId == projectId && !f.IsDeleted
-            select new { c.Id, c.FileId, c.SymbolId, Kind = (SymbolKind?)sy.Kind, c.Text }
+            select new { c.Id, c.FileId, c.SymbolId, Kind = (SymbolKind?)sy.Kind, c.Text, f.RelativePath, f.Language }
         ).ToListAsync(ct).ConfigureAwait(false);
 
-        var scored = rows
+        // Post-filter, unavoidably: the ANN index has no path metadata to filter on during the
+        // search itself (see IChunkVectorIndex), so a scoped query gets the in-scope subset of the
+        // project's nearest neighbors — documented on ISearchIndex.VectorSearchAsync.
+        var scopeTerms = NormalizeScope(scope);
+        var rowsInScope = scopeTerms.Count == 0
+            ? rows
+            : [.. rows.Where(r => MatchesScope(r.RelativePath, r.Language, scopeTerms))];
+
+        var scored = rowsInScope
             .Select(row =>
             {
                 var snippet = row.Text.Length > SnippetLength ? row.Text[..SnippetLength] : row.Text;
@@ -155,6 +170,51 @@ public sealed class SqliteSearchIndex(
 
         return scored;
     }
+
+    /// <summary>
+    /// A <see cref="Context.Retrieval.Abstractions.SearchQuery.Scope"/> entry matches a file when it
+    /// appears anywhere in the relative path or names the file's language exactly — both
+    /// case-insensitively, and a file needs to match only one entry. One list covers both filters
+    /// because a caller says "src/Auth" or "csharp" without wanting to declare which kind it is;
+    /// the two namespaces do not realistically collide.
+    /// </summary>
+    private static IReadOnlyList<string> NormalizeScope(IReadOnlyList<string>? scope) =>
+        scope is null
+            ? []
+            : [.. scope.Where(s => !string.IsNullOrWhiteSpace(s))
+                       .Select(s => s.Trim().ToLowerInvariant())
+                       .Distinct()
+                       .Take(MaxScopeTerms)];
+
+    private static string BuildScopeSql(IReadOnlyList<string> scopeTerms)
+    {
+        if (scopeTerms.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var clauses = scopeTerms.Select((_, i) =>
+            $"""lower(f."RelativePath") LIKE @scopePath{i} ESCAPE '\' OR lower(f."Language") = @scopeTerm{i}""");
+
+        return $" AND ({string.Join(" OR ", clauses)})";
+    }
+
+    private static void AddScopeParameters(DbCommand command, IReadOnlyList<string> scopeTerms)
+    {
+        for (var i = 0; i < scopeTerms.Count; i++)
+        {
+            AddParameter(command, $"@scopePath{i}", $"%{EscapeLike(scopeTerms[i])}%");
+            AddParameter(command, $"@scopeTerm{i}", scopeTerms[i]);
+        }
+    }
+
+    private static bool MatchesScope(string relativePath, string? language, IReadOnlyList<string> scopeTerms) =>
+        scopeTerms.Any(term =>
+            relativePath.Contains(term, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(language, term, StringComparison.OrdinalIgnoreCase));
+
+    private static string EscapeLike(string value) =>
+        value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 
     /// <summary>
     /// Turns free-form query text into a safe FTS5 MATCH expression: split into word tokens,

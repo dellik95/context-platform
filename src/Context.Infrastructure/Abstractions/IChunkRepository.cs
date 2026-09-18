@@ -14,5 +14,7 @@ public interface IChunkRepository
     Task<IReadOnlyList<Chunk>> ListByProjectAsync(Guid projectId, CancellationToken ct);
 
     /// <summary>Atomically replaces all chunks owned by a file — used on re-index of a changed file.</summary>
-    Task ReplaceForFileAsync(Guid fileId, IReadOnlyList<Chunk> chunks, CancellationToken ct);
+    /// <returns>The ids of the chunks that were removed, so a caller holding an out-of-band index
+    /// keyed by chunk id (the sqlite-vec vector store) can prune the same rows.</returns>
+    Task<IReadOnlyList<Guid>> ReplaceForFileAsync(Guid fileId, IReadOnlyList<Chunk> chunks, CancellationToken ct);
 }

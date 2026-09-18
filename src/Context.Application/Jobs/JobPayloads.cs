@@ -1,12 +1,9 @@
 namespace Context.Application.Jobs;
 
-// Payload DTOs serialized into Job.PayloadJson (CONTRACTS.md §1) via System.Text.Json.
-// One record per JobType that actually needs structured input; JobType values whose handler
-// needs no input (DecayMemory, BackupDb) get an empty marker record for symmetry/clarity.
+// Payload DTOs serialized into Job.PayloadJson via System.Text.Json. One record per JobType;
+// types whose handler needs no input (DecayMemory, BackupDb) get an empty marker record.
 
 public sealed record IndexFilePayload(Guid ProjectId, string RelativePath);
-
-public sealed record DeleteFilePayload(Guid ProjectId, string RelativePath);
 
 /// <summary>
 /// Drives <see cref="Context.Application.Jobs.Handlers.UpdateGraphJobHandler"/>. When

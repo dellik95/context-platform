@@ -4,9 +4,9 @@ using Microsoft.Extensions.Configuration;
 namespace Context.Shared;
 
 /// <summary>
-/// Resolves the single, persistent, OS-appropriate data directory that Context.Dashboard.Server and Context.Cli
-/// must agree on for the shared database (Phase 2: the database moves out of any one project's own
-/// repo into machine-level app data, since the host now serves multiple projects). Deliberately never
+/// Resolves the single, persistent, OS-appropriate data directory Context.Dashboard.Server keeps the
+/// shared database in — machine-level app data rather than any one project's own repo, since the
+/// host serves multiple projects. Deliberately never
 /// falls back to the OS temp directory — temp dirs are periodically cleared by the OS/container
 /// runtime, which would risk silently losing a persistent memory database.
 /// </summary>
@@ -26,7 +26,7 @@ public static class SharedDataLocation
     /// otherwise an OS-appropriate default (<c>%LocalAppData%\ContextPlatform</c> on Windows;
     /// <c>$XDG_DATA_HOME/context-platform</c>, or <c>~/.local/share/context-platform</c> if
     /// <c>XDG_DATA_HOME</c> is unset, elsewhere). Does not create the directory — callers create it
-    /// just before first use, same as <c>ContextHostOptions</c>/the CLI do today for their own dataDir.
+    /// just before first use, same as <c>ContextHostOptions</c> does for its own dataDir.
     /// </summary>
     public static string ResolveDataDir(IConfiguration? configuration = null)
     {

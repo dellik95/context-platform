@@ -41,6 +41,38 @@ public sealed class MemoryStoreAdapter(
 
     public async Task SaveAsync(Context.Domain.Entities.Memory memory, float[]? embedding, CancellationToken ct)
     {
+        await PersistRowsAsync(memory, embedding, ct).ConfigureAwait(false);
+
+        if (embedding is not null)
+        {
+            await UpsertVectorAsync(memory, embedding, ct).ConfigureAwait(false);
+        }
+    }
+
+    public async Task SaveMergedAsync(
+        Context.Domain.Entities.Memory merged, float[] embedding, IReadOnlyCollection<Guid> supersededIds, CancellationToken ct)
+    {
+        await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+
+        await PersistRowsAsync(merged, embedding, ct).ConfigureAwait(false);
+        await memoryRepository.MarkSupersededBatchAsync(supersededIds, merged.Id, ct).ConfigureAwait(false);
+
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+
+        // Deliberately after the commit: sqlite-vec is a separate store that the transaction cannot
+        // roll back, so writes done inside it would survive an aborted merge — the upsert as a
+        // phantom hit, the prune as lost vectors for memories that are still live. The reverse gap
+        // (committed rows, failed vector write) only costs recall until the next re-embed, and the
+        // MemoryEmbeddings row it needs is already durable.
+        await UpsertVectorAsync(merged, embedding, ct).ConfigureAwait(false);
+
+        // The sources' own vectors go now; see VectorPruningMemoryRepository for why superseded
+        // memories must leave the ANN index rather than keep occupying its top-K.
+        await memoryVectorIndex.DeleteAsync(supersededIds, ct).ConfigureAwait(false);
+    }
+
+    private async Task PersistRowsAsync(Context.Domain.Entities.Memory memory, float[]? embedding, CancellationToken ct)
+    {
         var existing = memory.Id != Guid.Empty
             ? await memoryRepository.GetByIdAsync(memory.Id, ct).ConfigureAwait(false)
             : null;
@@ -73,7 +105,10 @@ public sealed class MemoryStoreAdapter(
         }
 
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
 
+    private async Task UpsertVectorAsync(Context.Domain.Entities.Memory memory, float[] embedding, CancellationToken ct)
+    {
         var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(memory.ProjectId, ct).ConfigureAwait(false);
         await memoryVectorIndex.UpsertAsync(
             memory.Id, memory.ProjectId, memory.Type.ToString(), memory.Topic,
@@ -82,10 +117,12 @@ public sealed class MemoryStoreAdapter(
 
     public async Task MarkSupersededAsync(Guid oldMemoryId, Guid newMemoryId, CancellationToken ct)
     {
-        var oldMemory = await memoryRepository.GetByIdAsync(oldMemoryId, ct).ConfigureAwait(false)
-            ?? throw new KeyNotFoundException($"Memory {oldMemoryId} was not found.");
-
-        oldMemory.SupersededById = newMemoryId;
-        await memoryRepository.UpdateAsync(oldMemory, ct).ConfigureAwait(false);
+        if (!await memoryRepository.MarkSupersededAsync(oldMemoryId, newMemoryId, ct).ConfigureAwait(false))
+        {
+            throw new KeyNotFoundException($"Memory {oldMemoryId} was not found.");
+        }
     }
+
+    public Task<int?> ReinforceAsync(Guid memoryId, DateTimeOffset reinforcedAt, int promotionReinforcementThreshold, CancellationToken ct) =>
+        memoryRepository.ReinforceAsync(memoryId, reinforcedAt, promotionReinforcementThreshold, ct);
 }

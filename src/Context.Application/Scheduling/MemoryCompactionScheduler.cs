@@ -28,40 +28,17 @@ namespace Context.Application.Scheduling;
 /// same race-avoidance reasoning as <see cref="ReindexSchedulerService"/>'s own
 /// <c>LastReindexScheduledAt</c> stamp-before-fire.
 /// </remarks>
-public sealed class MemoryCompactionScheduler : BackgroundService
+public sealed class MemoryCompactionScheduler(
+    IServiceScopeFactory scopeFactory,
+    TimeProvider? timeProvider = null,
+    ILogger<MemoryCompactionScheduler>? logger = null)
+    : PeriodicScheduler(PollInterval, timeProvider ?? TimeProvider.System, logger ?? NullLogger<MemoryCompactionScheduler>.Instance)
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(60);
 
-    private readonly IServiceScopeFactory _scopeFactory;
-    private readonly ILogger<MemoryCompactionScheduler> _logger;
+    private readonly IServiceScopeFactory _scopeFactory = scopeFactory;
 
-    public MemoryCompactionScheduler(IServiceScopeFactory scopeFactory, ILogger<MemoryCompactionScheduler>? logger = null)
-    {
-        _scopeFactory = scopeFactory;
-        _logger = logger ?? NullLogger<MemoryCompactionScheduler>.Instance;
-    }
-
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            await PollOnceAsync(stoppingToken).ConfigureAwait(false);
-
-            try
-            {
-                await Task.Delay(PollInterval, stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-        }
-    }
-
-    // Internal (see InternalsVisibleTo in Context.Application.csproj) so
-    // MemoryCompactionSchedulerTests can drive one poll deterministically without waiting on
-    // ExecuteAsync's PollInterval loop.
-    internal async Task PollOnceAsync(CancellationToken ct)
+    protected internal override async Task PollOnceAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var projectRepository = scope.ServiceProvider.GetRequiredService<IProjectRepository>();
@@ -78,7 +55,7 @@ public sealed class MemoryCompactionScheduler : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to evaluate memory-compaction schedule for project {ProjectId}.", project.Id);
+                Logger.LogError(ex, "Failed to evaluate memory-compaction schedule for project {ProjectId}.", project.Id);
             }
         }
     }
@@ -92,13 +69,13 @@ public sealed class MemoryCompactionScheduler : BackgroundService
         }
 
         var due = settings.LastMemoryCompactionScheduledAt is null
-            || DateTimeOffset.UtcNow - settings.LastMemoryCompactionScheduledAt.Value >= TimeSpan.FromMinutes(settings.MemoryCompactionIntervalMinutes);
+            || TimeProvider.GetUtcNow() - settings.LastMemoryCompactionScheduledAt.Value >= TimeSpan.FromMinutes(settings.MemoryCompactionIntervalMinutes);
         if (!due)
         {
             return;
         }
 
-        await settingsService.UpdateAsync(projectId, settings with { LastMemoryCompactionScheduledAt = DateTimeOffset.UtcNow }, ct)
+        await settingsService.UpdateAsync(projectId, settings with { LastMemoryCompactionScheduledAt = TimeProvider.GetUtcNow() }, ct)
             .ConfigureAwait(false);
 
         await jobQueue.EnqueueAsync(JobType.CompactMemory, new CompactMemoryPayload(projectId), projectId, ct: ct).ConfigureAwait(false);

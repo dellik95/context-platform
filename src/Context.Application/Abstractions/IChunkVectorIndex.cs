@@ -30,4 +30,13 @@ public interface IChunkVectorIndex
     /// <c>DELETE /api/projects/{id}</c>).
     /// </summary>
     Task DeleteByProjectAsync(Guid projectId, CancellationToken ct);
+
+    /// <summary>
+    /// Removes the records for <paramref name="chunkIds"/> from every embedding-provider
+    /// collection. Ids that aren't indexed are ignored.
+    /// </summary>
+    /// <remarks>Search joins hits back to the live <c>Chunks</c> table, so an orphaned record can't
+    /// produce a wrong result — but it still occupies one of the ANN pass's fixed top-K slots, so a
+    /// project reindexed enough times loses recall to rows whose chunks are long gone.</remarks>
+    Task DeleteAsync(IReadOnlyCollection<Guid> chunkIds, CancellationToken ct);
 }

@@ -16,8 +16,12 @@ public class JobConfiguration : IEntityTypeConfiguration<Job>
         builder.Property(j => j.CreatedAt).IsRequired();
 
         builder.HasIndex(j => new { j.Type, j.Status });
-        builder.HasIndex(j => j.Status);
         builder.HasIndex(j => j.NextRetryAt);
         builder.HasIndex(j => new { j.ProjectId, j.Status });
+
+        // Covers JobRepository.DequeueNextAsync's `WHERE Status = Pending ORDER BY Priority DESC`
+        // outright, so a claim never sorts a large backlog. Replaces the plain Status index, which
+        // this one is a strict superset of (same leading column).
+        builder.HasIndex(j => new { j.Status, j.Priority });
     }
 }

@@ -9,12 +9,15 @@ using Context.Application.Scheduling;
 using Context.Application.Settings;
 using Context.Graph.Abstractions;
 using Context.Infrastructure;
+using Context.Infrastructure.Abstractions;
+using Context.Infrastructure.Repositories;
 using Context.Memory.Abstractions;
 using Context.Providers.Abstractions;
 using Context.Retrieval;
 using Context.Retrieval.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 
 namespace Context.Application;
@@ -128,6 +131,18 @@ public static class ServiceCollectionExtensions
         // Scoped ContextEngine on the read side, both fine to depend on a singleton).
         services.AddSingleton<ISessionSummaryVectorIndex>(_ => new SqliteSessionSummaryVectorIndex(dbPath));
 
+        // Chunk/Memory rows are deleted through the repositories in Context.Infrastructure, which
+        // cannot see the vector indexes above (they live here). These decorations re-register the
+        // interfaces over Context.Infrastructure's own registrations -- last registration wins for
+        // a single resolve -- so every delete prunes the vector store too, wherever it is issued from.
+        services.AddScoped<ChunkRepository>();
+        services.AddScoped<IChunkRepository>(sp => new VectorPruningChunkRepository(
+            sp.GetRequiredService<ChunkRepository>(), sp.GetRequiredService<IChunkVectorIndex>()));
+
+        services.AddScoped<MemoryRepository>();
+        services.AddScoped<IMemoryRepository>(sp => new VectorPruningMemoryRepository(
+            sp.GetRequiredService<MemoryRepository>(), sp.GetRequiredService<IMemoryVectorIndex>()));
+
         // Consumed by Context.Retrieval's singleton HybridSearchEngine -> must itself be a
         // singleton (see IDbContextFactory remark above).
         services.AddSingleton<ISearchIndex, SqliteSearchIndex>();
@@ -184,8 +199,6 @@ public static class ServiceCollectionExtensions
     private static void AddJobHandlers(IServiceCollection services)
     {
         services.AddScoped<IJobHandler, IndexFileJobHandler>();
-        services.AddScoped<IJobHandler, DeleteFileJobHandler>();
-        services.AddScoped<IJobHandler, ParseFileJobHandler>();
         services.AddScoped<IJobHandler, ResolveRelationsJobHandler>();
         services.AddScoped<IJobHandler, UpdateGraphJobHandler>();
         services.AddScoped<IJobHandler, EmbedChunkJobHandler>();
@@ -206,6 +219,7 @@ public static class ServiceCollectionExtensions
     /// </summary>
     private static void AddJobDispatcher(IServiceCollection services)
     {
+        services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<JobDispatcher>();
         services.AddSingleton<IJobQueue>(sp => sp.GetRequiredService<JobDispatcher>());
         services.AddHostedService(sp => sp.GetRequiredService<JobDispatcher>());
@@ -213,7 +227,9 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<SessionSummaryScheduler>();
         services.AddHostedService<StaleSessionScheduler>();
         services.AddHostedService<HookInvocationRetentionScheduler>();
+        services.AddHostedService<JobRetentionScheduler>();
         services.AddHostedService<MemoryCompactionScheduler>();
+        services.AddHostedService<MaintenanceScheduler>();
     }
 
     private static void AddIndexingPipeline(IServiceCollection services)

@@ -18,14 +18,19 @@ public static class HooksStatusEndpoints
 
     public static void MapHooksStatusEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("").RequireBearerToken();
+        var group = app.MapGroup("").RequireBearerToken().RequireMatchingProjectId();
         group.MapGet("/api/hooks/status", StatusAsync);
     }
 
-    private static async Task<IResult> StatusAsync(Guid projectId, IHookInvocationRepository repo, CancellationToken ct)
+    private static async Task<IResult> StatusAsync(
+        Guid? projectId, IHookInvocationRepository repo, CurrentProjectAccessor currentProject, CancellationToken ct)
     {
-        var count = await repo.CountAsync(projectId, ct).ConfigureAwait(false);
-        var recent = await repo.GetRecentAsync(projectId, RecentLimit, ct).ConfigureAwait(false);
+        // Raw hook payloads carry prompts and file paths, so the project they belong to is the
+        // caller's own -- never whichever id the query string names.
+        var scopedProjectId = projectId ?? currentProject.ProjectId;
+
+        var count = await repo.CountAsync(scopedProjectId, ct).ConfigureAwait(false);
+        var recent = await repo.GetRecentAsync(scopedProjectId, RecentLimit, ct).ConfigureAwait(false);
         return Results.Ok(new HookStatusDto(count, [.. recent.Select(HookInvocationDto.FromEntity)]));
     }
 }

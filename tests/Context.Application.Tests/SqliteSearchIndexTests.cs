@@ -66,13 +66,36 @@ public sealed class SqliteSearchIndexTests : IDisposable
         return (projectId, chunkId);
     }
 
+    private async Task<Guid> AddFileAsync(Guid projectId, string relativePath, string chunkText, string? language = null)
+    {
+        await using var db = await _factory.CreateDbContextAsync();
+
+        var fileId = Guid.NewGuid();
+        var chunkId = Guid.NewGuid();
+
+        db.Files.Add(new DomainFile
+        {
+            Id = fileId,
+            ProjectId = projectId,
+            RelativePath = relativePath,
+            Language = language,
+            ContentHash = "h2",
+            IsDeleted = false,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        db.Chunks.Add(new Chunk { Id = chunkId, FileId = fileId, Text = chunkText, TokenCount = 5, ContentHash = "h2" });
+        await db.SaveChangesAsync();
+
+        return chunkId;
+    }
+
     [Fact]
     public async Task LexicalSearchAsync_finds_a_PascalCase_identifier_via_a_multi_word_natural_language_query()
     {
         var (projectId, chunkId) = await SeedAsync("AuthMiddleware.cs", "public class AuthMiddleware { }");
         var index = new SqliteSearchIndex(_factory, Mock.Of<IChunkVectorIndex>(), Mock.Of<IProviderResolver>());
 
-        var results = await index.LexicalSearchAsync(projectId, "auth middleware", CancellationToken.None);
+        var results = await index.LexicalSearchAsync(projectId, "auth middleware", null, CancellationToken.None);
 
         results.Should().Contain(r => r.ChunkId == chunkId,
             "the query's separate words should match the identifier's substrings even though " +
@@ -86,11 +109,53 @@ public sealed class SqliteSearchIndexTests : IDisposable
         var (projectBId, _) = await SeedAsync("Other.cs", "public class Unrelated { }");
         var index = new SqliteSearchIndex(_factory, Mock.Of<IChunkVectorIndex>(), Mock.Of<IProviderResolver>());
 
-        var hitsForA = await index.LexicalSearchAsync(projectAId, "auth", CancellationToken.None);
-        var hitsForB = await index.LexicalSearchAsync(projectBId, "auth", CancellationToken.None);
+        var hitsForA = await index.LexicalSearchAsync(projectAId, "auth", null, CancellationToken.None);
+        var hitsForB = await index.LexicalSearchAsync(projectBId, "auth", null, CancellationToken.None);
 
         hitsForA.Should().Contain(r => r.ChunkId == chunkAId);
         hitsForB.Should().BeEmpty("project B's own chunk doesn't mention 'auth', and project A's hit must not leak across the project boundary");
+    }
+
+    [Fact]
+    public async Task LexicalSearchAsync_restricts_hits_to_a_path_scope_term()
+    {
+        var (projectId, srcChunkId) = await SeedAsync("src/AuthMiddleware.cs", "public class AuthMiddleware { }");
+        var testChunkId = await AddFileAsync(projectId, "tests/AuthMiddlewareTests.cs", "public class AuthMiddlewareTests { }");
+        var index = new SqliteSearchIndex(_factory, Mock.Of<IChunkVectorIndex>(), Mock.Of<IProviderResolver>());
+
+        var unscoped = await index.LexicalSearchAsync(projectId, "auth middleware", null, CancellationToken.None);
+        var scoped = await index.LexicalSearchAsync(projectId, "auth middleware", ["tests/"], CancellationToken.None);
+
+        unscoped.Should().Contain(r => r.ChunkId == srcChunkId).And.Contain(r => r.ChunkId == testChunkId);
+        scoped.Should().Contain(r => r.ChunkId == testChunkId);
+        scoped.Should().NotContain(r => r.ChunkId == srcChunkId);
+    }
+
+    [Fact]
+    public async Task LexicalSearchAsync_matches_a_scope_term_against_the_files_language()
+    {
+        var (projectId, csharpChunkId) = await SeedAsync("Auth.cs", "class AuthService { }");
+        var tsChunkId = await AddFileAsync(projectId, "auth.ts", "class AuthService { }", language: "typescript");
+        var index = new SqliteSearchIndex(_factory, Mock.Of<IChunkVectorIndex>(), Mock.Of<IProviderResolver>());
+
+        var scoped = await index.LexicalSearchAsync(projectId, "auth service", ["typescript"], CancellationToken.None);
+
+        scoped.Should().Contain(r => r.ChunkId == tsChunkId);
+        scoped.Should().NotContain(r => r.ChunkId == csharpChunkId);
+    }
+
+    [Fact]
+    public async Task LexicalSearchAsync_treats_a_LIKE_wildcard_in_a_scope_term_as_a_literal()
+    {
+        var (projectId, plainChunkId) = await SeedAsync("src/Auth.cs", "class AuthService { }");
+        var literalChunkId = await AddFileAsync(projectId, "src/a%b/Auth.cs", "class AuthService { }");
+        var index = new SqliteSearchIndex(_factory, Mock.Of<IChunkVectorIndex>(), Mock.Of<IProviderResolver>());
+
+        var scoped = await index.LexicalSearchAsync(projectId, "auth service", ["a%b"], CancellationToken.None);
+
+        scoped.Should().Contain(r => r.ChunkId == literalChunkId);
+        scoped.Should().NotContain(r => r.ChunkId == plainChunkId,
+            "an unescaped '%' would turn the scope term into a wildcard that matches every path");
     }
 
     public void Dispose()

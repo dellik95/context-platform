@@ -23,6 +23,7 @@ public sealed class HybridSearchEngine : ISearchEngine
     public const int DefaultRerankTopK = 20;
     public const double DefaultSemanticStrongMatchThreshold = 0.80;
     public const double DefaultSemanticBoostFactor = 0.12;
+    public const double DefaultVectorRelevanceFloor = 0.25;
 
     private readonly ISearchIndex _searchIndex;
     private readonly IEmbeddingLookup _embeddingLookup;
@@ -64,7 +65,7 @@ public sealed class HybridSearchEngine : ISearchEngine
     {
         ct.ThrowIfCancellationRequested();
 
-        var lexicalTask = _searchIndex.LexicalSearchAsync(query.ProjectId, query.Text, ct);
+        var lexicalTask = _searchIndex.LexicalSearchAsync(query.ProjectId, query.Text, query.Scope, ct);
 
         float[]? queryEmbedding;
         try
@@ -84,15 +85,21 @@ public sealed class HybridSearchEngine : ISearchEngine
 
         var vector = queryEmbedding is null
             ? []
-            : await _searchIndex.VectorSearchAsync(query.ProjectId, queryEmbedding, ct).ConfigureAwait(false);
+            : await _searchIndex.VectorSearchAsync(query.ProjectId, queryEmbedding, query.Scope, ct).ConfigureAwait(false);
 
         var lexical = await lexicalTask.ConfigureAwait(false);
 
         var candidates = MergeCandidates(lexical, vector);
+        DropIrrelevantVectorSignal(candidates, CurrentOptions.VectorRelevanceFloor);
         if (candidates.Count == 0)
             return [];
 
-        await ExpandViaGraphAsync(candidates, ct).ConfigureAwait(false);
+        // Graph neighbors are nodes, with no path or language attached at this layer, so a scoped
+        // query skips expansion rather than smuggling out-of-scope files back into the results.
+        if (query.Scope is null or [])
+        {
+            await ExpandViaGraphAsync(candidates, ct).ConfigureAwait(false);
+        }
 
         var ranked = ScoreAndRank(candidates);
         ranked = await RerankTopAsync(query.Text, ranked, ct).ConfigureAwait(false);
@@ -125,6 +132,31 @@ public sealed class HybridSearchEngine : ISearchEngine
         return map;
     }
 
+    /// <summary>
+    /// Zeroes cosine scores below <paramref name="floor"/> and removes candidates left with no
+    /// signal at all, before normalization and graph expansion see them.
+    /// </summary>
+    /// <remarks>
+    /// The ANN pass always returns its top-K, however far away those neighbors actually are, and
+    /// <see cref="HybridScorer.NormalizeMinMax"/> then stretches whatever came back to fill [0, 1]
+    /// — so the least-bad hit of an entirely irrelevant result set normalizes to 1.0 and outranks a
+    /// genuine but lower-ranked lexical match. Cosine is the one signal here with an absolute
+    /// scale, so it is the one that can be floored; a query with no real semantic match now returns
+    /// its lexical hits alone, or nothing, instead of confident-looking noise.
+    /// </remarks>
+    private static void DropIrrelevantVectorSignal(Dictionary<Guid, CandidateAccumulator> candidates, double floor)
+    {
+        foreach (var (key, candidate) in candidates)
+        {
+            if (candidate.VectorRaw >= floor)
+                continue;
+
+            candidate.VectorRaw = 0.0;
+            if (candidate.LexicalRaw <= 0.0)
+                candidates.Remove(key);
+        }
+    }
+
     private static CandidateAccumulator GetOrAdd(
         Dictionary<Guid, CandidateAccumulator> map, Guid key, Guid chunkId, Guid? fileId, Guid? symbolId, SymbolKind? symbolKind)
     {
@@ -155,9 +187,10 @@ public sealed class HybridSearchEngine : ISearchEngine
         {
             ct.ThrowIfCancellationRequested();
 
-            if (candidates.TryGetValue(seedId, out var seed))
-                seed.GraphHopDistance = 0;
-
+            // The seed deliberately gets no graph credit for being its own seed: it was chosen for
+            // already scoring highest on lexical+vector, so crediting it again is the same evidence
+            // counted twice, and the top-5 would compound their own lead over everything else.
+            // Graph proximity only says something new about a candidate reached *through* a seed.
             IReadOnlyList<GraphNode> neighbors;
             try
             {
@@ -200,32 +233,37 @@ public sealed class HybridSearchEngine : ISearchEngine
 
         var lexNorm = HybridScorer.NormalizeMinMax([.. list.Select(c => c.LexicalRaw)]);
         var vecNorm = HybridScorer.NormalizeMinMax([.. list.Select(c => c.VectorRaw)]);
-        var graphRaw = list.Select(c => c.GraphHopDistance switch { 0 => 1.0, 1 => 0.5, _ => 0.0 }).ToList();
-        var graphNorm = HybridScorer.NormalizeMinMax(graphRaw);
 
-        // Recency: File.UpdatedAt was tried as a per-candidate signal here (BACKLOG-13) and measured
+        // Graph proximity is already a bounded [0, 1] quantity by construction (a neighbor of a top
+        // hit is worth half a direct hit), so it is NOT min-max normalized: doing that would stretch
+        // the constant 0.5 to a full 1.0 whenever any neighbor was found, and hand every candidate
+        // an identical 0.5 when none was -- a signal that only ever reports how the batch happened
+        // to be shaped, never how close this candidate is.
+        var graphSignal = list.Select(c => c.GraphHopDistance == 1 ? 0.5 : 0.0).ToList();
+
+        // Recency: File.UpdatedAt was tried as a per-candidate signal here and measured
         // against RetrievalQualityHarnessTests, but it regressed hit-rate@5/MRR: UpdatedAt is stamped
         // at index-processing time, not source-content-change time (it already means "last indexed"
         // elsewhere -- see ContextEngine.ProjectInfoAsync's LastIndexedAt), so a full reindex gives
         // every candidate a near-identical "just indexed" timestamp that NormalizeMinMax then
         // stretches into pure noise. Reverted to a constant placeholder, same honest-zero treatment
         // as memory below, pending a genuinely separate source-last-modified signal.
-        var recencyNorm = HybridScorer.NormalizeMinMax([.. list.Select(_ => 0.0)]);
-
-        // Memory: no per-candidate memory-adjacency data source exists for code search today (see
-        // ARCHITECTURE_ASSESSMENT.md RAG-1/BACKLOG-13 -- Memory.FilesReadJson/FilesModifiedJson are
-        // write-only path lists with no FK to Chunk/File). This stays a constant placeholder, but
-        // HybridScoringOptions.MemoryWeight now defaults to 0.0 so it is honestly inert rather than
-        // silently contributing a non-zero constant via NormalizeMinMax's all-equal midpoint.
-        var memoryNorm = HybridScorer.NormalizeMinMax([.. list.Select(_ => 0.0)]);
-
+        // Memory: no per-candidate memory-adjacency data source exists for code search today
+        // (Memory.FilesReadJson/FilesModifiedJson are write-only path lists with no FK to
+        // Chunk/File). Both this and recency are passed as a literal 0.0 rather than through
+        // NormalizeMinMax, whose all-equal case would turn a placeholder into a 0.5 contribution;
+        // their weights are 0.0 as well, so they are inert twice over until a real signal exists.
         for (var i = 0; i < list.Count; i++)
         {
-            var signals = new NormalizedSignals(lexNorm[i], vecNorm[i], graphNorm[i], recencyNorm[i], memoryNorm[i]);
+            var signals = new NormalizedSignals(lexNorm[i], vecNorm[i], graphSignal[i], 0.0, 0.0);
             var score = _scorer.Combine(signals);
-            if (options.SemanticBoostEnabled && vecNorm[i] >= options.SemanticStrongMatchThreshold)
+
+            // Keyed off raw cosine, not the normalized value: the threshold is a statement about
+            // absolute semantic closeness, and the best hit in any batch normalizes to 1.0 no
+            // matter how weak it is, so the normalized form boosted one candidate on every query.
+            if (options.SemanticBoostEnabled && list[i].VectorRaw >= options.SemanticStrongMatchThreshold)
             {
-                score = Math.Clamp(score + (options.SemanticBoostFactor * vecNorm[i]), 0.0, 1.0);
+                score = Math.Clamp(score + (options.SemanticBoostFactor * list[i].VectorRaw), 0.0, 1.0);
             }
 
             list[i].Score = score;

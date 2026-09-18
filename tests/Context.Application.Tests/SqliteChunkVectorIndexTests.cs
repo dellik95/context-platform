@@ -74,6 +74,53 @@ public sealed class SqliteChunkVectorIndexTests : IDisposable
         await index.DeleteByProjectAsync(Guid.NewGuid(), CancellationToken.None);
     }
 
+    [Fact]
+    public async Task DeleteAsync_removes_the_given_chunks_from_every_provider_collection()
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<ContextDbContext>();
+        optionsBuilder.UseSqlite($"Data Source={_dbPath}");
+        await using (var db = new ContextDbContext(optionsBuilder.Options))
+        {
+            await db.Database.MigrateAsync();
+        }
+
+        using var index = new SqliteChunkVectorIndex(_dbPath, new PooledDbContextFactoryStub(_dbPath));
+
+        var projectId = Guid.NewGuid();
+        var stale = Guid.NewGuid();
+        var kept = Guid.NewGuid();
+
+        await index.UpsertAsync(stale, projectId, "ollama", [1f, 0f, 0f], CancellationToken.None);
+        await index.UpsertAsync(kept, projectId, "ollama", [0f, 1f, 0f], CancellationToken.None);
+        await index.UpsertAsync(stale, projectId, "openai", [1f, 0f, 0f, 0f], CancellationToken.None);
+
+        await index.DeleteAsync([stale], CancellationToken.None);
+
+        var ollama = await index.SearchAsync(projectId, "ollama", [1f, 0f, 0f], limit: 10, CancellationToken.None);
+        ollama.Should().ContainSingle(r => r.ChunkId == kept);
+        (await index.SearchAsync(projectId, "openai", [1f, 0f, 0f, 0f], limit: 10, CancellationToken.None)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DeleteAsync_is_a_no_op_for_ids_that_were_never_indexed()
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<ContextDbContext>();
+        optionsBuilder.UseSqlite($"Data Source={_dbPath}");
+        await using (var db = new ContextDbContext(optionsBuilder.Options))
+        {
+            await db.Database.MigrateAsync();
+        }
+
+        using var index = new SqliteChunkVectorIndex(_dbPath, new PooledDbContextFactoryStub(_dbPath));
+
+        // No table exists yet at all, and an unknown id against an existing table must not throw
+        // either -- a chunk can be replaced before it was ever embedded.
+        await index.DeleteAsync([Guid.NewGuid()], CancellationToken.None);
+
+        await index.UpsertAsync(Guid.NewGuid(), Guid.NewGuid(), "ollama", [1f, 0f, 0f], CancellationToken.None);
+        await index.DeleteAsync([Guid.NewGuid()], CancellationToken.None);
+    }
+
     /// <summary>
     /// Minimal <see cref="IDbContextFactory{TContext}"/> so this test doesn't need the full
     /// pooled-factory DI registration <c>AddContextApplication</c> normally provides --

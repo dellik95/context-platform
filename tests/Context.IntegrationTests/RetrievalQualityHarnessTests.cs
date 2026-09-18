@@ -99,7 +99,7 @@ public sealed class RetrievalQualityHarnessTests : IAsyncLifetime
 
         // Real DI composition (AddContextProviders with no options => NoOpEmbeddingGenerator /
         // local-onnx reranker / no LLM -- zero API keys, zero network access), identical to
-        // apps/cli/Context.Cli/Program.cs and GoldenPathE2ETests.
+        // GoldenPathE2ETests.
         var services = new ServiceCollection();
         services.AddContextInfrastructure(dbPath);
         services.AddContextIndexing();

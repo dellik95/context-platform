@@ -4,8 +4,8 @@ This is the fastest path to a working instance, and — per the plan going forwa
 way this project verifies itself in "production": indexing and searching its own codebase inside
 the same container image that would run against any other repo.
 
-The image (built from the `Dockerfile` at the repo root) bundles both `Context.Dashboard.Server` (the always-on
-API/MCP/worker process) and `Context.Cli`, published for `linux-x64`, on top of the official
+The image (built from the `Dockerfile` at the repo root) publishes `Context.Dashboard.Server` (the
+always-on API/MCP/worker process) for `linux-x64`, on top of the official
 `mcr.microsoft.com/dotnet/aspnet:10.0` runtime image. It needs no external services — SQLite and
 the tree-sitter native grammars are both self-contained inside the .NET packages the app already
 depends on, and every AI provider defaults to its offline/no-op implementation.

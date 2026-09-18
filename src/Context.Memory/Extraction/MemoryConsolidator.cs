@@ -83,6 +83,11 @@ public sealed class MemoryConsolidator(
             var superseding = NewMemory(candidate, projectId, sessionId, now);
             await memoryStore.SaveAsync(superseding, embedding, ct).ConfigureAwait(false);
             await memoryStore.MarkSupersededAsync(oldMemory.Id, superseding.Id, ct).ConfigureAwait(false);
+
+            // Dropped from the candidate set, not just replaced in the database: a later candidate
+            // in this same batch would otherwise still match the superseded memory and reinforce
+            // it, resurrecting the fact this one just contradicted.
+            existing.RemoveAll(e => e.Memory.Id == oldMemory.Id);
             existing.Add(new ExistingMemoryWithEmbedding(superseding, embedding));
             return new ConsolidationResult(superseding, ConsolidationOutcome.Superseded);
         }
@@ -154,14 +159,21 @@ public sealed class MemoryConsolidator(
 
     private async Task ReinforceAsync(Context.Domain.Entities.Memory memory, DateTimeOffset now, int promotionReinforcementThreshold, CancellationToken ct)
     {
-        memory.ReinforcementCount++;
+        var newCount = await memoryStore.ReinforceAsync(memory.Id, now, promotionReinforcementThreshold, ct).ConfigureAwait(false);
+        if (newCount is null)
+        {
+            logger?.LogWarning("Memory {MemoryId} disappeared before it could be reinforced.", memory.Id);
+            return;
+        }
+
+        // The store owns the write; this only brings the in-memory copy (returned to the caller and
+        // reused as a dedup candidate for the rest of the batch) back in line with it.
+        memory.ReinforcementCount = newCount.Value;
         memory.LastReinforcedAt = now;
-        if (memory.Pinned || memory.ReinforcementCount >= promotionReinforcementThreshold)
+        if (memory.Pinned || newCount.Value >= promotionReinforcementThreshold)
         {
             memory.Tier = MemoryTier.LongTerm;
         }
-
-        await memoryStore.SaveAsync(memory, embedding: null, ct).ConfigureAwait(false);
     }
 
     private async Task<bool> CheckConsistencyViaLlmAsync(
@@ -176,39 +188,13 @@ public sealed class MemoryConsolidator(
         try
         {
             var chatResponse = await chatClient.GetResponseAsync(messages, cancellationToken: ct).ConfigureAwait(false);
-            await RecordUsageAsync(projectId, sessionId, "MemoryConsistencyCheck", chatClient, chatResponse.Usage, ct).ConfigureAwait(false);
+            await usageRecorder.RecordChatUsageAsync(projectId, sessionId, "MemoryConsistencyCheck", chatClient, chatResponse.Usage, logger, ct).ConfigureAwait(false);
             return MemoryConsistencyChecker.ParseIsConsistent(chatResponse.Text);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger?.LogWarning(ex, "LLM provider {Provider} failed the consistency check for memory {MemoryId}; defaulting to reinforcement.", chatClient.GetProviderName(), oldMemory.Id);
             return true; // fail open toward reinforcing rather than forking memory history
-        }
-    }
-
-    // Best-effort: a failure recording token usage must not affect the consistency check, so
-    // every exception here (other than cancellation) is logged and swallowed rather than
-    // propagated to the caller.
-    private async Task RecordUsageAsync(Guid projectId, Guid? sessionId, string purpose, IChatClient chatClient, UsageDetails? usage, CancellationToken ct)
-    {
-        try
-        {
-            await usageRecorder.RecordAsync(new Context.Domain.Entities.UsageRecord
-            {
-                ProjectId = projectId,
-                SessionId = sessionId,
-                Purpose = purpose,
-                Provider = chatClient.GetProviderName(),
-                Model = chatClient.GetModelId(),
-                PromptTokens = (int?)usage?.InputTokenCount,
-                CompletionTokens = (int?)usage?.OutputTokenCount,
-                TotalTokens = (int?)usage?.TotalTokenCount,
-                CreatedAt = DateTimeOffset.UtcNow
-            }, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger?.LogWarning(ex, "Failed to record token usage (purpose={Purpose}) for session {SessionId}.", purpose, sessionId);
         }
     }
 

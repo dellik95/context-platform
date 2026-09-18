@@ -63,15 +63,13 @@ public class LlmMemoryExtractorTests
     }
 
     /// <summary>
-    /// MEMORY_PIPELINE_PLAN.md §H case #7: provider unavailable → app continues. Distinct from the
-    /// existing <c>IsNoOp()</c> offline-fallback path (<see cref="FakeChatClient"/> reports a
-    /// non-"noop" provider, so <c>ExtractAsync</c> takes the real LLM path) — here the chat client
-    /// itself throws mid-call, and <see cref="LlmMemoryExtractor.ExtractCandidatesViaLlmAsync"/>'s
-    /// own catch block (moved verbatim from Phase 1) must swallow it: no exception propagates, the
-    /// extraction result is empty, and the consolidator is never invoked.
+    /// A chat client that throws mid-call is a transient provider failure, and the only component
+    /// that can recover it is <c>ExtractMemoryJobHandler</c>'s retry/backoff — which never sees a
+    /// swallowed exception. So the failure is logged and rethrown: the chunk's memories are retried
+    /// later rather than lost to a job that reported success having extracted nothing.
     /// </summary>
     [Fact]
-    public async Task ExtractAsync_swallows_an_exception_from_the_chat_client_and_returns_no_memories()
+    public async Task ExtractAsync_rethrows_an_exception_from_the_chat_client_so_the_job_can_retry()
     {
         var projectId = Guid.NewGuid();
         var chunk = MakeChunk();
@@ -82,9 +80,9 @@ public class LlmMemoryExtractorTests
         var logger = new CapturingLogger<LlmMemoryExtractor>();
         var sut = new LlmMemoryExtractor(store.Object, consolidator.Object, resolver, new FakeUsageRecorder(), logger);
 
-        var result = await sut.ExtractAsync(projectId, chunk, CancellationToken.None);
+        var act = async () => await sut.ExtractAsync(projectId, chunk, CancellationToken.None);
 
-        result.Should().BeEmpty();
+        await act.Should().ThrowAsync<Exception>();
         consolidator.Verify(
             c => c.ConsolidateAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Never);

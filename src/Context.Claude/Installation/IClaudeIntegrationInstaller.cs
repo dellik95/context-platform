@@ -12,9 +12,9 @@ public interface IClaudeIntegrationInstaller
     /// <c>hooks/*.ps1</c>, and backs up any pre-existing files it touches under
     /// <c>.claude/.backup/&lt;timestamp&gt;/</c>.
     /// <para/>
-    /// <paramref name="bearerToken"/> lets a caller that already minted a token elsewhere — e.g.
-    /// Context.Cli, after a shared Context.Dashboard.Server's <c>POST /api/projects</c> returned one — hand it
-    /// in directly rather than this installer generating a second, unrelated one. When omitted, the
+    /// <paramref name="bearerToken"/> lets a caller that already minted a token elsewhere — the
+    /// host's own <c>POST /api/projects</c>, which returns one — hand it in directly rather than
+    /// this installer generating a second, unrelated one. When omitted, the
     /// existing offline behavior applies unchanged: reuse the token already on disk in this
     /// project's <c>context-platform.local.json</c>, or generate a fresh one if none exists yet.
     /// </summary>

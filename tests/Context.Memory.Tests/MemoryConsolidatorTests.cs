@@ -28,7 +28,7 @@ public class MemoryConsolidatorTests
         var oldMemory = ExistingMemory();
         var existing = new List<ExistingMemoryWithEmbedding> { new(oldMemory, EmbeddingAtSimilarity(0.5)) };
         var store = new FakeMemoryStore();
-        var sut = new MemoryConsolidator(store, FakeResolver("CONSISTENT"), new FakeUsageRecorder());
+        var sut = new MemoryConsolidator(store, FakeResolver("CONSISTENT"), new FakeUsageRecorder(), new FakeSettingsProvider());
 
         var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, isInteractive: false, CancellationToken.None);
 
@@ -47,8 +47,8 @@ public class MemoryConsolidatorTests
         var projectId = Guid.NewGuid();
         var oldMemory = ExistingMemory();
         var existing = new List<ExistingMemoryWithEmbedding> { new(oldMemory, EmbeddingAtSimilarity(0.95)) };
-        var store = new FakeMemoryStore();
-        var sut = new MemoryConsolidator(store, FakeResolver("CONSISTENT"), new FakeUsageRecorder());
+        var store = new FakeMemoryStore(oldMemory);
+        var sut = new MemoryConsolidator(store, FakeResolver("CONSISTENT"), new FakeUsageRecorder(), new FakeSettingsProvider());
 
         var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, isInteractive: false, CancellationToken.None);
 
@@ -56,7 +56,8 @@ public class MemoryConsolidatorTests
         result.Memory.Id.Should().Be(oldMemory.Id);
         result.Memory.ReinforcementCount.Should().Be(1);
         result.Memory.Tier.Should().Be(MemoryTier.Working); // one reinforcement, below the promotion threshold
-        store.Saved.Should().ContainSingle(s => s.Memory.Id == oldMemory.Id && s.Embedding == null);
+        store.Reinforced.Should().ContainSingle(r => r.MemoryId == oldMemory.Id);
+        store.Saved.Should().BeEmpty(); // reinforcement is a targeted column update, never a full re-save
         store.Superseded.Should().BeEmpty();
         existing.Should().HaveCount(1); // reinforcement doesn't grow the dedup set
     }
@@ -67,8 +68,8 @@ public class MemoryConsolidatorTests
         var projectId = Guid.NewGuid();
         var oldMemory = ExistingMemory();
         var existing = new List<ExistingMemoryWithEmbedding> { new(oldMemory, EmbeddingAtSimilarity(0.95)) };
-        var store = new FakeMemoryStore();
-        var sut = new MemoryConsolidator(store, FakeResolver("CONTRADICTORY"), new FakeUsageRecorder());
+        var store = new FakeMemoryStore(oldMemory);
+        var sut = new MemoryConsolidator(store, FakeResolver("CONTRADICTORY"), new FakeUsageRecorder(), new FakeSettingsProvider());
 
         var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, isInteractive: false, CancellationToken.None);
 
@@ -76,7 +77,9 @@ public class MemoryConsolidatorTests
         result.Memory.Id.Should().NotBe(oldMemory.Id);
         store.Saved.Should().ContainSingle(s => s.Memory.Id == result.Memory.Id && s.Embedding != null);
         store.Superseded.Should().ContainSingle(s => s.OldId == oldMemory.Id && s.NewId == result.Memory.Id);
-        existing.Should().HaveCount(2); // old memory kept (not deleted), new one appended
+        // The superseded memory leaves the batch's dedup set (its row survives in the database) so a
+        // later candidate can't match it and reinforce the fact this one just contradicted.
+        existing.Should().ContainSingle(e => e.Memory.Id == result.Memory.Id);
     }
 
     [Fact]
@@ -85,15 +88,16 @@ public class MemoryConsolidatorTests
         var projectId = Guid.NewGuid();
         var oldMemory = ExistingMemory();
         var existing = new List<ExistingMemoryWithEmbedding> { new(oldMemory, EmbeddingAtSimilarity(0.85)) };
-        var store = new FakeMemoryStore();
-        var sut = new MemoryConsolidator(store, FakeResolver("CONSISTENT"), new FakeUsageRecorder());
+        var store = new FakeMemoryStore(oldMemory);
+        var sut = new MemoryConsolidator(store, FakeResolver("CONSISTENT"), new FakeUsageRecorder(), new FakeSettingsProvider());
 
         var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, isInteractive: false, CancellationToken.None);
 
         result.Outcome.Should().Be(ConsolidationOutcome.Reinforced);
         result.Memory.Id.Should().Be(oldMemory.Id);
         result.Memory.ReinforcementCount.Should().Be(1);
-        store.Saved.Should().ContainSingle(s => s.Memory.Id == oldMemory.Id && s.Embedding == null);
+        store.Reinforced.Should().ContainSingle(r => r.MemoryId == oldMemory.Id);
+        store.Saved.Should().BeEmpty(); // reinforcement is a targeted column update, never a full re-save
         store.Superseded.Should().BeEmpty();
         existing.Should().HaveCount(1);
     }
@@ -107,8 +111,8 @@ public class MemoryConsolidatorTests
         var projectId = Guid.NewGuid();
         var oldMemory = ExistingMemory();
         var existing = new List<ExistingMemoryWithEmbedding> { new(oldMemory, EmbeddingAtSimilarity(0.85)) };
-        var store = new FakeMemoryStore();
-        var sut = new MemoryConsolidator(store, FakeResolver("CONTRADICTORY"), new FakeUsageRecorder());
+        var store = new FakeMemoryStore(oldMemory);
+        var sut = new MemoryConsolidator(store, FakeResolver("CONTRADICTORY"), new FakeUsageRecorder(), new FakeSettingsProvider());
 
         var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, isInteractive: false, CancellationToken.None);
 
@@ -126,8 +130,8 @@ public class MemoryConsolidatorTests
         var projectId = Guid.NewGuid();
         var oldMemory = ExistingMemory(reinforcementCount: 1); // one prior reinforcement already
         var existing = new List<ExistingMemoryWithEmbedding> { new(oldMemory, EmbeddingAtSimilarity(0.95)) };
-        var store = new FakeMemoryStore();
-        var sut = new MemoryConsolidator(store, FakeResolver("CONSISTENT"), new FakeUsageRecorder());
+        var store = new FakeMemoryStore(oldMemory);
+        var sut = new MemoryConsolidator(store, FakeResolver("CONSISTENT"), new FakeUsageRecorder(), new FakeSettingsProvider());
 
         var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, isInteractive: false, CancellationToken.None);
 
@@ -141,8 +145,8 @@ public class MemoryConsolidatorTests
         var projectId = Guid.NewGuid();
         var oldMemory = ExistingMemory(pinned: true); // Pinned, but only its first reinforcement
         var existing = new List<ExistingMemoryWithEmbedding> { new(oldMemory, EmbeddingAtSimilarity(0.95)) };
-        var store = new FakeMemoryStore();
-        var sut = new MemoryConsolidator(store, FakeResolver("CONSISTENT"), new FakeUsageRecorder());
+        var store = new FakeMemoryStore(oldMemory);
+        var sut = new MemoryConsolidator(store, FakeResolver("CONSISTENT"), new FakeUsageRecorder(), new FakeSettingsProvider());
 
         var result = await sut.ConsolidateAsync(projectId, Guid.NewGuid(), Candidate(), existing, isInteractive: false, CancellationToken.None);
 
@@ -234,17 +238,27 @@ public class MemoryConsolidatorTests
         }
     }
 
-    private sealed class FakeMemoryStore : IMemoryStore
+    /// <summary>Stands in for the real store's row-level state: <paramref name="seed"/>'s
+    /// reinforcement counts are what <see cref="ReinforceAsync"/> increments from, since the real
+    /// implementation increments the column rather than a caller-supplied snapshot.</summary>
+    private sealed class FakeMemoryStore(params Context.Domain.Entities.Memory[] seed) : IMemoryStore
     {
+        private readonly Dictionary<Guid, int> _counts = seed.ToDictionary(m => m.Id, m => m.ReinforcementCount);
+
         public List<(Context.Domain.Entities.Memory Memory, float[]? Embedding)> Saved { get; } = [];
         public List<(Guid OldId, Guid NewId)> Superseded { get; } = [];
+        public List<(Guid MemoryId, DateTimeOffset At)> Reinforced { get; } = [];
 
         public Task<IReadOnlyList<ExistingMemoryWithEmbedding>> GetExistingWithEmbeddingsAsync(Guid projectId, CancellationToken ct) =>
             throw new NotSupportedException("MemoryConsolidator takes its existing-memory set as a parameter; it does not fetch it itself.");
 
+        public Task SaveMergedAsync(Context.Domain.Entities.Memory merged, float[] embedding, IReadOnlyCollection<Guid> supersededIds, CancellationToken ct) =>
+            throw new NotSupportedException("Merging clusters is CompactMemoryJobHandler's job, not the consolidator's.");
+
         public Task SaveAsync(Context.Domain.Entities.Memory memory, float[]? embedding, CancellationToken ct)
         {
             Saved.Add((memory, embedding));
+            _counts[memory.Id] = memory.ReinforcementCount;
             return Task.CompletedTask;
         }
 
@@ -253,10 +267,29 @@ public class MemoryConsolidatorTests
             Superseded.Add((oldMemoryId, newMemoryId));
             return Task.CompletedTask;
         }
+
+        public Task<int?> ReinforceAsync(Guid memoryId, DateTimeOffset reinforcedAt, int promotionReinforcementThreshold, CancellationToken ct)
+        {
+            if (!_counts.TryGetValue(memoryId, out var current))
+            {
+                return Task.FromResult<int?>(null);
+            }
+
+            var next = current + 1;
+            _counts[memoryId] = next;
+            Reinforced.Add((memoryId, reinforcedAt));
+            return Task.FromResult<int?>(next);
+        }
     }
 
     private sealed class FakeUsageRecorder : IUsageRecorder
     {
         public Task RecordAsync(UsageRecord record, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private sealed class FakeSettingsProvider : IMemoryConsolidationSettingsProvider
+    {
+        public Task<MemoryConsolidationSettings> GetAsync(Guid projectId, CancellationToken ct) =>
+            Task.FromResult(new MemoryConsolidationSettings());
     }
 }

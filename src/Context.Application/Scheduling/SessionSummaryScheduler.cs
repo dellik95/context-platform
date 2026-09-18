@@ -21,13 +21,16 @@ namespace Context.Application.Scheduling;
 /// Same fire-and-forget-per-project shape as <see cref="ReindexSchedulerService"/>: one project
 /// (or one session within it) failing must never block another's turn or delay the next poll.
 /// </remarks>
-public sealed class SessionSummaryScheduler : BackgroundService
+public sealed class SessionSummaryScheduler(
+    IServiceScopeFactory scopeFactory,
+    TimeProvider? timeProvider = null,
+    ILogger<SessionSummaryScheduler>? logger = null)
+    : PeriodicScheduler(PollInterval, timeProvider ?? TimeProvider.System, logger ?? NullLogger<SessionSummaryScheduler>.Instance)
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(60);
     private const int MaxSessionsPerProjectPerPoll = 100;
 
-    private readonly IServiceScopeFactory _scopeFactory;
-    private readonly ILogger<SessionSummaryScheduler> _logger;
+    private readonly IServiceScopeFactory _scopeFactory = scopeFactory;
 
     // SummarizeSession calls a local LLM and can easily take longer than one poll interval,
     // especially with several sessions' jobs queued up behind each other on one Ollama instance.
@@ -39,30 +42,7 @@ public sealed class SessionSummaryScheduler : BackgroundService
     // from "confirmed generated" so a slow job blocks its own re-enqueue instead of stacking more.
     private readonly Dictionary<Guid, DateTimeOffset> _lastEnqueuedAt = new();
 
-    public SessionSummaryScheduler(IServiceScopeFactory scopeFactory, ILogger<SessionSummaryScheduler>? logger = null)
-    {
-        _scopeFactory = scopeFactory;
-        _logger = logger ?? NullLogger<SessionSummaryScheduler>.Instance;
-    }
-
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            await PollOnceAsync(stoppingToken).ConfigureAwait(false);
-
-            try
-            {
-                await Task.Delay(PollInterval, stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-        }
-    }
-
-    private async Task PollOnceAsync(CancellationToken ct)
+    protected internal override async Task PollOnceAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var projectRepository = scope.ServiceProvider.GetRequiredService<IProjectRepository>();
@@ -80,7 +60,7 @@ public sealed class SessionSummaryScheduler : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to evaluate session-summary schedule for project {ProjectId}.", project.Id);
+                Logger.LogError(ex, "Failed to evaluate session-summary schedule for project {ProjectId}.", project.Id);
             }
         }
     }
@@ -113,13 +93,13 @@ public sealed class SessionSummaryScheduler : BackgroundService
             {
                 var summary = await sessionRepository.GetSummaryAsync(projectId, session.Id, ct).ConfigureAwait(false);
                 var lastSummarizedAt = summary?.GeneratedAt ?? session.StartedAt;
-                if (DateTimeOffset.UtcNow - lastSummarizedAt < interval)
+                if (TimeProvider.GetUtcNow() - lastSummarizedAt < interval)
                 {
                     continue;
                 }
 
                 if (_lastEnqueuedAt.TryGetValue(session.Id, out var lastEnqueued)
-                    && DateTimeOffset.UtcNow - lastEnqueued < interval)
+                    && TimeProvider.GetUtcNow() - lastEnqueued < interval)
                 {
                     continue;
                 }
@@ -136,13 +116,13 @@ public sealed class SessionSummaryScheduler : BackgroundService
                     continue;
                 }
 
-                _lastEnqueuedAt[session.Id] = DateTimeOffset.UtcNow;
+                _lastEnqueuedAt[session.Id] = TimeProvider.GetUtcNow();
                 await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(session.Id, IsSessionEnd: false), session.ProjectId, ct: ct)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to schedule a periodic summary for session {SessionId}.", session.Id);
+                Logger.LogError(ex, "Failed to schedule a periodic summary for session {SessionId}.", session.Id);
             }
         }
     }

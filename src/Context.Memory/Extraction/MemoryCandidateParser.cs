@@ -13,12 +13,13 @@ internal static partial class MemoryCandidateParser
     /// <summary>Which bulleted-list section (if any) subsequent bullet lines belong to.</summary>
     private enum ListSection { None, Facts, Concepts, FilesRead, FilesModified }
 
-    public static IReadOnlyList<MemoryCandidate> Parse(string llmResponse)
+    public static MemoryCandidateParseResult Parse(string llmResponse)
     {
         var results = new List<MemoryCandidate>();
+        var discardedBlocks = 0;
         if (string.IsNullOrWhiteSpace(llmResponse))
         {
-            return results;
+            return new MemoryCandidateParseResult(results, discardedBlocks);
         }
 
         MemoryType? type = null;
@@ -35,6 +36,8 @@ internal static partial class MemoryCandidateParser
 
         void Flush()
         {
+            var hadContent = type is not null || !string.IsNullOrWhiteSpace(title) || body.Length > 0 || facts.Count > 0;
+
             if (type is not null && !string.IsNullOrWhiteSpace(title))
             {
                 var readList = filesRead.ToList();
@@ -50,6 +53,12 @@ internal static partial class MemoryCandidateParser
                     modifiedList,
                     string.IsNullOrWhiteSpace(topic) ? null : topic.Trim(),
                     ScopePathHeuristics.DeriveFromFiles(modifiedList, readList)));
+            }
+            else if (hadContent)
+            {
+                // A block that named neither a type nor a title cannot become a memory; counted so
+                // the caller can log format drift instead of silently losing the content.
+                discardedBlocks++;
             }
 
             type = null;
@@ -79,8 +88,16 @@ internal static partial class MemoryCandidateParser
             var typeMatch = TypeRegex().Match(trimmed);
             if (typeMatch.Success)
             {
-                Flush();
+                // Only a SECOND TYPE line starts a new candidate; a TYPE that follows TITLE in the
+                // same block would otherwise flush the title away and drop the whole candidate.
+                if (type is not null)
+                {
+                    Flush();
+                }
+
                 type = ParseType(typeMatch.Groups[1].Value);
+                inBody = false;
+                currentList = ListSection.None;
                 continue;
             }
 
@@ -189,7 +206,7 @@ internal static partial class MemoryCandidateParser
         }
 
         Flush();
-        return results;
+        return new MemoryCandidateParseResult(results, discardedBlocks);
     }
 
     private static MemoryType ParseType(string raw) =>

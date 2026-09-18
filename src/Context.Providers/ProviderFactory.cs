@@ -17,7 +17,7 @@ namespace Context.Providers;
 /// across every project that resolves to the same one.
 /// <para/>
 /// Deliberately independent of <c>ServiceCollectionExtensions.AddContextProviders</c>'s own
-/// DI-registration-time construction (the single-project default/<c>Context.Cli</c> path): that
+/// DI-registration-time construction (the single-project default path): that
 /// path bakes <see cref="OllamaHostFallbackHandler"/> onto ONE shared named <c>HttpClient</c> with
 /// a base URL fixed at DI-registration time — correct there, since that path only ever serves one
 /// known-fixed project, but <see cref="OllamaHostFallbackHandler.SendAsync"/> rewrites every

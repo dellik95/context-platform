@@ -55,6 +55,8 @@ public sealed class ContextMcpTools(
     private const int DefaultCodeSearchLimit = 20;
     private const int DefaultSymbolSearchLimit = 20;
     private const int DefaultSessionSearchLimit = 20;
+    private const int DefaultMemorySearchLimit = 20;
+    private const int MaxMemorySearchLimit = 100;
     private const int DefaultGraphImpactMaxHops = 3;
     private const int DefaultContextSearchBudget = 2000;
 
@@ -97,7 +99,7 @@ public sealed class ContextMcpTools(
     [Description("Pure code/text search - raw ranked hits from the hybrid search engine, with no memory merge or context-pack budgeting.")]
     public async Task<IReadOnlyList<SearchHit>> CodeSearchAsync(
         [Description("Search query.")] string query,
-        [Description("Optional path/language scope filters.")] string[]? scope = null,
+        [Description("Optional scope filters. An entry matches a file whose relative path contains it (e.g. \"src/Auth\") or whose language equals it (e.g. \"csharp\"); a file need match only one entry. Graph expansion is skipped for a scoped search.")] string[]? scope = null,
         [Description("Maximum hits to return.")] int limit = DefaultCodeSearchLimit,
         CancellationToken ct = default)
     {
@@ -134,8 +136,14 @@ public sealed class ContextMcpTools(
         [Description("Search query — matched both by substring (Title/Body) and by semantic similarity, so a paraphrase or synonym with no shared words can still surface a relevant memory.")] string query,
         [Description("Include memories that have been superseded by a newer one.")] bool includeSuperseded = false,
         [Description("Optional exact-match filter on the memory's Topic tag, e.g. \"Auth middleware\".")] string? topic = null,
+        [Description("Maximum memories to return.")] int limit = DefaultMemorySearchLimit,
         CancellationToken ct = default)
-        => await engine.SearchMemoryAsync(currentProject.ProjectId, query, includeSuperseded, ct, topic).ConfigureAwait(false);
+    {
+        var memories = await engine.SearchMemoryAsync(currentProject.ProjectId, query, includeSuperseded, ct, topic).ConfigureAwait(false);
+        // Every other search tool here caps its result set; without this one a project with a few
+        // hundred memories returns all of them, full Body text included, into the caller's context.
+        return [.. memories.Take(Math.Clamp(limit, 1, MaxMemorySearchLimit))];
+    }
 
     [McpServerTool(Name = "memory_get")]
     [Description("Fetches one memory by id, or null if it doesn't exist.")]

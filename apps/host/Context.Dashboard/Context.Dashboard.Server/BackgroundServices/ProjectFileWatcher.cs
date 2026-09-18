@@ -1,15 +1,17 @@
 using System.Collections.Concurrent;
 using Context.Application.Abstractions;
+using Context.Application.Jobs;
 using Context.Domain.Entities;
+using Context.Domain.Enums;
 using Context.Indexing.Abstractions;
 
 namespace Context.Dashboard.Server.BackgroundServices;
 
 /// <summary>
 /// Watches one <see cref="Project"/>'s <see cref="Project.RootPath"/> with a
-/// <see cref="FileSystemWatcher"/> and calls <see cref="IIndexingPipeline.IndexFileAsync"/> for
-/// every changed/created/deleted/renamed file, debounced per path (400ms) so a burst of writes to
-/// the same file — an editor's atomic save, or several tool calls in a row — triggers one reindex,
+/// <see cref="FileSystemWatcher"/> and enqueues a <see cref="JobType.IndexFile"/> job for every
+/// changed/created/deleted/renamed file, debounced per path (400ms) so a burst of writes to the
+/// same file — an editor's atomic save, or several tool calls in a row — triggers one reindex,
 /// not several.
 /// <para/>
 /// Extracted from the old single-project <c>FileWatcherHostedService</c> (see git history) once a
@@ -134,17 +136,25 @@ public sealed class ProjectFileWatcher : IDisposable
             timer.Dispose();
         }
 
+        // Enqueued rather than indexed inline: a `git checkout` of a large branch fires thousands of
+        // these within the debounce window, and running them as unbounded Task.Run continuations
+        // would open a DbContext and an embedding-provider call per file at once. The queue caps
+        // concurrency, retries on failure, and survives a restart mid-burst.
         _ = Task.Run(async () =>
         {
             using var scope = _scopeFactory.CreateScope();
-            var pipeline = scope.ServiceProvider.GetRequiredService<IIndexingPipeline>();
+            var queue = scope.ServiceProvider.GetRequiredService<IJobQueue>();
             try
             {
-                await pipeline.IndexFileAsync(_projectId, relativePath, CancellationToken.None).ConfigureAwait(false);
+                await queue.EnqueueAsync(
+                    JobType.IndexFile,
+                    new IndexFilePayload(_projectId, relativePath),
+                    _projectId,
+                    ct: CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to reindex '{RelativePath}' for project {ProjectId} after a file-system change.", relativePath, _projectId);
+                _logger.LogError(ex, "Failed to enqueue a reindex of '{RelativePath}' for project {ProjectId} after a file-system change.", relativePath, _projectId);
             }
         });
     }

@@ -19,8 +19,13 @@ public interface ISearchIndex
     /// callers can report what a hit actually is instead of the generic "it's a symbol" — null when
     /// <c>SymbolId</c> is null.
     /// </summary>
+    /// <param name="scope">
+    /// Optional path/language restriction from <see cref="SearchQuery.Scope"/>: a chunk qualifies
+    /// when any entry is a case-insensitive substring of its file's relative path or an exact
+    /// match for its language. Null or empty means the whole project.
+    /// </param>
     Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score)>> LexicalSearchAsync(
-        Guid projectId, string text, CancellationToken ct);
+        Guid projectId, string text, IReadOnlyList<string>? scope, CancellationToken ct);
 
     /// <summary>
     /// Vector-similarity search scoped to a project, using a pre-computed query embedding.
@@ -28,6 +33,12 @@ public interface ISearchIndex
     /// stored embedding, typically in [-1, 1]. <c>SymbolKind</c> is the resolved symbol's actual
     /// kind — see <see cref="LexicalSearchAsync"/>'s remarks.
     /// </summary>
+    /// <param name="scope">
+    /// Same path/language restriction as <see cref="LexicalSearchAsync"/>. The ANN index stores no
+    /// path metadata, so implementations can only apply this <em>after</em> the top-K cut: a scoped
+    /// vector search returns the in-scope subset of the project-wide nearest neighbors, not the
+    /// nearest neighbors within the scope.
+    /// </param>
     Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore)>> VectorSearchAsync(
-        Guid projectId, float[] queryEmbedding, CancellationToken ct);
+        Guid projectId, float[] queryEmbedding, IReadOnlyList<string>? scope, CancellationToken ct);
 }

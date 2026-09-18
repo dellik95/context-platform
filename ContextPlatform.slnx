@@ -1,8 +1,5 @@
 <Solution>
   <Folder Name="/apps/" />
-  <Folder Name="/apps/cli/">
-    <Project Path="apps/cli/Context.Cli/Context.Cli.csproj" />
-  </Folder>
   <Folder Name="/apps/host/">
     <Project Path="apps/host/Context.Dashboard/context.dashboard.client/context.dashboard.client.esproj">
       <Build />
@@ -25,7 +22,6 @@
   <Folder Name="/tests/">
     <Project Path="tests/Context.Application.Tests/Context.Application.Tests.csproj" />
     <Project Path="tests/Context.Claude.Tests/Context.Claude.Tests.csproj" />
-    <Project Path="tests/Context.Domain.Tests/Context.Domain.Tests.csproj" />
     <Project Path="tests/Context.Graph.Tests/Context.Graph.Tests.csproj" />
     <Project Path="tests/Context.Indexing.Tests/Context.Indexing.Tests.csproj" />
     <Project Path="tests/Context.Infrastructure.Tests/Context.Infrastructure.Tests.csproj" />

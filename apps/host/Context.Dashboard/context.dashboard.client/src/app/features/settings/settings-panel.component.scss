@@ -1,76 +1,149 @@
-.settings-card {
-  padding: 20px;
-  margin-bottom: 16px;
+:host {
+  display: block;
 }
 
-.section-title {
-  margin: 0 0 12px;
-  font-size: 1.1rem;
-  font-weight: 600;
+.settings-form,
+.page > mat-card,
+.page > mat-progress-bar {
+  max-width: 980px;
+}
 
-  &:not(:first-child) {
-    margin-top: 24px;
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  margin-bottom: 20px;
+}
+
+.card-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.card-description {
+  margin: 0;
+  color: var(--mat-sys-on-surface-variant);
+  max-width: 68ch;
+}
+
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+// Sections are collapsed by default, so the page opens as six headings instead of a wall of
+// inputs; `multi` lets several stay open while tuning related values.
+.settings-accordion {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-panel {
+  .panel-body {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding-bottom: 8px;
+  }
+
+  mat-panel-description {
+    justify-content: flex-end;
+    color: var(--mat-sys-on-surface-variant);
+    margin-right: 16px;
   }
 }
 
-.provider-note {
+.subsection-title {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--mat-sys-on-surface-variant);
+}
+
+// Fixed-width columns with their own gutter: a hint can never reach the neighbouring control,
+// and `subscriptSizing="dynamic"` lets the row grow instead of the text spilling out.
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 20px 24px;
+  align-items: start;
+
+  mat-form-field {
+    width: 100%;
+  }
+
+  mat-hint {
+    line-height: 1.35;
+    padding-block: 4px;
+  }
+}
+
+.note {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 16px;
-  padding: 8px 12px;
-  border-radius: 4px;
-  background: var(--mat-sys-tertiary-container);
-  color: var(--mat-sys-on-tertiary-container);
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--mat-sys-surface-container-high);
+  color: var(--mat-sys-on-surface-variant);
   font-size: 0.85rem;
+  line-height: 1.45;
+  max-width: 78ch;
 
   mat-icon {
     font-size: 18px;
     width: 18px;
     height: 18px;
     flex: none;
+    margin-top: 1px;
   }
 
-  &.provider-note--cloud-disclosure {
+  &.note--danger {
     background: var(--mat-sys-error-container);
     color: var(--mat-sys-on-error-container);
   }
 }
 
-.integration-description {
-  margin: 0 0 16px;
-  color: var(--mat-sys-on-surface-variant);
+.save-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 0;
+  background: var(--mat-sys-surface);
+  border-top: 1px solid var(--mat-sys-outline-variant);
+}
+
+.save-bar__hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--mat-sys-error);
+  font-size: 0.85rem;
+
+  mat-icon {
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+  }
 }
 
 .danger-zone {
-  border: 1px solid var(--mat-sys-error);
-}
-
-.settings-form {
-  display: flex;
-  flex-direction: column;
-}
-
-.field-row {
-  display: flex;
-  gap: 16px;
-  flex-wrap: wrap;
-
-  mat-form-field {
-    flex: 1 1 240px;
-  }
-
-  &.field-row--align-center {
-    align-items: center;
-  }
-}
-
-.interval-field {
-  flex: 0 1 200px;
-}
-
-.actions {
-  display: flex;
-  gap: 12px;
-  margin-top: 8px;
+  border-color: var(--mat-sys-error);
 }

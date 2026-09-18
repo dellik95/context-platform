@@ -99,14 +99,13 @@ public sealed class SqliteChunkVectorIndex(string dbPath, IDbContextFactory<Cont
     /// </summary>
     public async Task DeleteByProjectAsync(Guid projectId, CancellationToken ct)
     {
-        var tableNames = await ListChunkVectorTableNamesAsync(ct).ConfigureAwait(false);
+        var tableNames = await SqliteVectorTables.ListAsync(_connectionString, TableNamePrefix, ct).ConfigureAwait(false);
 
         foreach (var tableName in tableNames)
         {
             // SqliteCollection implements IDisposable only (not IAsyncDisposable) -- confirmed by
             // inspecting Microsoft.SemanticKernel.Connectors.SqliteVec 1.74.0-preview directly.
-            using var collection = new SqliteCollection<Guid, ChunkVectorRecord>(
-                _connectionString, tableName, new SqliteCollectionOptions { Definition = BuildDeleteOnlyDefinition() });
+            using var collection = OpenForDelete(tableName);
             await collection.EnsureCollectionExistsAsync(ct).ConfigureAwait(false);
 
             var chunkIds = new List<Guid>();
@@ -123,23 +122,28 @@ public sealed class SqliteChunkVectorIndex(string dbPath, IDbContextFactory<Cont
         }
     }
 
-    private async Task<IReadOnlyList<string>> ListChunkVectorTableNamesAsync(CancellationToken ct)
+    public async Task DeleteAsync(IReadOnlyCollection<Guid> chunkIds, CancellationToken ct)
     {
-        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection(_connectionString);
-        await connection.OpenAsync(ct).ConfigureAwait(false);
-
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'chunk\\_vectors\\_%' ESCAPE '\\';";
-
-        var names = new List<string>();
-        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        if (chunkIds.Count == 0)
         {
-            names.Add(reader.GetString(0));
+            return;
         }
 
-        return names;
+        // Every provider collection, not just the one this chunk was last embedded into: the
+        // embedding provider can change between the upsert and the delete, and a key that isn't
+        // there is a no-op delete anyway.
+        var tableNames = await SqliteVectorTables.ListAsync(_connectionString, TableNamePrefix, ct).ConfigureAwait(false);
+
+        foreach (var tableName in tableNames)
+        {
+            using var collection = OpenForDelete(tableName);
+            await collection.EnsureCollectionExistsAsync(ct).ConfigureAwait(false);
+            await collection.DeleteAsync(chunkIds, ct).ConfigureAwait(false);
+        }
     }
+
+    private SqliteCollection<Guid, ChunkVectorRecord> OpenForDelete(string tableName) =>
+        new(_connectionString, tableName, new SqliteCollectionOptions { Definition = BuildDeleteOnlyDefinition() });
 
     /// <summary>Same record shape as <see cref="BuildCollection"/>, with a placeholder dimension -- see <see cref="DeleteByProjectAsync"/>'s remarks on why that's safe here.</summary>
     private static VectorStoreCollectionDefinition BuildDeleteOnlyDefinition() => new()
@@ -239,10 +243,12 @@ public sealed class SqliteChunkVectorIndex(string dbPath, IDbContextFactory<Cont
             _connectionString, CollectionNameFor(provider), new SqliteCollectionOptions { Definition = definition });
     }
 
+    private const string TableNamePrefix = "chunk_vectors_";
+
     private static string CollectionNameFor(string provider)
     {
         var sanitized = new string(provider.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
-        return $"chunk_vectors_{(sanitized.Length > 0 ? sanitized : "default")}";
+        return $"{TableNamePrefix}{(sanitized.Length > 0 ? sanitized : "default")}";
     }
 
     private sealed class ChunkVectorRecord

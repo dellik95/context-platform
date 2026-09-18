@@ -102,6 +102,90 @@ public sealed class CompactMemoryJobHandlerTests
         store.Superseded.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task HandleAsync_does_not_chain_two_unrelated_memories_together_through_a_shared_neighbour()
+    {
+        var projectId = Guid.NewGuid();
+        var store = new FakeMemoryStore();
+
+        // A~B (0.94) and B~C (0.94) both clear the threshold, but A~C (0.77) does not. Single-linkage
+        // clustering would pull all three into one row and fuse two facts that were never the same.
+        // Explicit timestamps: clustering seeds oldest-first, and "A seeds the cluster" is what
+        // makes the A~C gap the deciding comparison.
+        var origin = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var a = MakeMemory(projectId, "A", "Body A", createdAt: origin);
+        var b = MakeMemory(projectId, "B", "Body B", createdAt: origin.AddMinutes(1));
+        var c = MakeMemory(projectId, "C", "Body C", createdAt: origin.AddMinutes(2));
+        await store.SaveAsync(a, UnitVectorAt(0), CancellationToken.None);
+        await store.SaveAsync(b, UnitVectorAt(20), CancellationToken.None);
+        await store.SaveAsync(c, UnitVectorAt(40), CancellationToken.None);
+
+        var settingsService = SettingsServiceReturning(projectId, 0.85);
+        var resolver = new FakeProviderResolver(MergeResponse("Merged", "Merged body"), SimilarEmbedding);
+        var sut = new CompactMemoryJobHandler(store, settingsService.Object, resolver, new FakeUsageRecorder());
+
+        await sut.HandleAsync(MakeJob(projectId), CancellationToken.None);
+
+        store.Merged.Should().ContainSingle();
+        store.Merged[0].SupersededIds.Should().BeEquivalentTo([a.Id, b.Id]);
+        c.SupersededById.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleAsync_caps_a_cluster_and_merges_the_overflow_as_its_own_cluster()
+    {
+        var projectId = Guid.NewGuid();
+        var store = new FakeMemoryStore();
+
+        // Ten mutually identical memories: the cap splits them 8 + 2, and both groups are merged in
+        // this same pass rather than the overflow waiting for the next scheduled run.
+        foreach (var index in Enumerable.Range(0, 10))
+        {
+            await store.SaveAsync(MakeMemory(projectId, $"M{index}", $"Body {index}"), SimilarEmbedding, CancellationToken.None);
+        }
+
+        var settingsService = SettingsServiceReturning(projectId, 0.85);
+        var resolver = new FakeProviderResolver(MergeResponse("Merged", "Merged body"), SimilarEmbedding);
+        var sut = new CompactMemoryJobHandler(store, settingsService.Object, resolver, new FakeUsageRecorder());
+
+        await sut.HandleAsync(MakeJob(projectId), CancellationToken.None);
+
+        store.Merged.Select(m => m.SupersededIds.Count).Should().BeEquivalentTo([8, 2]);
+    }
+
+    [Fact]
+    public async Task HandleAsync_writes_the_merge_and_its_supersessions_as_one_store_operation()
+    {
+        var projectId = Guid.NewGuid();
+        var store = new FakeMemoryStore();
+
+        var memoryA = MakeMemory(projectId, "A", "Body A");
+        var memoryB = MakeMemory(projectId, "B", "Body B");
+        await store.SaveAsync(memoryA, SimilarEmbedding, CancellationToken.None);
+        await store.SaveAsync(memoryB, SimilarEmbedding, CancellationToken.None);
+
+        var settingsService = SettingsServiceReturning(projectId, 0.85);
+        var resolver = new FakeProviderResolver(MergeResponse("Merged", "Merged body"), SimilarEmbedding);
+        var sut = new CompactMemoryJobHandler(store, settingsService.Object, resolver, new FakeUsageRecorder());
+
+        await sut.HandleAsync(MakeJob(projectId), CancellationToken.None);
+
+        // A separate save + loop of supersedes would publish the merged memory alongside its still
+        // active sources if the process died in between, duplicating the fact permanently.
+        store.Merged.Should().ContainSingle();
+        store.Merged[0].Merged.IsCompacted.Should().BeTrue();
+        store.Merged[0].SupersededIds.Should().BeEquivalentTo([memoryA.Id, memoryB.Id]);
+    }
+
+    /// <summary>Unit vector <paramref name="degrees"/> off the x-axis, so cosine similarity between
+    /// two of them is exactly the cosine of the angle between them — lets a test state the
+    /// similarities it wants instead of hand-picking coordinates.</summary>
+    private static float[] UnitVectorAt(double degrees)
+    {
+        var radians = degrees * Math.PI / 180d;
+        return [(float)Math.Cos(radians), (float)Math.Sin(radians)];
+    }
+
     private static Mock<IProjectSettingsService> SettingsServiceReturning(Guid projectId, double similarityThreshold)
     {
         var settingsService = new Mock<IProjectSettingsService>();
@@ -126,7 +210,8 @@ public sealed class CompactMemoryJobHandlerTests
         CreatedAt = DateTimeOffset.UtcNow
     };
 
-    private static Context.Domain.Entities.Memory MakeMemory(Guid projectId, string title, string body, List<string>? facts = null) => new()
+    private static Context.Domain.Entities.Memory MakeMemory(
+        Guid projectId, string title, string body, List<string>? facts = null, DateTimeOffset? createdAt = null) => new()
     {
         Id = Guid.NewGuid(),
         ProjectId = projectId,
@@ -141,7 +226,7 @@ public sealed class CompactMemoryJobHandlerTests
         SupersededById = null,
         IsCompacted = false,
         CreatedFromSessionId = null,
-        CreatedAt = DateTimeOffset.UtcNow,
+        CreatedAt = createdAt ?? DateTimeOffset.UtcNow,
         LastReinforcedAt = DateTimeOffset.UtcNow
     };
 
@@ -212,6 +297,8 @@ public sealed class CompactMemoryJobHandlerTests
 
         public List<(Context.Domain.Entities.Memory Memory, float[]? Embedding)> Saved { get; } = [];
         public List<(Guid OldId, Guid NewId)> Superseded { get; } = [];
+        public List<Guid> Reinforced { get; } = [];
+        public List<(Context.Domain.Entities.Memory Merged, IReadOnlyCollection<Guid> SupersededIds)> Merged { get; } = [];
 
         public Task<IReadOnlyList<ExistingMemoryWithEmbedding>> GetExistingWithEmbeddingsAsync(Guid projectId, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<ExistingMemoryWithEmbedding>>(
@@ -240,6 +327,40 @@ public sealed class CompactMemoryJobHandlerTests
             }
 
             return Task.CompletedTask;
+        }
+
+
+        /// <summary>Mirrors the real adapter's atomic merge by routing through the same two
+        /// recorders, so the assertions below read the merge exactly as they read a manual
+        /// save-plus-supersede. <see cref="Merged"/> records the grouping the atomicity relies on.</summary>
+        public Task SaveMergedAsync(Context.Domain.Entities.Memory merged, float[] embedding, IReadOnlyCollection<Guid> supersededIds, CancellationToken ct)
+        {
+            Merged.Add((merged, supersededIds));
+            SaveAsync(merged, embedding, ct);
+            foreach (var id in supersededIds)
+            {
+                MarkSupersededAsync(id, merged.Id, ct);
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task<int?> ReinforceAsync(Guid memoryId, DateTimeOffset reinforcedAt, int promotionReinforcementThreshold, CancellationToken ct)
+        {
+            if (!_byId.TryGetValue(memoryId, out var entry))
+            {
+                return Task.FromResult<int?>(null);
+            }
+
+            entry.Memory.ReinforcementCount++;
+            entry.Memory.LastReinforcedAt = reinforcedAt;
+            if (entry.Memory.Pinned || entry.Memory.ReinforcementCount >= promotionReinforcementThreshold)
+            {
+                entry.Memory.Tier = Context.Domain.Enums.MemoryTier.LongTerm;
+            }
+
+            Reinforced.Add(memoryId);
+            return Task.FromResult<int?>(entry.Memory.ReinforcementCount);
         }
     }
 }

@@ -20,40 +20,17 @@ namespace Context.Application.Scheduling;
 /// failing must never block another's turn or delay the next poll. Runs far less often than that
 /// scheduler's 60s - a retention sweep has no latency requirement, so an hourly poll is plenty.
 /// </remarks>
-public sealed class HookInvocationRetentionScheduler : BackgroundService
+public sealed class HookInvocationRetentionScheduler(
+    IServiceScopeFactory scopeFactory,
+    TimeProvider? timeProvider = null,
+    ILogger<HookInvocationRetentionScheduler>? logger = null)
+    : PeriodicScheduler(PollInterval, timeProvider ?? TimeProvider.System, logger ?? NullLogger<HookInvocationRetentionScheduler>.Instance)
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromHours(1);
 
-    private readonly IServiceScopeFactory _scopeFactory;
-    private readonly ILogger<HookInvocationRetentionScheduler> _logger;
+    private readonly IServiceScopeFactory _scopeFactory = scopeFactory;
 
-    public HookInvocationRetentionScheduler(IServiceScopeFactory scopeFactory, ILogger<HookInvocationRetentionScheduler>? logger = null)
-    {
-        _scopeFactory = scopeFactory;
-        _logger = logger ?? NullLogger<HookInvocationRetentionScheduler>.Instance;
-    }
-
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            await PollOnceAsync(stoppingToken).ConfigureAwait(false);
-
-            try
-            {
-                await Task.Delay(PollInterval, stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-        }
-    }
-
-    // Internal (see InternalsVisibleTo in Context.Application.csproj) so
-    // HookInvocationRetentionSchedulerTests can drive one poll deterministically without waiting
-    // on ExecuteAsync's PollInterval loop.
-    internal async Task PollOnceAsync(CancellationToken ct)
+    protected internal override async Task PollOnceAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var projectRepository = scope.ServiceProvider.GetRequiredService<IProjectRepository>();
@@ -70,12 +47,12 @@ public sealed class HookInvocationRetentionScheduler : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to evaluate hook-invocation retention for project {ProjectId}.", project.Id);
+                Logger.LogError(ex, "Failed to evaluate hook-invocation retention for project {ProjectId}.", project.Id);
             }
         }
     }
 
-    private static async Task MaybeCleanUpAsync(
+    private async Task MaybeCleanUpAsync(
         Guid projectId,
         IProjectSettingsService settingsService,
         IHookInvocationRepository hookInvocationRepository,
@@ -87,7 +64,7 @@ public sealed class HookInvocationRetentionScheduler : BackgroundService
             return;
         }
 
-        var cutoff = DateTimeOffset.UtcNow - TimeSpan.FromDays(settings.HookInvocationRetentionDays);
+        var cutoff = TimeProvider.GetUtcNow() - TimeSpan.FromDays(settings.HookInvocationRetentionDays);
         await hookInvocationRepository.DeleteOlderThanAsync(projectId, cutoff, ct).ConfigureAwait(false);
     }
 }

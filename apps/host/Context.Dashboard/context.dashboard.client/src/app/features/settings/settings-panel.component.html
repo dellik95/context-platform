@@ -6,29 +6,37 @@
   @if (loading()) {
     <mat-progress-bar mode="indeterminate" />
   } @else {
-    <mat-card class="settings-card">
-      <h2 class="section-title">Providers</h2>
-      <p class="provider-note">
-        <mat-icon>info</mat-icon>
-        OpenAI/Anthropic keys and models are shared across all projects (set via environment variables);
-        the provider choice and Ollama's own endpoint/models below are specific to this project and take
-        effect immediately, no restart needed.
-      </p>
+    <form class="settings-form" (submit)="$event.preventDefault(); save()">
+      <mat-card class="settings-card" appearance="outlined">
+        <h2 class="card-title">Providers</h2>
+        <p class="note">
+          <mat-icon>info</mat-icon>
+          <span>
+            OpenAI/Anthropic keys and models are shared across all projects (set via environment
+            variables); the provider choice and Ollama's own endpoint/models below are specific to
+            this project and take effect immediately, no restart needed.
+          </span>
+        </p>
 
-      <form class="settings-form" (submit)="$event.preventDefault(); save()">
-        <div class="field-row">
-          <mat-form-field appearance="outline">
+        <div class="field-grid">
+          <mat-form-field appearance="outline" subscriptSizing="dynamic">
             <mat-label>Embedding provider</mat-label>
-            <mat-select [value]="settingsForm.embeddingProvider().value()" (selectionChange)="setEmbeddingProvider($event)">
+            <mat-select
+              [value]="settingsForm.embeddingProvider().value()"
+              (selectionChange)="setEmbeddingProvider($event)"
+            >
               <mat-option value="noop">noop</mat-option>
               <mat-option value="openai">openai</mat-option>
               <mat-option value="ollama">ollama</mat-option>
             </mat-select>
           </mat-form-field>
 
-          <mat-form-field appearance="outline">
+          <mat-form-field appearance="outline" subscriptSizing="dynamic">
             <mat-label>LLM provider</mat-label>
-            <mat-select [value]="settingsForm.llmProvider().value()" (selectionChange)="setLlmProvider($event)">
+            <mat-select
+              [value]="settingsForm.llmProvider().value()"
+              (selectionChange)="setLlmProvider($event)"
+            >
               <mat-option value="noop">noop</mat-option>
               <mat-option value="anthropic">anthropic</mat-option>
               <mat-option value="ollama">ollama</mat-option>
@@ -37,236 +45,394 @@
         </div>
 
         @if (showCloudDisclosure()) {
-          <p class="provider-note provider-note--cloud-disclosure">
+          <p class="note note--danger provider-note--cloud-disclosure">
             <mat-icon>cloud_upload</mat-icon>
-            Indexed code and content will be sent to the selected external provider (OpenAI/Anthropic) for
-            processing. Choose <strong>ollama</strong> or <strong>noop</strong> instead to keep everything on this machine.
+            <span>
+              Indexed code and content will be sent to the selected external provider
+              (OpenAI/Anthropic) for processing. Choose <strong>ollama</strong> or
+              <strong>noop</strong> instead to keep everything on this machine.
+            </span>
           </p>
         }
 
         @if (showOllamaBaseUrl() || showOllamaEmbeddingModel() || showOllamaChatModel()) {
-          <div class="field-row">
+          <div class="field-grid">
             @if (showOllamaBaseUrl()) {
-              <mat-form-field appearance="outline">
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
                 <mat-label>Ollama base URL</mat-label>
-                <input matInput [formField]="settingsForm.ollamaBaseUrl" placeholder="http://localhost:11434" />
+                <input
+                  matInput
+                  [formField]="settingsForm.ollamaBaseUrl"
+                  placeholder="http://localhost:11434"
+                />
               </mat-form-field>
             }
             @if (showOllamaEmbeddingModel()) {
-              <mat-form-field appearance="outline">
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
                 <mat-label>Ollama embedding model</mat-label>
-                <input matInput [formField]="settingsForm.ollamaEmbeddingModel" placeholder="e.g. embeddinggemma" />
+                <input
+                  matInput
+                  [formField]="settingsForm.ollamaEmbeddingModel"
+                  placeholder="e.g. embeddinggemma"
+                />
               </mat-form-field>
             }
             @if (showOllamaChatModel()) {
-              <mat-form-field appearance="outline">
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
                 <mat-label>Ollama chat model</mat-label>
-                <input matInput [formField]="settingsForm.ollamaChatModel" placeholder="e.g. qwen2.5-coder:1.5b" />
+                <input
+                  matInput
+                  [formField]="settingsForm.ollamaChatModel"
+                  placeholder="e.g. qwen2.5-coder:1.5b"
+                />
               </mat-form-field>
             }
           </div>
         }
+      </mat-card>
 
-        <h2 class="section-title">Reindexing</h2>
+      <mat-accordion class="settings-accordion" multi>
+        <mat-expansion-panel class="settings-panel">
+          <mat-expansion-panel-header>
+            <mat-panel-title>Reindexing</mat-panel-title>
+            <mat-panel-description>{{ reindexSummary() }}</mat-panel-description>
+          </mat-expansion-panel-header>
 
-        <div class="field-row field-row--align-center">
-          <mat-slide-toggle [checked]="settingsForm.reindexEnabled().value()" (change)="setReindexEnabled($event)">
-            Enable scheduled reindexing
-          </mat-slide-toggle>
+          <div class="panel-body">
+            <mat-slide-toggle
+              [checked]="settingsForm.reindexEnabled().value()"
+              (change)="setReindexEnabled($event)"
+            >
+              Enable scheduled reindexing
+            </mat-slide-toggle>
 
-          <mat-form-field appearance="outline" class="interval-field">
-            <mat-label>Interval (minutes)</mat-label>
-            <input matInput type="number" [formField]="settingsForm.reindexIntervalMinutes" />
-          </mat-form-field>
-        </div>
+            <div class="field-grid">
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Interval (minutes)</mat-label>
+                <input matInput type="number" [formField]="settingsForm.reindexIntervalMinutes" />
+                <mat-hint>How often the project is rescanned for changed files</mat-hint>
+              </mat-form-field>
+            </div>
+          </div>
+        </mat-expansion-panel>
 
-        <h2 class="section-title">Session summaries</h2>
-        <p class="provider-note">
-          <mat-icon>info</mat-icon>
-          By default a session is only summarized when it ends. Enable this to also get periodic
-          summaries (and extracted memories) for sessions that are still running.
-        </p>
+        <mat-expansion-panel class="settings-panel">
+          <mat-expansion-panel-header>
+            <mat-panel-title>Session summaries</mat-panel-title>
+            <mat-panel-description>{{ sessionSummarySummary() }}</mat-panel-description>
+          </mat-expansion-panel-header>
 
-        <div class="field-row field-row--align-center">
-          <mat-slide-toggle [checked]="settingsForm.sessionSummaryEnabled().value()" (change)="setSessionSummaryEnabled($event)">
-            Enable periodic session summaries
-          </mat-slide-toggle>
+          <div class="panel-body">
+            <p class="note">
+              <mat-icon>info</mat-icon>
+              <span>
+                By default a session is only summarized when it ends. Enable this to also get
+                periodic summaries (and extracted memories) for sessions that are still running.
+              </span>
+            </p>
 
-          <mat-form-field appearance="outline" class="interval-field">
-            <mat-label>Interval (minutes)</mat-label>
-            <input matInput type="number" [formField]="settingsForm.sessionSummaryIntervalMinutes" />
-          </mat-form-field>
+            <mat-slide-toggle
+              [checked]="settingsForm.sessionSummaryEnabled().value()"
+              (change)="setSessionSummaryEnabled($event)"
+            >
+              Enable periodic session summaries
+            </mat-slide-toggle>
 
-          <mat-form-field appearance="outline" class="interval-field">
-            <mat-label>Min. new events</mat-label>
-            <input matInput type="number" [formField]="settingsForm.minEventsForSessionSummary" />
-            <mat-hint>The interval above is a max wait — this many new events must also happen first</mat-hint>
-          </mat-form-field>
-        </div>
+            <div class="field-grid">
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Interval (minutes)</mat-label>
+                <input
+                  matInput
+                  type="number"
+                  [formField]="settingsForm.sessionSummaryIntervalMinutes"
+                />
+                <mat-hint>Maximum wait between summaries of a running session</mat-hint>
+              </mat-form-field>
 
-        <h2 class="section-title">Memory &amp; retrieval</h2>
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Min. new events</mat-label>
+                <input
+                  matInput
+                  type="number"
+                  [formField]="settingsForm.minEventsForSessionSummary"
+                />
+                <mat-hint
+                  >The interval is a max wait — this many new events must also happen
+                  first</mat-hint
+                >
+              </mat-form-field>
+            </div>
+          </div>
+        </mat-expansion-panel>
 
-        <div class="field-row field-row--align-center">
-          <mat-form-field appearance="outline" class="interval-field">
-            <mat-label>Min. events for memory extraction</mat-label>
-            <input matInput type="number" [formField]="settingsForm.minEventsForMemoryExtraction" />
-            <mat-hint>A chunk must cover at least this many events to trigger memory extraction</mat-hint>
-          </mat-form-field>
+        <mat-expansion-panel class="settings-panel">
+          <mat-expansion-panel-header>
+            <mat-panel-title>Memory extraction &amp; retrieval</mat-panel-title>
+            <mat-panel-description>{{ memoryRetrievalSummary() }}</mat-panel-description>
+          </mat-expansion-panel-header>
 
-          <mat-form-field appearance="outline" class="interval-field">
-            <mat-label>Max memories per section</mat-label>
-            <input matInput type="number" [formField]="settingsForm.maxMemoryNotesPerSection" />
-          </mat-form-field>
-        </div>
+          <div class="panel-body">
+            <div class="field-grid">
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Min. events for memory extraction</mat-label>
+                <input
+                  matInput
+                  type="number"
+                  [formField]="settingsForm.minEventsForMemoryExtraction"
+                />
+                <mat-hint
+                  >A chunk must cover at least this many events to trigger extraction</mat-hint
+                >
+              </mat-form-field>
 
-        <div class="field-row field-row--align-center">
-          <mat-slide-toggle [checked]="settingsForm.explicitRememberEnabled().value()" (change)="setExplicitRememberEnabled($event)">
-            Allow agent-initiated memory writes (memory_remember/memory_forget)
-          </mat-slide-toggle>
-        </div>
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Max memories per section</mat-label>
+                <input matInput type="number" [formField]="settingsForm.maxMemoryNotesPerSection" />
+                <mat-hint>Ranked memories shown per section of the recalled context</mat-hint>
+              </mat-form-field>
+            </div>
 
-        <h2 class="section-title">Memory merging</h2>
-        <p class="provider-note">
-          <mat-icon>info</mat-icon>
-          Real-time dedup runs on every memory extraction — a new memory whose similarity to an
-          existing one clears the threshold below is reinforced (or superseded) instead of
-          inserted as a duplicate. Periodic compaction is a separate, optional background pass
-          that clusters and merges near-duplicates that already made it into the database.
-        </p>
+            <mat-slide-toggle
+              [checked]="settingsForm.explicitRememberEnabled().value()"
+              (change)="setExplicitRememberEnabled($event)"
+            >
+              Allow agent-initiated memory writes (memory_remember/memory_forget)
+            </mat-slide-toggle>
+          </div>
+        </mat-expansion-panel>
 
-        <div class="field-row field-row--align-center">
-          <mat-form-field appearance="outline" class="interval-field">
-            <mat-label>Reinforce/supersede threshold</mat-label>
-            <input matInput type="number" step="0.01" [formField]="settingsForm.memoryConsolidationSimilarityThreshold" />
-            <mat-hint>Cosine similarity above which a match reinforces or supersedes instead of inserting new</mat-hint>
-          </mat-form-field>
+        <mat-expansion-panel class="settings-panel">
+          <mat-expansion-panel-header>
+            <mat-panel-title>Memory merging</mat-panel-title>
+            <mat-panel-description>{{ memoryMergingSummary() }}</mat-panel-description>
+          </mat-expansion-panel-header>
 
-          <mat-form-field appearance="outline" class="interval-field">
-            <mat-label>Restatement-check floor</mat-label>
-            <input matInput type="number" step="0.01" [formField]="settingsForm.memoryConsolidationLowSimilarityThreshold" />
-            <mat-hint>Similarity above this (but below the threshold above) triggers a restatement check</mat-hint>
-          </mat-form-field>
-        </div>
+          <div class="panel-body">
+            <p class="note">
+              <mat-icon>info</mat-icon>
+              <span>
+                Real-time dedup runs on every memory extraction — a new memory whose similarity to
+                an existing one clears the threshold below is reinforced (or superseded) instead of
+                inserted as a duplicate. Periodic compaction is a separate, optional background pass
+                that clusters and merges near-duplicates already in the database.
+              </span>
+            </p>
 
-        <div class="field-row field-row--align-center">
-          <mat-form-field appearance="outline" class="interval-field">
-            <mat-label>Reinforcements to promote</mat-label>
-            <input matInput type="number" [formField]="settingsForm.memoryConsolidationPromotionReinforcementThreshold" />
-            <mat-hint>Reinforcements before a memory is promoted from Working to LongTerm tier</mat-hint>
-          </mat-form-field>
+            <h3 class="subsection-title">Real-time dedup</h3>
+            <div class="field-grid">
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Reinforce/supersede threshold</mat-label>
+                <input
+                  matInput
+                  type="number"
+                  step="0.01"
+                  [formField]="settingsForm.memoryConsolidationSimilarityThreshold"
+                />
+                <mat-hint
+                  >Cosine similarity above which a match reinforces or supersedes instead of
+                  inserting new</mat-hint
+                >
+              </mat-form-field>
 
-          <mat-form-field appearance="outline" class="interval-field">
-            <mat-label>Candidates considered</mat-label>
-            <input matInput type="number" [formField]="settingsForm.memoryConsolidationTopKForDedup" />
-            <mat-hint>Nearest existing memories checked per new candidate</mat-hint>
-          </mat-form-field>
-        </div>
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Restatement-check floor</mat-label>
+                <input
+                  matInput
+                  type="number"
+                  step="0.01"
+                  [formField]="settingsForm.memoryConsolidationLowSimilarityThreshold"
+                />
+                <mat-hint
+                  >Similarity above this (but below the threshold above) triggers a restatement
+                  check</mat-hint
+                >
+              </mat-form-field>
 
-        <div class="field-row field-row--align-center">
-          <mat-slide-toggle [checked]="settingsForm.memoryCompactionEnabled().value()" (change)="setMemoryCompactionEnabled($event)">
-            Enable periodic memory compaction
-          </mat-slide-toggle>
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Reinforcements to promote</mat-label>
+                <input
+                  matInput
+                  type="number"
+                  [formField]="settingsForm.memoryConsolidationPromotionReinforcementThreshold"
+                />
+                <mat-hint
+                  >Reinforcements before a memory is promoted from Working to LongTerm
+                  tier</mat-hint
+                >
+              </mat-form-field>
 
-          <mat-form-field appearance="outline" class="interval-field">
-            <mat-label>Interval (minutes)</mat-label>
-            <input matInput type="number" [formField]="settingsForm.memoryCompactionIntervalMinutes" />
-          </mat-form-field>
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Candidates considered</mat-label>
+                <input
+                  matInput
+                  type="number"
+                  [formField]="settingsForm.memoryConsolidationTopKForDedup"
+                />
+                <mat-hint>Nearest existing memories checked per new candidate</mat-hint>
+              </mat-form-field>
+            </div>
 
-          <mat-form-field appearance="outline" class="interval-field">
-            <mat-label>Cluster threshold</mat-label>
-            <input matInput type="number" step="0.01" [formField]="settingsForm.memoryCompactionSimilarityThreshold" />
-            <mat-hint>Cosine similarity above which memories are clustered together for one merge</mat-hint>
-          </mat-form-field>
-        </div>
+            <h3 class="subsection-title">Periodic compaction</h3>
+            <mat-slide-toggle
+              [checked]="settingsForm.memoryCompactionEnabled().value()"
+              (change)="setMemoryCompactionEnabled($event)"
+            >
+              Enable periodic memory compaction
+            </mat-slide-toggle>
 
-        <h2 class="section-title">Stale session cleanup</h2>
-        <p class="provider-note">
-          <mat-icon>info</mat-icon>
-          Ends an Active session (with a final summary and memory extraction) after no new activity
-          for this long — protects against a killed terminal or crashed CLI process leaving a
-          session Active forever.
-        </p>
+            <div class="field-grid">
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Interval (minutes)</mat-label>
+                <input
+                  matInput
+                  type="number"
+                  [formField]="settingsForm.memoryCompactionIntervalMinutes"
+                />
+                <mat-hint>How often the compaction pass runs</mat-hint>
+              </mat-form-field>
 
-        <div class="field-row field-row--align-center">
-          <mat-slide-toggle [checked]="settingsForm.staleSessionCleanupEnabled().value()" (change)="setStaleSessionCleanupEnabled($event)">
-            Enable stale-session cleanup
-          </mat-slide-toggle>
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Cluster threshold</mat-label>
+                <input
+                  matInput
+                  type="number"
+                  step="0.01"
+                  [formField]="settingsForm.memoryCompactionSimilarityThreshold"
+                />
+                <mat-hint
+                  >Cosine similarity above which memories are clustered together for one
+                  merge</mat-hint
+                >
+              </mat-form-field>
+            </div>
+          </div>
+        </mat-expansion-panel>
 
-          <mat-form-field appearance="outline" class="interval-field">
-            <mat-label>Timeout (minutes)</mat-label>
-            <input matInput type="number" [formField]="settingsForm.staleSessionTimeoutMinutes" />
-          </mat-form-field>
-        </div>
+        <mat-expansion-panel class="settings-panel">
+          <mat-expansion-panel-header>
+            <mat-panel-title>Retention &amp; cleanup</mat-panel-title>
+            <mat-panel-description>{{ retentionSummary() }}</mat-panel-description>
+          </mat-expansion-panel-header>
 
-        <h2 class="section-title">Session event retention</h2>
-        <p class="provider-note">
-          <mat-icon>info</mat-icon>
-          Once a batch of raw session events is folded into a summary, it's no longer needed by the
-          memory pipeline — enabling this deletes it from the database. The dashboard's session
-          detail view and MCP recall tool will no longer show raw events older than the latest
-          summary once enabled.
-        </p>
+          <div class="panel-body">
+            <h3 class="subsection-title">Stale sessions</h3>
+            <p class="note">
+              <mat-icon>info</mat-icon>
+              <span>
+                Ends an Active session (with a final summary and memory extraction) after no new
+                activity for this long — protects against a killed terminal or crashed CLI process
+                leaving a session Active forever.
+              </span>
+            </p>
 
-        <div class="field-row field-row--align-center">
-          <mat-slide-toggle
-            [checked]="settingsForm.deleteSessionEventsAfterSummary().value()"
-            (change)="setDeleteSessionEventsAfterSummary($event)"
-          >
-            Delete raw session events after summarization
-          </mat-slide-toggle>
-        </div>
+            <mat-slide-toggle
+              [checked]="settingsForm.staleSessionCleanupEnabled().value()"
+              (change)="setStaleSessionCleanupEnabled($event)"
+            >
+              Enable stale-session cleanup
+            </mat-slide-toggle>
 
-        <h2 class="section-title">Hook invocation retention</h2>
-        <p class="provider-note">
-          <mat-icon>info</mat-icon>
-          Every hook call (SessionStart, UserPromptSubmit, PostToolUse, SessionEnd) is logged for the
-          dashboard's live activity feed and never cleaned up elsewhere — enabling this periodically
-          deletes invocations older than the window below.
-        </p>
+            <div class="field-grid">
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Timeout (minutes)</mat-label>
+                <input
+                  matInput
+                  type="number"
+                  [formField]="settingsForm.staleSessionTimeoutMinutes"
+                />
+                <mat-hint>Idle time after which an Active session is ended</mat-hint>
+              </mat-form-field>
+            </div>
 
-        <div class="field-row field-row--align-center">
-          <mat-slide-toggle
-            [checked]="settingsForm.hookInvocationRetentionEnabled().value()"
-            (change)="setHookInvocationRetentionEnabled($event)"
-          >
-            Enable hook invocation cleanup
-          </mat-slide-toggle>
+            <h3 class="subsection-title">Raw session events</h3>
+            <p class="note">
+              <mat-icon>info</mat-icon>
+              <span>
+                Once a batch of raw session events is folded into a summary, it's no longer needed
+                by the memory pipeline — enabling this deletes it from the database. The session
+                detail view and the MCP recall tool then no longer show raw events older than the
+                latest summary.
+              </span>
+            </p>
 
-          <mat-form-field appearance="outline" class="interval-field">
-            <mat-label>Retention (days)</mat-label>
-            <input matInput type="number" [formField]="settingsForm.hookInvocationRetentionDays" />
-          </mat-form-field>
-        </div>
+            <mat-slide-toggle
+              [checked]="settingsForm.deleteSessionEventsAfterSummary().value()"
+              (change)="setDeleteSessionEventsAfterSummary($event)"
+            >
+              Delete raw session events after summarization
+            </mat-slide-toggle>
 
-        <div class="actions">
-          <button mat-flat-button color="primary" type="submit" [disabled]="saving()">
-            {{ saving() ? 'Saving…' : 'Save' }}
-          </button>
-        </div>
-      </form>
-    </mat-card>
+            <h3 class="subsection-title">Hook invocations</h3>
+            <p class="note">
+              <mat-icon>info</mat-icon>
+              <span>
+                Every hook call (SessionStart, UserPromptSubmit, PostToolUse, SessionEnd) is logged
+                for the dashboard's live activity feed and never cleaned up elsewhere — enabling
+                this periodically deletes invocations older than the window below.
+              </span>
+            </p>
 
-    <mat-card class="settings-card">
-      <h2 class="section-title">Claude Code integration</h2>
-      <p class="integration-description">
-        Writes the hooks, MCP server registration, and skill document that let Claude Code use this project's
-        context automatically.
+            <mat-slide-toggle
+              [checked]="settingsForm.hookInvocationRetentionEnabled().value()"
+              (change)="setHookInvocationRetentionEnabled($event)"
+            >
+              Enable hook invocation cleanup
+            </mat-slide-toggle>
+
+            <div class="field-grid">
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Retention (days)</mat-label>
+                <input
+                  matInput
+                  type="number"
+                  [formField]="settingsForm.hookInvocationRetentionDays"
+                />
+                <mat-hint>Invocations older than this are deleted</mat-hint>
+              </mat-form-field>
+            </div>
+          </div>
+        </mat-expansion-panel>
+      </mat-accordion>
+
+      <div class="save-bar">
+        <button
+          mat-flat-button
+          color="primary"
+          type="submit"
+          [disabled]="saving() || settingsForm().invalid()"
+        >
+          {{ saving() ? 'Saving…' : 'Save settings' }}
+        </button>
+        @if (settingsForm().invalid()) {
+          <span class="save-bar__hint">
+            <mat-icon>error_outline</mat-icon>
+            Some values are out of range — check the highlighted fields.
+          </span>
+        }
+      </div>
+    </form>
+
+    <mat-card class="settings-card" appearance="outlined">
+      <h2 class="card-title">Claude Code integration</h2>
+      <p class="card-description">
+        Writes the hooks, MCP server registration, and skill document that let Claude Code use this
+        project's context automatically.
       </p>
-      <div class="actions">
+      <div class="card-actions">
         <button mat-stroked-button [disabled]="installing()" (click)="installClaude()">
           <mat-icon>extension</mat-icon>
-          {{ installing() ? 'Registering…' : 'Register Claude Code integration (hooks, MCP, skill)' }}
+          {{ installing() ? 'Registering…' : 'Register Claude Code integration' }}
         </button>
       </div>
     </mat-card>
 
-    <mat-card class="settings-card danger-zone">
-      <h2 class="section-title">Danger zone</h2>
-      <p class="integration-description">
+    <mat-card class="settings-card danger-zone" appearance="outlined">
+      <h2 class="card-title">Danger zone</h2>
+      <p class="card-description">
         Permanently removes this project's index, memories, sessions, and settings from Context
         Platform. Files on disk are never touched.
       </p>
-      <div class="actions">
+      <div class="card-actions">
         <button mat-stroked-button color="warn" [disabled]="deleting()" (click)="deleteProject()">
           <mat-icon>delete_forever</mat-icon>
           {{ deleting() ? 'Deleting…' : 'Delete project' }}

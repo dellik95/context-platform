@@ -120,9 +120,12 @@ public static class HookEndpoints
         var sessionId = await GetOrStartSessionAsync(engine, project, sessionMap, input.SessionId, ct).ConfigureAwait(false);
         var type = ClassifyTool(input.ToolName);
 
+        // `path` is lifted out of the tool input here, at the producer, so the downstream
+        // extractor never needs to know Claude Code's snake_case tool-input schema.
         await engine.RecordEventAsync(sessionId, type, new
         {
             toolName = input.ToolName,
+            path = HookToolPath.TryExtract(input.ToolInputJson, project.Project.RootPath),
             toolInput = input.ToolInputJson,
             toolResponse = input.ToolResponseJson
         }, ct).ConfigureAwait(false);

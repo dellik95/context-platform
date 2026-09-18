@@ -1,4 +1,5 @@
 using Context.Domain.Entities;
+using Context.Domain.Enums;
 using Context.Infrastructure.Abstractions;
 using Microsoft.EntityFrameworkCore;
 
@@ -84,5 +85,51 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
         }
 
         return await db.Memories.AsNoTracking().Where(m => ids.Contains(m.Id)).ToListAsync(ct);
+    }
+
+    public async Task<bool> MarkSupersededAsync(Guid oldMemoryId, Guid newMemoryId, CancellationToken ct)
+    {
+        var affected = await db.Memories
+            .Where(m => m.Id == oldMemoryId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(m => m.SupersededById, newMemoryId), ct);
+
+        return affected > 0;
+    }
+
+    public async Task<int> MarkSupersededBatchAsync(IReadOnlyCollection<Guid> oldMemoryIds, Guid newMemoryId, CancellationToken ct)
+    {
+        if (oldMemoryIds.Count == 0)
+        {
+            return 0;
+        }
+
+        var ids = oldMemoryIds.ToArray();
+        return await db.Memories
+            .Where(m => ids.Contains(m.Id))
+            .ExecuteUpdateAsync(setters => setters.SetProperty(m => m.SupersededById, newMemoryId), ct);
+    }
+
+    public async Task<int?> ReinforceAsync(Guid memoryId, DateTimeOffset reinforcedAt, int promotionReinforcementThreshold, CancellationToken ct)
+    {
+        // The count is incremented from the column's own value, so two concurrent reinforcements
+        // both land instead of the second overwriting the first with a stale read + 1.
+        var affected = await db.Memories
+            .Where(m => m.Id == memoryId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(m => m.ReinforcementCount, m => m.ReinforcementCount + 1)
+                .SetProperty(m => m.LastReinforcedAt, reinforcedAt)
+                .SetProperty(m => m.Tier, m => m.Pinned || m.ReinforcementCount + 1 >= promotionReinforcementThreshold
+                    ? MemoryTier.LongTerm
+                    : m.Tier), ct);
+
+        if (affected == 0)
+        {
+            return null;
+        }
+
+        return await db.Memories.AsNoTracking()
+            .Where(m => m.Id == memoryId)
+            .Select(m => (int?)m.ReinforcementCount)
+            .FirstOrDefaultAsync(ct);
     }
 }

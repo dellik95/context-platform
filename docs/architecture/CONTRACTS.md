@@ -481,8 +481,8 @@ public interface IClaudeIntegrationInstaller
 - Connection string: `Data Source={ProjectDataDir}/context.db` where `ProjectDataDir` is the
   shared, machine-level data directory `SharedDataLocation.ResolveDataDir` resolves (Phase 2: no
   longer per-project — `CONTEXT_PLATFORM_DATA_DIR` overrides it, else an OS-appropriate default such
-  as `%LocalAppData%\ContextPlatform` on Windows). Context.Dashboard.Server and Context.Cli both resolve through
-  the same helper so they agree on one database file; a database found at the old
+  as `%LocalAppData%\ContextPlatform` on Windows). Context.Dashboard.Server resolves through this
+  helper so every process agrees on one database file; a database found at the old
   `<repo-root>/.context/context.db` location is copied forward automatically on first run.
 - Repositories live here implementing interfaces declared in `Context.Application`
   (e.g. `IProjectRepository`, `IFileRepository`, `ISymbolRepository`, `IMemoryRepository`,
@@ -520,8 +520,8 @@ public interface IContextEngine
 }
 ```
 
-MCP tools (Context.Mcp, hosted inside `Context.Dashboard.Server`), CLI commands (`Context.Cli`)
-and REST controllers (`Context.Dashboard.Server`) are thin adapters over `IContextEngine` only.
+MCP tools (Context.Mcp, hosted inside `Context.Dashboard.Server`) and REST endpoints
+(`Context.Dashboard.Server`) are thin adapters over `IContextEngine` only.
 
 ---
 
