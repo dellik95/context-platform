@@ -43,6 +43,24 @@ public sealed class ReindexCancellationRegistry
         return cts.Token;
     }
 
+    /// <summary>
+    /// <see cref="Begin"/> for callers that must not interrupt a run already in flight (the
+    /// scheduler): returns false and tracks nothing if <paramref name="projectId"/> is running.
+    /// </summary>
+    public bool TryBegin(Guid projectId, out CancellationToken token)
+    {
+        var cts = new CancellationTokenSource();
+        if (!_running.TryAdd(projectId, cts))
+        {
+            cts.Dispose();
+            token = default;
+            return false;
+        }
+
+        token = cts.Token;
+        return true;
+    }
+
     /// <summary>Requests cancellation of <paramref name="projectId"/>'s running reindex, if any.</summary>
     /// <returns>False if no reindex is currently tracked for this project.</returns>
     public bool Cancel(Guid projectId)

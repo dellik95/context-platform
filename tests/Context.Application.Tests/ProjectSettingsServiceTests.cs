@@ -60,6 +60,49 @@ public sealed class ProjectSettingsServiceTests
     }
 
     [Fact]
+    public async Task GetAsync_keeps_the_database_scheduler_stamps_when_a_local_settings_file_overrides()
+    {
+        var projectId = Guid.NewGuid();
+        var root = CreateTempProjectRoot();
+        Directory.CreateDirectory(Path.Combine(root, ".claude"));
+
+        var reindexedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var compactedAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        var databaseSettings = BuildSettings("embed-db", "llm-db", 5) with
+        {
+            LastReindexScheduledAt = reindexedAt,
+            LastMemoryCompactionScheduledAt = compactedAt,
+        };
+        var localSettings = BuildSettings("embed-local", "llm-local", 7) with
+        {
+            LastReindexScheduledAt = null,
+            LastMemoryCompactionScheduledAt = DateTimeOffset.UnixEpoch,
+        };
+
+        var project = new Project
+        {
+            Id = projectId,
+            Name = "demo",
+            RootPath = root,
+            CreatedAt = DateTimeOffset.UtcNow,
+            ConfigJson = JsonSerializer.Serialize(databaseSettings)
+        };
+        await System.IO.File.WriteAllTextAsync(
+            Path.Combine(root, ".claude", "context-platform.local.json"),
+            JsonSerializer.Serialize(new { settings = localSettings }));
+
+        var repo = new Mock<IProjectRepository>();
+        repo.Setup(r => r.GetByIdAsync(projectId, It.IsAny<CancellationToken>())).ReturnsAsync(project);
+        var service = new ProjectSettingsService(repo.Object, Options.Create(new ContextProvidersOptions()));
+
+        var effective = await service.GetAsync(projectId, CancellationToken.None);
+
+        effective.EmbeddingProvider.Should().Be("embed-local");
+        effective.LastReindexScheduledAt.Should().Be(reindexedAt);
+        effective.LastMemoryCompactionScheduledAt.Should().Be(compactedAt);
+    }
+
+    [Fact]
     public async Task UpdateAsync_with_both_target_updates_database_and_local_file()
     {
         var projectId = Guid.NewGuid();

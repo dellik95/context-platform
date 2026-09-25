@@ -52,7 +52,21 @@ public class JobRepository(ContextDbContext db) : IJobRepository
     /// </summary>
     private sealed record ClaimCandidate(Guid Id, int Priority, DateTimeOffset CreatedAt, DateTimeOffset? NextRetryAt);
 
-    public async Task<Job?> DequeueNextAsync(CancellationToken ct)
+    public Task<Job?> DequeueNextAsync(CancellationToken ct) =>
+        DequeueNextCoreAsync(db.Jobs.AsNoTracking().Where(j => j.Status == JobStatus.Pending), ct);
+
+    public Task<Job?> DequeueNextForProjectAsync(Guid? projectId, CancellationToken ct) =>
+        DequeueNextCoreAsync(
+            db.Jobs.AsNoTracking().Where(j => j.Status == JobStatus.Pending && j.ProjectId == projectId), ct);
+
+    public async Task<IReadOnlyList<Guid?>> ListProjectsWithPendingJobsAsync(CancellationToken ct) =>
+        await db.Jobs.AsNoTracking()
+            .Where(j => j.Status == JobStatus.Pending)
+            .Select(j => j.ProjectId)
+            .Distinct()
+            .ToListAsync(ct);
+
+    private async Task<Job?> DequeueNextCoreAsync(IQueryable<Job> pending, CancellationToken ct)
     {
         var now = DateTimeOffset.UtcNow;
         // SQLite's EF Core provider cannot translate comparisons or ORDER BY over DateTimeOffset
@@ -63,8 +77,7 @@ public class JobRepository(ContextDbContext db) : IJobRepository
         // server-side); the backoff check and the CreatedAt tie-break both move to client-side,
         // over just the top DequeueBatchSize by priority rather than every Pending row (see that
         // constant's remarks).
-        var candidates = await db.Jobs.AsNoTracking()
-            .Where(j => j.Status == JobStatus.Pending)
+        var candidates = await pending
             .OrderByDescending(j => j.Priority)
             .Take(DequeueBatchSize)
             .Select(j => new ClaimCandidate(j.Id, j.Priority, j.CreatedAt, j.NextRetryAt))

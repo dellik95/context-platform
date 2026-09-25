@@ -1,6 +1,5 @@
 using System.Text.Json;
 using Context.Application.Abstractions;
-using Context.Application.Memory.Triggers;
 using Context.Application.Notifications;
 using Context.Application.Settings;
 using Context.Domain.Entities;
@@ -15,28 +14,19 @@ using Microsoft.Extensions.Logging;
 
 namespace Context.Application.Jobs.Handlers;
 
-/// <summary>Summarizes a session and chains into <c>ExtractMemory</c>, per CONTRACTS.md §10 ("EndSessionAsync ... enqueues SummarizeSession -&gt; ExtractMemory").</summary>
+/// <summary>Summarizes a session into an append-only <see cref="SessionSummaryChunk"/> for
+/// session_summary_search and the dashboard. Memory extraction no longer hangs off this: it reads
+/// raw event batches and compact summaries directly (see <c>ContextEngine.RecordEventAsync</c>).</summary>
 public sealed class SummarizeSessionJobHandler(
     ISessionSummarizer summarizer,
     ISessionRepository sessionRepository,
-    IJobQueue jobQueue,
     IProjectSettingsService settingsService,
     IProviderResolver providerResolver,
     ISessionSummaryVectorIndex sessionSummaryVectorIndex,
     IProjectActivityNotifier? activityNotifier = null,
-    IEnumerable<IMemoryExtractionTrigger>? extractionTriggers = null,
     ILogger<SummarizeSessionJobHandler>? logger = null) : IJobHandler
 {
-    // Mirrors production DI registration (ServiceCollectionExtensions.AddContextApplication) so a
-    // caller that constructs this handler directly - e.g. existing unit tests predating this
-    // trigger abstraction - gets the exact same two triggers, and therefore the exact same
-    // behavior, without having to know about IMemoryExtractionTrigger at all.
-    private static readonly IReadOnlyList<IMemoryExtractionTrigger> DefaultExtractionTriggers =
-        [new EventThresholdExtractionTrigger(), new ConversationEndExtractionTrigger()];
-
     private readonly IProjectActivityNotifier _activityNotifier = activityNotifier ?? NullProjectActivityNotifier.Instance;
-    private readonly IReadOnlyList<IMemoryExtractionTrigger> _extractionTriggers =
-        extractionTriggers is null ? DefaultExtractionTriggers : [.. extractionTriggers];
 
     public JobType Type => JobType.SummarizeSession;
 
@@ -74,12 +64,10 @@ public sealed class SummarizeSessionJobHandler(
         //    the "worth summarizing" bar: skip rather than persist a thin, near-empty summary. A
         //    session that already has a real chunk is allowed through below that bar, since this is
         //    just topping up an already-meaningful summary rather than creating one from scratch.
-        // On session end (payload.IsSessionEnd) the bar is waived entirely: ConversationEndExtractionTrigger
-        // fires unconditionally there since there won't be a later pass to pick this chunk up, but it
-        // only ever gets the chance to fire if a chunk is actually produced - a short session (e.g. a
-        // couple of tool calls) that never clears MinEventsForSessionSummary was silently losing both
-        // its summary and its memory extraction. The "no new events at all" bail still applies even on
-        // session end - there's genuinely nothing to summarize.
+        // On session end (payload.IsSessionEnd) the bar is waived entirely: there won't be a later
+        // pass, so a short session (e.g. a couple of tool calls) that never clears
+        // MinEventsForSessionSummary would otherwise never get a summary at all. The "no new events
+        // at all" bail still applies even on session end - there's genuinely nothing to summarize.
         var allEvents = await sessionRepository.GetEventsAsync(projectId, payload.SessionId, ct).ConfigureAwait(false);
         var newEventCount = since is null ? allEvents.Count : allEvents.Count(e => e.Timestamp > since.Value);
 
@@ -98,10 +86,6 @@ public sealed class SummarizeSessionJobHandler(
 
         var savedChunk = await sessionRepository.AddSummaryChunkAsync(newChunk, ct).ConfigureAwait(false);
 
-        // First write after the insert: extraction is the one step whose loss is permanent, since
-        // no later pass re-examines an already-chunked range.
-        await MaybeEnqueueExtractionAsync(payload, session, settings, savedChunk, ct).ConfigureAwait(false);
-
         var allChunks = await sessionRepository.GetSummaryChunksAsync(projectId, payload.SessionId, ct).ConfigureAwait(false);
         var mergedSummary = SessionSummaryMerger.Merge(payload.SessionId, allChunks);
         await sessionRepository.UpsertSummaryAsync(mergedSummary, ct).ConfigureAwait(false);
@@ -112,11 +96,11 @@ public sealed class SummarizeSessionJobHandler(
                 savedChunk.Id, projectId, savedChunk.SessionId, embedding.ModelKey, embedding.Vector, ct).ConfigureAwait(false);
         }
 
-        // Everything up to this chunk's own ToEventAt is now fully covered by it - ExtractMemory
-        // reads only the chunk, never raw events, so it's safe to drop them here rather than let
-        // SessionEvents grow unbounded. Opt-in: the dashboard's session detail view and the MCP
-        // recall tool still read raw events for history, so a project keeps them until it asks to
-        // trade that away.
+        // Everything up to this chunk's own ToEventAt is now fully covered by it. Only events whose
+        // memory extraction already finished are dropped (the repository enforces that); the
+        // ExtractMemory handler runs the same cleanup when it finishes after this. Opt-in: the
+        // dashboard's session detail view and the MCP recall tool still read raw events for
+        // history, so a project keeps them until it asks to trade that away.
         if (settings.DeleteSessionEventsAfterSummary)
         {
             await sessionRepository.DeleteEventsUpToAsync(payload.SessionId, savedChunk.ToEventAt, ct).ConfigureAwait(false);
@@ -129,48 +113,6 @@ public sealed class SummarizeSessionJobHandler(
         {
             await _activityNotifier.NotifyAsync(session.ProjectId, ProjectActivityKind.SessionSummaryUpdated, ct).ConfigureAwait(false);
         }
-    }
-
-    private async Task MaybeEnqueueExtractionAsync(
-        SummarizeSessionPayload payload,
-        Session? session,
-        ProjectSettingsDto settings,
-        SessionSummaryChunk savedChunk,
-        CancellationToken ct)
-    {
-        // ExtractMemory does real work per chunk (LLM candidate generation, embedding, dedup) -
-        // unlike summarization itself, a frequent periodic chunk with only a handful of new events
-        // isn't worth that unless the session is actually ending, at which point every chunk must
-        // be processed since there won't be a later pass to pick it up.
-        var minEventsForExtraction = session is not null
-            ? settings.MinEventsForMemoryExtraction
-            : 0;
-
-        // §E.1: each registered IMemoryExtractionTrigger independently justifies running
-        // extraction for this chunk - fires once ANY of them returns true (today: event-threshold
-        // OR session-end). The no-session -> threshold-0 rule above is folded into the settings
-        // snapshot handed to the triggers rather than special-cased here, so
-        // EventThresholdExtractionTrigger stays a pure comparison against the setting.
-        var triggerContext = new MemoryExtractionTriggerContext(
-            payload.IsSessionEnd,
-            savedChunk.EventCount,
-            settings with { MinEventsForMemoryExtraction = minEventsForExtraction });
-        var firedTrigger = _extractionTriggers.FirstOrDefault(t => t.ShouldFire(triggerContext));
-
-        if (firedTrigger is null)
-        {
-            return;
-        }
-
-        logger?.LogInformation(
-            "Memory extraction triggered by {Trigger} for session {SessionId} ({EventCount} events).",
-            firedTrigger.Name, payload.SessionId, savedChunk.EventCount);
-
-        await jobQueue.EnqueueAsync(
-            JobType.ExtractMemory,
-            new ExtractMemoryPayload(payload.SessionId, savedChunk.Id),
-            session?.ProjectId,
-            ct: ct).ConfigureAwait(false);
     }
 
     /// <summary>Embeds <paramref name="chunk"/>'s text so <c>session_summary_search</c> can rank it

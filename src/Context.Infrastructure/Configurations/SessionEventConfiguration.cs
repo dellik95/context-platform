@@ -16,6 +16,7 @@ public class SessionEventConfiguration : IEntityTypeConfiguration<SessionEvent>
 
         builder.HasIndex(e => e.SessionId);
         builder.HasIndex(e => new { e.SessionId, e.Type });
+        builder.HasIndex(e => new { e.SessionId, e.ExtractionBatchId });
 
         builder.HasOne<Session>()
             .WithMany()

@@ -325,7 +325,7 @@ public sealed class ContextEngine(
         return saved.Id;
     }
 
-    public async Task RecordEventAsync(Guid sessionId, SessionEventType type, object payload, CancellationToken ct)
+    public async Task RecordEventAsync(Guid projectId, Guid sessionId, SessionEventType type, object payload, CancellationToken ct)
     {
         var payloadJson = JsonSerializer.Serialize(payload, payload.GetType());
 
@@ -340,6 +340,32 @@ public sealed class ContextEngine(
         };
 
         await sessionRepository.AddEventAsync(sessionEvent, ct).ConfigureAwait(false);
+
+        var settings = await projectSettingsService.GetAsync(projectId, ct).ConfigureAwait(false);
+        await EnqueueExtractionBatchAsync(projectId, sessionId, Math.Max(1, settings.MinEventsForMemoryExtraction), ct).ConfigureAwait(false);
+    }
+
+    private async Task EnqueueExtractionBatchAsync(Guid projectId, Guid sessionId, int minEvents, CancellationToken ct)
+    {
+        var batchId = await sessionRepository.ClaimEventsForExtractionAsync(sessionId, minEvents, ct).ConfigureAwait(false);
+        if (batchId is null)
+        {
+            return;
+        }
+
+        await jobQueue.EnqueueAsync(
+            JobType.ExtractMemory, new ExtractMemoryPayload(sessionId, EventBatchId: batchId), projectId, ct: ct).ConfigureAwait(false);
+    }
+
+    public async Task ExtractMemoryFromCompactSummaryAsync(Guid projectId, Guid sessionId, string compactSummary, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(compactSummary))
+        {
+            return;
+        }
+
+        await jobQueue.EnqueueAsync(
+            JobType.ExtractMemory, new ExtractMemoryPayload(sessionId, CompactSummary: compactSummary), projectId, ct: ct).ConfigureAwait(false);
     }
 
     public async Task EndSessionAsync(Guid projectId, Guid sessionId, CancellationToken ct, string? reason = null)
@@ -352,8 +378,8 @@ public sealed class ContextEngine(
         session.EndReason = reason;
         await sessionRepository.UpdateAsync(session, ct).ConfigureAwait(false);
 
-        // SummarizeSessionJobHandler chains into ExtractMemory itself once the summary is ready -
-        // see CONTRACTS.md §10's "enqueues SummarizeSession -> ExtractMemory".
+        // No later event will push the remainder over the batch threshold, so flush it now.
+        await EnqueueExtractionBatchAsync(session.ProjectId, sessionId, minEvents: 1, ct).ConfigureAwait(false);
         await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(sessionId, IsSessionEnd: true), session.ProjectId, ct: ct).ConfigureAwait(false);
     }
 

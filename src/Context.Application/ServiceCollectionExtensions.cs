@@ -3,7 +3,6 @@ using Context.Application.Adapters;
 using Context.Application.Indexing;
 using Context.Application.Jobs;
 using Context.Application.Jobs.Handlers;
-using Context.Application.Memory.Triggers;
 using Context.Application.Providers;
 using Context.Application.Scheduling;
 using Context.Application.Settings;
@@ -69,7 +68,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProviderResolver, ProjectProviderResolver>();
 
         AddSeamAdapters(services, dbPath);
-        AddMemoryExtractionTriggers(services);
         AddJobHandlers(services);
         AddJobDispatcher(services);
         AddIndexingPipeline(services);
@@ -179,19 +177,6 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers the in-pipeline <see cref="IMemoryExtractionTrigger"/>s that
-    /// <see cref="SummarizeSessionJobHandler"/> fires a just-produced chunk's extraction against
-    /// (§E.1 of MEMORY_PIPELINE_PLAN.md) - a plain collection registration, since
-    /// <see cref="SummarizeSessionJobHandler"/> ORs every registered trigger via
-    /// <c>FirstOrDefault</c> rather than depending on registration order.
-    /// </summary>
-    private static void AddMemoryExtractionTriggers(IServiceCollection services)
-    {
-        services.AddSingleton<IMemoryExtractionTrigger, EventThresholdExtractionTrigger>();
-        services.AddSingleton<IMemoryExtractionTrigger, ConversationEndExtractionTrigger>();
-    }
-
-    /// <summary>
     /// Registers every <see cref="IJobHandler"/> as Scoped: <see cref="JobDispatcher"/> resolves
     /// them from a fresh <see cref="IServiceScope"/> per job specifically so their Scoped
     /// repository dependencies are safe (see <see cref="IJobHandler"/>'s own remarks).
@@ -239,6 +224,7 @@ public static class ServiceCollectionExtensions
         // Singleton: shared between the request that starts a reindex (ProjectEndpoints.TriggerIndex)
         // and the request that later cancels it (ProjectEndpoints.CancelIndex) — see its own remarks.
         services.AddSingleton<ReindexCancellationRegistry>();
+        services.AddSingleton<ReindexRunner>();
     }
 
     private static void AddContextEngine(IServiceCollection services)

@@ -174,14 +174,14 @@
           <div class="panel-body">
             <div class="field-grid">
               <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Min. events for memory extraction</mat-label>
+                <mat-label>Events per memory extraction batch</mat-label>
                 <input
                   matInput
                   type="number"
                   [formField]="settingsForm.minEventsForMemoryExtraction"
                 />
                 <mat-hint
-                  >A chunk must cover at least this many events to trigger extraction</mat-hint
+                  >Raw session events sent to the LLM together; leftovers are extracted at session end</mat-hint
                 >
               </mat-form-field>
 

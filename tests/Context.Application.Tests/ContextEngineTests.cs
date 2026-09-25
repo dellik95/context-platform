@@ -462,6 +462,88 @@ public sealed class ContextEngineTests
             Times.Never);
     }
 
+    // ---- 4b. Memory extraction batching ----
+
+    [Fact]
+    public async Task RecordEventAsync_enqueues_ExtractMemory_for_the_batch_it_claims()
+    {
+        var projectId = Guid.NewGuid();
+        var sessionId = Guid.NewGuid();
+        var batchId = Guid.NewGuid();
+        _sessionRepository.Setup(r => r.ClaimEventsForExtractionAsync(sessionId, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(batchId);
+
+        await _sut.RecordEventAsync(projectId, sessionId, SessionEventType.ToolCall, new { tool = "Edit" }, CancellationToken.None);
+
+        _sessionRepository.Verify(r => r.AddEventAsync(It.Is<SessionEvent>(e => e.SessionId == sessionId), It.IsAny<CancellationToken>()), Times.Once);
+        _jobQueue.Verify(
+            q => q.EnqueueAsync(
+                JobType.ExtractMemory,
+                It.Is<object>(p => p is ExtractMemoryPayload && ((ExtractMemoryPayload)p).EventBatchId == batchId
+                    && ((ExtractMemoryPayload)p).SessionId == sessionId),
+                projectId,
+                It.IsAny<int>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task RecordEventAsync_enqueues_nothing_while_the_batch_is_still_filling()
+    {
+        var sessionId = Guid.NewGuid();
+        _sessionRepository.Setup(r => r.ClaimEventsForExtractionAsync(sessionId, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid?)null);
+
+        await _sut.RecordEventAsync(Guid.NewGuid(), sessionId, SessionEventType.ToolCall, new { tool = "Read" }, CancellationToken.None);
+
+        _jobQueue.Verify(
+            q => q.EnqueueAsync(It.IsAny<JobType>(), It.IsAny<object>(), It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task EndSessionAsync_flushes_whatever_events_are_left_into_a_final_batch()
+    {
+        var sessionId = Guid.NewGuid();
+        var session = new Session
+        {
+            Id = sessionId,
+            ProjectId = Guid.NewGuid(),
+            StartedAt = DateTimeOffset.UtcNow.AddHours(-1),
+            Status = SessionStatus.Active
+        };
+        _sessionRepository.Setup(r => r.GetByIdAsync(session.ProjectId, sessionId, It.IsAny<CancellationToken>())).ReturnsAsync(session);
+        _sessionRepository.Setup(r => r.ClaimEventsForExtractionAsync(sessionId, 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Guid.NewGuid());
+
+        await _sut.EndSessionAsync(session.ProjectId, sessionId, CancellationToken.None);
+
+        _sessionRepository.Verify(r => r.ClaimEventsForExtractionAsync(sessionId, 1, It.IsAny<CancellationToken>()), Times.Once);
+        _jobQueue.Verify(
+            q => q.EnqueueAsync(JobType.ExtractMemory, It.IsAny<object>(), session.ProjectId, It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ExtractMemoryFromCompactSummaryAsync_enqueues_the_summary_and_ignores_blank_input()
+    {
+        var projectId = Guid.NewGuid();
+        var sessionId = Guid.NewGuid();
+
+        await _sut.ExtractMemoryFromCompactSummaryAsync(projectId, sessionId, "   ", CancellationToken.None);
+        await _sut.ExtractMemoryFromCompactSummaryAsync(projectId, sessionId, "Switched auth to PKCE.", CancellationToken.None);
+
+        _jobQueue.Verify(
+            q => q.EnqueueAsync(
+                JobType.ExtractMemory,
+                It.Is<object>(p => p is ExtractMemoryPayload && ((ExtractMemoryPayload)p).CompactSummary == "Switched auth to PKCE."),
+                projectId,
+                It.IsAny<int>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _jobQueue.VerifyNoOtherCalls();
+    }
+
     // ---- 5. SearchMemoryAsync: superseded exclusion (delegated to repository) + relevance ordering ----
 
     [Fact]

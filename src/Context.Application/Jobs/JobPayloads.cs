@@ -32,14 +32,22 @@ public sealed record EmbedChunkPayload(Guid ProjectId, IReadOnlyList<Guid> Chunk
 /// <see cref="IsSessionEnd"/> distinguishes <c>ContextEngine.EndSessionAsync</c>'s final summary
 /// (true) from <see cref="Scheduling.SessionSummaryScheduler"/>'s periodic mid-session ones
 /// (false) — <see cref="Handlers.SummarizeSessionJobHandler"/> uses it to bypass its
-/// event-count gate before chaining into <c>ExtractMemory</c>, since a session that just ended
-/// won't get another pass to pick up whatever the gate would have deferred.
+/// event-count gate, since a session that just ended won't get another pass to pick up whatever
+/// the gate would have deferred.
 /// </summary>
 public sealed record SummarizeSessionPayload(Guid SessionId, bool IsSessionEnd = false);
 
-/// <summary><see cref="SummaryChunkId"/> is the single <see cref="Context.Domain.Entities.SessionSummaryChunk"/>
-/// this pass extracts memories from — not the session's full merged history.</summary>
-public sealed record ExtractMemoryPayload(Guid SessionId, Guid SummaryChunkId);
+/// <summary>
+/// Exactly one source is set: <see cref="EventBatchId"/> (a batch of raw SessionEvents claimed by
+/// <c>ContextEngine.RecordEventAsync</c>/<c>EndSessionAsync</c>), <see cref="CompactSummary"/> (the
+/// text Claude Code produced on /compact), or the legacy <see cref="SummaryChunkId"/> that jobs
+/// queued before event batching still carry.
+/// </summary>
+public sealed record ExtractMemoryPayload(
+    Guid SessionId,
+    Guid? SummaryChunkId = null,
+    Guid? EventBatchId = null,
+    string? CompactSummary = null);
 
 /// <summary>Marker payload — <c>DecayMemory</c> applies globally across every project.</summary>
 public sealed record DecayMemoryPayload;

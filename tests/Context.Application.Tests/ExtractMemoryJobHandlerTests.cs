@@ -65,12 +65,76 @@ public sealed class ExtractMemoryJobHandlerTests
         persisted.ReinforcementCount.Should().Be(1);
     }
 
-    private static Job MakeJob(Guid projectId, Guid summaryChunkId) => new()
+    [Fact]
+    public async Task HandleAsync_extracts_from_the_claimed_event_batch_and_marks_it_done()
+    {
+        var projectId = Guid.NewGuid();
+        var sessionId = Guid.NewGuid();
+        var batchId = Guid.NewGuid();
+        IReadOnlyList<SessionEvent> events =
+        [
+            new() { Id = Guid.NewGuid(), SessionId = sessionId, Type = SessionEventType.ToolCall, PayloadJson = "{}", Timestamp = DateTimeOffset.UtcNow },
+        ];
+
+        var sessionRepository = new Mock<ISessionRepository>();
+        sessionRepository.Setup(r => r.GetEventsByExtractionBatchAsync(projectId, sessionId, batchId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(events);
+        var extractor = new Mock<IMemoryExtractor>();
+        extractor.Setup(e => e.ExtractFromEventsAsync(projectId, sessionId, events, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        var sut = new ExtractMemoryJobHandler(extractor.Object, sessionRepository.Object);
+
+        await sut.HandleAsync(MakeJob(projectId, new ExtractMemoryPayload(sessionId, EventBatchId: batchId)), CancellationToken.None);
+
+        extractor.Verify(e => e.ExtractFromEventsAsync(projectId, sessionId, events, It.IsAny<CancellationToken>()), Times.Once);
+        sessionRepository.Verify(r => r.MarkExtractionBatchDoneAsync(batchId, It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task HandleAsync_skips_an_event_batch_with_nothing_left_in_it()
+    {
+        var projectId = Guid.NewGuid();
+        var sessionId = Guid.NewGuid();
+        var batchId = Guid.NewGuid();
+
+        var sessionRepository = new Mock<ISessionRepository>();
+        sessionRepository.Setup(r => r.GetEventsByExtractionBatchAsync(projectId, sessionId, batchId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        var extractor = new Mock<IMemoryExtractor>();
+        var sut = new ExtractMemoryJobHandler(extractor.Object, sessionRepository.Object);
+
+        await sut.HandleAsync(MakeJob(projectId, new ExtractMemoryPayload(sessionId, EventBatchId: batchId)), CancellationToken.None);
+
+        extractor.VerifyNoOtherCalls();
+        sessionRepository.Verify(r => r.MarkExtractionBatchDoneAsync(It.IsAny<Guid>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task HandleAsync_extracts_from_a_compact_summary()
+    {
+        var projectId = Guid.NewGuid();
+        var sessionId = Guid.NewGuid();
+        const string summary = "Moved retry policy into ResilienceOptions.";
+
+        var extractor = new Mock<IMemoryExtractor>();
+        extractor.Setup(e => e.ExtractFromCompactSummaryAsync(projectId, sessionId, summary, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        var sut = new ExtractMemoryJobHandler(extractor.Object, new Mock<ISessionRepository>().Object);
+
+        await sut.HandleAsync(MakeJob(projectId, new ExtractMemoryPayload(sessionId, CompactSummary: summary)), CancellationToken.None);
+
+        extractor.Verify(e => e.ExtractFromCompactSummaryAsync(projectId, sessionId, summary, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    private static Job MakeJob(Guid projectId, Guid summaryChunkId) =>
+        MakeJob(projectId, new ExtractMemoryPayload(Guid.NewGuid(), summaryChunkId));
+
+    private static Job MakeJob(Guid projectId, ExtractMemoryPayload payload) => new()
     {
         Id = Guid.NewGuid(),
         Type = JobType.ExtractMemory,
         ProjectId = projectId,
-        PayloadJson = JsonSerializer.Serialize(new ExtractMemoryPayload(Guid.NewGuid(), summaryChunkId)),
+        PayloadJson = JsonSerializer.Serialize(payload),
         CreatedAt = DateTimeOffset.UtcNow
     };
 

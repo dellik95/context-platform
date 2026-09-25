@@ -9,9 +9,16 @@ namespace Context.Application.Indexing;
 // aborting the whole pass; it is always 0 until the pass completes, since failures can only be
 // tallied once every file has been attempted.
 //
-// Cancelled is true only for the synthetic final progress event Context.Host's ProjectEndpoints
-// sends after a reindex observes cancellation (see its POST /api/projects/{id}/index/cancel) --
-// IndexingPipeline itself never sets it. Completed is also true on that event: cancellation still
-// ends the reindex, it just doesn't finish the scan, and Completed is what the Dashboard's
-// progress UI keys off to stop showing "reindexing...".
-public sealed record ReindexProgressDto(Guid ProjectId, int FilesProcessed, int FilesTotal, bool Completed, int FilesFailed = 0, bool Cancelled = false);
+// Cancelled / Failed are only set on the synthetic final event ReindexRunner sends when a pass
+// observes cancellation (POST /api/projects/{id}/index/cancel) or throws -- IndexingPipeline itself
+// never sets them. Completed is also true on that event: the reindex has ended even though the scan
+// didn't finish, and Completed is what the Dashboard's progress UI keys off to stop showing
+// "reindexing...".
+public sealed record ReindexProgressDto(
+    Guid ProjectId,
+    int FilesProcessed,
+    int FilesTotal,
+    bool Completed,
+    int FilesFailed = 0,
+    bool Cancelled = false,
+    bool Failed = false);

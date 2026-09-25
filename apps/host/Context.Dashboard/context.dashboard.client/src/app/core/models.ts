@@ -301,9 +301,10 @@ export interface UsageSummaryDto {
 }
 
 // Mirrors src/Context.Application/Indexing/ReindexProgressDto.cs, pushed over the
-// /hubs/indexing SignalR hub's "ReindexProgress" event. `cancelled` is only ever true on the
-// synthetic final event Context.Host sends after POST /api/projects/{id}/index/cancel actually
-// stops a reindex (completed is also true on that event -- see the DTO's own remarks).
+// /hubs/indexing SignalR hub's "ReindexProgress" event. `cancelled` / `failed` are only ever true
+// on the synthetic final event ReindexRunner sends when a reindex is stopped via
+// POST /api/projects/{id}/index/cancel or throws (completed is also true on that event -- see the
+// DTO's own remarks).
 export interface ReindexProgressEvent {
   projectId: string;
   filesProcessed: number;
@@ -311,6 +312,7 @@ export interface ReindexProgressEvent {
   completed: boolean;
   filesFailed: number;
   cancelled: boolean;
+  failed?: boolean;
 }
 
 // Mirrors Context.Application.Settings.ProjectSettingsDto exactly (see CONTRACTS.md §12 and
@@ -329,7 +331,7 @@ export interface ProjectSettingsDto {
   sessionSummaryIntervalMinutes: number; // <= 0 means "only summarize at session end"
   minEventsForSessionSummary: number; // interval is a max wait -- also needs this many new events
   maxMemoryNotesPerSection: number; // max ranked memories shown per retrieval context section
-  minEventsForMemoryExtraction: number; // min events in a chunk to trigger memory extraction (bypassed at session end)
+  minEventsForMemoryExtraction: number; // raw events batched per memory-extraction LLM call (remainder flushed at session end)
   explicitRememberEnabled: boolean; // gates the memory_remember/memory_forget MCP tools
   staleSessionTimeoutMinutes: number; // <= 0 disables auto-ending idle Active sessions
   deleteSessionEventsAfterSummary: boolean; // opt-in cleanup of raw events once folded into a summary chunk

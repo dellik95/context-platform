@@ -154,60 +154,26 @@ public static class ProjectEndpoints
     }
 
     /// <summary>
-    /// Triggers <see cref="IIndexingPipeline.ReindexProjectAsync"/> in the background: a full
-    /// project reindex can take a long time, so this endpoint responds 202 immediately rather than
-    /// holding the HTTP request open, and runs the actual work in its own DI scope (the request's
-    /// own scope is disposed the moment this handler returns). The token it runs with comes from
-    /// <see cref="ReindexCancellationRegistry.Begin"/> rather than <see cref="CancellationToken.None"/>,
-    /// so a later <c>POST /api/projects/{id}/index/cancel</c> (<see cref="CancelIndex"/>) can actually
-    /// stop it.
+    /// Triggers <see cref="IIndexingPipeline.ReindexProjectAsync"/> in the background via
+    /// <see cref="ReindexRunner"/>: a full project reindex can take a long time, so this endpoint
+    /// responds 202 immediately rather than holding the HTTP request open. The run is registered
+    /// with <see cref="ReindexCancellationRegistry"/>, so a later
+    /// <c>POST /api/projects/{id}/index/cancel</c> (<see cref="CancelIndex"/>) can actually stop it.
     /// </summary>
     private static IResult TriggerIndex(
         Guid id,
         bool? full,
-        IServiceScopeFactory scopeFactory,
-        ILoggerFactory loggerFactory,
         Context.Dashboard.Server.Hubs.IndexingHubNotifier hubNotifier,
-        ReindexCancellationRegistry reindexRegistry)
+        ReindexRunner reindexRunner)
     {
         var fullReindex = full ?? false;
-        var logger = loggerFactory.CreateLogger("Context.Dashboard.Server.ReindexProject");
-        var ct = reindexRegistry.Begin(id);
 
-        _ = Task.Run(async () =>
+        reindexRunner.Start(id, fullReindex, async services =>
         {
-            using var scope = scopeFactory.CreateScope();
-            var pipeline = scope.ServiceProvider.GetRequiredService<IIndexingPipeline>();
-            try
+            var status = await BuildStatusDtoAsync(id, services, CancellationToken.None).ConfigureAwait(false);
+            if (status is not null)
             {
-                await pipeline.ReindexProjectAsync(id, fullReindex, ct).ConfigureAwait(false);
-                logger.LogInformation("Reindex of project {ProjectId} (full={Full}) completed.", id, fullReindex);
-
-                var status = await BuildStatusDtoAsync(id, scope.ServiceProvider, CancellationToken.None).ConfigureAwait(false);
-                if (status is not null)
-                {
-                    await hubNotifier.ProjectStatusChangedAsync(id, status, CancellationToken.None).ConfigureAwait(false);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                // A client asked to stop this reindex (CancelIndex below) -- not a failure, so this
-                // logs at Info rather than Error. The normal "completed" progress event above never
-                // ran (the scan was cut short before reaching it), so the Dashboard's progress UI
-                // would otherwise spin forever; send a final Completed:true/Cancelled:true event by
-                // hand so it clears.
-                logger.LogInformation("Reindex of project {ProjectId} (full={Full}) was cancelled.", id, fullReindex);
-                await hubNotifier.ReindexProgressAsync(
-                    id, new ReindexProgressDto(id, FilesProcessed: 0, FilesTotal: 0, Completed: true, FilesFailed: 0, Cancelled: true),
-                    CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Background reindex of project {ProjectId} (full={Full}) failed.", id, fullReindex);
-            }
-            finally
-            {
-                reindexRegistry.End(id, ct);
+                await hubNotifier.ProjectStatusChangedAsync(id, status, CancellationToken.None).ConfigureAwait(false);
             }
         });
 

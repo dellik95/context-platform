@@ -29,6 +29,16 @@ public class HookScriptGeneratorTests
     }
 
     [Fact]
+    public void GenerateBash_LogsUnreadableConfigInsteadOfExitingSilently()
+    {
+        var script = HookScriptGenerator.GenerateBash(Hook, Options);
+
+        script.Should().Contain("[ ! -r \"$CONFIG_FILE\" ]");
+        script.Should().Contain("log_error \"config not readable");
+        script.Should().Contain("log_error \"no bearerToken");
+    }
+
+    [Fact]
     public void GenerateBash_AlwaysFailsOpen()
     {
         var script = HookScriptGenerator.GenerateBash(Hook, Options);

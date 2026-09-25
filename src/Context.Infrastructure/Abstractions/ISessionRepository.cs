@@ -24,11 +24,27 @@ public interface ISessionRepository
     Task<IReadOnlyList<SessionEvent>> GetEventsAsync(Guid projectId, Guid sessionId, CancellationToken ct);
 
     /// <summary>Deletes every <see cref="SessionEvent"/> for <paramref name="sessionId"/> with
-    /// <see cref="SessionEvent.Timestamp"/> at or before <paramref name="upTo"/> - used by
-    /// <see cref="Context.Application.Jobs.Handlers.SummarizeSessionJobHandler"/> to clean up events
-    /// already folded into a <see cref="SessionSummaryChunk"/>, once a project opts into
-    /// <c>ProjectSettingsDto.DeleteSessionEventsAfterSummary</c>.</summary>
+    /// <see cref="SessionEvent.Timestamp"/> at or before <paramref name="upTo"/> that has already been
+    /// through memory extraction (<see cref="SessionEvent.ExtractedAt"/> set) - used once a project opts
+    /// into <c>ProjectSettingsDto.DeleteSessionEventsAfterSummary</c>. Summarization and extraction
+    /// finish in either order, so each calls this and whichever runs last actually frees the rows.</summary>
     Task DeleteEventsUpToAsync(Guid sessionId, DateTimeOffset upTo, CancellationToken ct);
+
+    /// <summary>
+    /// Atomically stamps every not-yet-claimed event of <paramref name="sessionId"/> with a fresh
+    /// extraction batch id, but only when at least <paramref name="minEvents"/> of them are waiting.
+    /// Returns the batch id, or null when too few events were waiting (or a concurrent caller claimed
+    /// them first). Each event lands in exactly one batch.
+    /// </summary>
+    Task<Guid?> ClaimEventsForExtractionAsync(Guid sessionId, int minEvents, CancellationToken ct);
+
+    /// <summary>The events claimed into <paramref name="batchId"/>, oldest first, or an empty list if
+    /// the session doesn't belong to <paramref name="projectId"/>.</summary>
+    Task<IReadOnlyList<SessionEvent>> GetEventsByExtractionBatchAsync(
+        Guid projectId, Guid sessionId, Guid batchId, CancellationToken ct);
+
+    /// <summary>Sets <see cref="SessionEvent.ExtractedAt"/> on every event in <paramref name="batchId"/>.</summary>
+    Task MarkExtractionBatchDoneAsync(Guid batchId, DateTimeOffset extractedAt, CancellationToken ct);
 
     Task UpsertSummaryAsync(SessionSummary summary, CancellationToken ct);
 

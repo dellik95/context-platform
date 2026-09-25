@@ -138,7 +138,7 @@ export class SettingsPanelComponent {
   protected readonly memoryRetrievalSummary = computed(() => {
     const m = this.settingsModel();
     const remember = m.explicitRememberEnabled ? 'agent writes on' : 'agent writes off';
-    return `From ${m.minEventsForMemoryExtraction} events · ${m.maxMemoryNotesPerSection} per section · ${remember}`;
+    return `Every ${m.minEventsForMemoryExtraction} events · ${m.maxMemoryNotesPerSection} per section · ${remember}`;
   });
 
   protected readonly memoryMergingSummary = computed(() => {

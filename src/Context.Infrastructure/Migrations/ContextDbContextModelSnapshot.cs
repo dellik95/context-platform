@@ -577,6 +577,12 @@ namespace Context.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTimeOffset?>("ExtractedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ExtractionBatchId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("PayloadJson")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -596,6 +602,8 @@ namespace Context.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("SessionId");
+
+                    b.HasIndex("SessionId", "ExtractionBatchId");
 
                     b.HasIndex("SessionId", "Type");
 

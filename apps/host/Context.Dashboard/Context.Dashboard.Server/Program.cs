@@ -19,6 +19,7 @@ using Context.Shared;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Serilog;
+using Serilog.Events;
 
 // Raise the thread-pool floor before anything schedules work. Microsoft.Data.Sqlite has no true
 // async path — every awaited DB call blocks the pool thread it runs on for the duration of the
@@ -51,6 +52,10 @@ var migratedFromLegacyPath = SharedDataLocation.EnsureMigratedFromLegacyLocation
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
+    // Hosting.Diagnostics' "Request starting" lines include the query string, which for SignalR
+    // carries the project bearer token as ?access_token=. EF's per-command SQL is pure noise at Info.
+    .MinimumLevel.Override("Microsoft.AspNetCore.Hosting.Diagnostics", LogEventLevel.Warning)
+    .MinimumLevel.Override("Microsoft.EntityFrameworkCore.Database.Command", LogEventLevel.Warning)
     .Enrich.FromLogContext()
     .WriteTo.Console()
     .WriteTo.File(
@@ -141,6 +146,12 @@ try
     builder.Services.AddSignalR()
         .AddJsonProtocol(o => o.PayloadSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
     builder.Services.AddSingleton<IndexingHubNotifier>();
+
+    if (int.TryParse(builder.Configuration["CONTEXT_PLATFORM_JOB_WORKERS_PER_PROJECT"], out var jobWorkersPerProject)
+        && jobWorkersPerProject > 0)
+    {
+        builder.Services.Configure<Context.Application.Jobs.JobDispatcherOptions>(o => o.WorkersPerProject = jobWorkersPerProject);
+    }
 
     builder.Services.AddSingleton<Context.Application.Indexing.IIndexingProgressReporter, Context.Dashboard.Server.Hubs.SignalRIndexingProgressReporter>();
     builder.Services.AddSingleton<Context.Application.Notifications.IProjectActivityNotifier, Context.Dashboard.Server.Hubs.SignalRProjectActivityNotifier>();

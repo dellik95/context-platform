@@ -86,6 +86,67 @@ public sealed class SessionRepositoryTests : IDisposable
         result!.Id.Should().Be(newest.Id);
     }
 
+    [Fact]
+    public async Task ClaimEventsForExtractionAsync_claims_nothing_below_threshold_then_everything_waiting_once_reached()
+    {
+        using var db = CreateContext();
+        await db.Database.MigrateAsync();
+        var (project, session) = await SeedSessionAsync(db);
+        var repository = new SessionRepository(db);
+
+        await AddEventsAsync(repository, session.Id, 2);
+        (await repository.ClaimEventsForExtractionAsync(session.Id, minEvents: 3, CancellationToken.None)).Should().BeNull();
+
+        await AddEventsAsync(repository, session.Id, 1);
+        var batchId = await repository.ClaimEventsForExtractionAsync(session.Id, minEvents: 3, CancellationToken.None);
+
+        batchId.Should().NotBeNull();
+        (await repository.GetEventsByExtractionBatchAsync(project.Id, session.Id, batchId!.Value, CancellationToken.None))
+            .Should().HaveCount(3);
+        (await repository.ClaimEventsForExtractionAsync(session.Id, minEvents: 1, CancellationToken.None))
+            .Should().BeNull("every event is already in a batch");
+    }
+
+    [Fact]
+    public async Task DeleteEventsUpToAsync_keeps_events_whose_extraction_has_not_finished()
+    {
+        using var db = CreateContext();
+        await db.Database.MigrateAsync();
+        var (project, session) = await SeedSessionAsync(db);
+        var repository = new SessionRepository(db);
+
+        await AddEventsAsync(repository, session.Id, 2);
+        var extracted = await repository.ClaimEventsForExtractionAsync(session.Id, 1, CancellationToken.None);
+        await repository.MarkExtractionBatchDoneAsync(extracted!.Value, DateTimeOffset.UtcNow, CancellationToken.None);
+        await AddEventsAsync(repository, session.Id, 1);
+        await repository.ClaimEventsForExtractionAsync(session.Id, 1, CancellationToken.None);
+
+        await repository.DeleteEventsUpToAsync(session.Id, DateTimeOffset.UtcNow.AddMinutes(1), CancellationToken.None);
+
+        var remaining = await repository.GetEventsAsync(project.Id, session.Id, CancellationToken.None);
+        remaining.Should().ContainSingle().Which.ExtractedAt.Should().BeNull();
+    }
+
+    private static async Task<(Project Project, Session Session)> SeedSessionAsync(ContextDbContext db)
+    {
+        var project = new Project { Id = Guid.NewGuid(), Name = "P1", RootPath = "/repo1", CreatedAt = DateTimeOffset.UtcNow };
+        var session = NewSession(project.Id, "claude-session", DateTimeOffset.UtcNow);
+        db.Projects.Add(project);
+        db.Sessions.Add(session);
+        await db.SaveChangesAsync();
+        return (project, session);
+    }
+
+    private static async Task AddEventsAsync(SessionRepository repository, Guid sessionId, int count)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            await repository.AddEventAsync(
+                new SessionEvent { SessionId = sessionId, Type = SessionEventType.ToolCall, PayloadJson = "{}", Timestamp = DateTimeOffset.UtcNow },
+                CancellationToken.None);
+        }
+    }
+
     private static Session NewSession(Guid projectId, string claudeSessionId, DateTimeOffset startedAt) => new()
     {
         Id = Guid.NewGuid(),

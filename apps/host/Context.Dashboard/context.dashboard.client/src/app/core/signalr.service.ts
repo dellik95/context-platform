@@ -72,7 +72,8 @@ export class SignalrService implements OnDestroy {
     // about once the connection comes back.
     this.connection.onreconnected(() => {
       for (const projectId of this.joinedProjects) {
-        void this.connection?.invoke('JoinProject', projectId);
+        this.connection?.invoke('JoinProject', projectId)
+          .catch(err => console.warn(`Failed to rejoin project ${projectId}`, err));
       }
     });
 
@@ -81,6 +82,9 @@ export class SignalrService implements OnDestroy {
   }
 
   async joinProject(projectId: string): Promise<void> {
+    if (!projectId) {
+      return;
+    }
     this.activeProjectId = projectId;
     await this.ensureStarted();
     this.joinedProjects.add(projectId);
@@ -88,9 +92,13 @@ export class SignalrService implements OnDestroy {
   }
 
   async leaveProject(projectId: string): Promise<void> {
-    this.joinedProjects.delete(projectId);
+    // The hub binds the argument to a Guid, so '' (no project selected yet) fails server-side.
+    if (!projectId || !this.joinedProjects.delete(projectId)) {
+      return;
+    }
     if (this.connection?.state === signalR.HubConnectionState.Connected) {
-      await this.connection.invoke('LeaveProject', projectId);
+      await this.connection.invoke('LeaveProject', projectId)
+        .catch(err => console.warn(`Failed to leave project ${projectId}`, err));
     }
   }
 

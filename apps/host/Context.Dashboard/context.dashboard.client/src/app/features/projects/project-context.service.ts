@@ -49,7 +49,8 @@ export class ProjectContextService implements OnDestroy {
       this._reindexProgress.set(event);
       if (event.completed) {
         this._reindexing.set(false);
-        this.snackBar.open(event.cancelled ? 'Reindex cancelled.' : 'Reindex complete.', 'Dismiss', { duration: 4000 });
+        const message = event.failed ? 'Reindex failed — see host logs.' : event.cancelled ? 'Reindex cancelled.' : 'Reindex complete.';
+        this.snackBar.open(message, 'Dismiss', { duration: 4000 });
       }
     }),
   ];
@@ -68,7 +69,9 @@ export class ProjectContextService implements OnDestroy {
       return;
     }
 
-    void this.signalr.leaveProject(this._projectId());
+    if (this._projectId()) {
+      void this.signalr.leaveProject(this._projectId());
+    }
 
     if (!this.projectTokenService.getToken(projectId)) {
       await firstValueFrom(
@@ -107,13 +110,21 @@ export class ProjectContextService implements OnDestroy {
    * Requests cancellation of the currently-running reindex. Doesn't flip `reindexing` locally on
    * success -- that happens when the ReindexProgress Completed:true/cancelled event this triggers
    * arrives (see the subscription above), the same way a normal completion is detected.
+   * A 404 means the server has nothing running, so whatever progress is on screen is stale
+   * (e.g. a run that died without sending its final event) and `onNotRunning` should clear it.
    */
-  cancelIndex(): void {
+  cancelIndex(onNotRunning?: () => void): void {
     this.api.cancelIndex(this._projectId()).subscribe({
       next: () => this.snackBar.open('Cancelling reindex…', 'Dismiss', { duration: 3000 }),
       error: (err: { status?: number }) => {
-        const message = err?.status === 404 ? 'No reindex is currently running.' : 'Failed to cancel reindex.';
-        this.snackBar.open(message, 'Dismiss');
+        if (err?.status === 404) {
+          this._reindexing.set(false);
+          this._reindexProgress.set(null);
+          onNotRunning?.();
+          this.snackBar.open('No reindex is currently running.', 'Dismiss', { duration: 4000 });
+          return;
+        }
+        this.snackBar.open('Failed to cancel reindex.', 'Dismiss');
       },
     });
   }

@@ -188,15 +188,15 @@ public sealed class GoldenPathE2ETests : IAsyncLifetime
                 sessionId = await engine.StartSessionAsync(project.Id, claudeSessionId: null, ct);
 
                 await engine.RecordEventAsync(
-                    sessionId, SessionEventType.FileEdit, new { path = orderCalculatorRelativePath }, ct);
+                    project.Id, sessionId, SessionEventType.FileEdit, new { path = orderCalculatorRelativePath }, ct);
                 await engine.RecordEventAsync(
-                    sessionId, SessionEventType.Prompt, new { text = "Add a ComputeTotal method to OrderCalculator." }, ct);
+                    project.Id, sessionId, SessionEventType.Prompt, new { text = "Add a ComputeTotal method to OrderCalculator." }, ct);
 
                 await engine.EndSessionAsync(project.Id, sessionId, ct);
             }
 
             // -----------------------------------------------------------------------------------
-            // Step 7: drain SummarizeSession -> ExtractMemory.
+            // Step 7: drain SummarizeSession and the session-end ExtractMemory batch.
             // -----------------------------------------------------------------------------------
             await WaitForJobsToDrainAsync(_provider, TimeSpan.FromSeconds(60), ct);
 

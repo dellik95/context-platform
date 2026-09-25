@@ -27,11 +27,18 @@ public interface IContextEngine
     /// only, never on the "reuse existing session" path.
     Task<Guid> StartSessionAsync(Guid projectId, string? claudeSessionId, CancellationToken ct, string? cwd = null);
 
-    Task RecordEventAsync(Guid sessionId, Context.Domain.Enums.SessionEventType type, object payload, CancellationToken ct);
+    /// <summary>Persists one session event. Once <c>ProjectSettingsDto.MinEventsForMemoryExtraction</c>
+    /// events are waiting unclaimed, claims them as one batch and enqueues <c>ExtractMemory</c> for it.</summary>
+    Task RecordEventAsync(Guid projectId, Guid sessionId, Context.Domain.Enums.SessionEventType type, object payload, CancellationToken ct);
 
-    /// <summary>Enqueues <c>SummarizeSession</c>, which itself chains into <c>ExtractMemory</c> once the summary is ready.
+    /// <summary>Marks the session ended, flushes any still-unclaimed events into a final
+    /// <c>ExtractMemory</c> batch, and enqueues the final <c>SummarizeSession</c>.
     /// <paramref name="reason"/> (optional, trailing) is the SessionEnd hook's <c>reason</c> field, persisted verbatim.</summary>
     Task EndSessionAsync(Guid projectId, Guid sessionId, CancellationToken ct, string? reason = null);
+
+    /// <summary>Enqueues <c>ExtractMemory</c> over the conversation summary Claude Code wrote when it
+    /// compacted the session (the PostCompact hook). No-op for a blank summary.</summary>
+    Task ExtractMemoryFromCompactSummaryAsync(Guid projectId, Guid sessionId, string compactSummary, CancellationToken ct);
 
     /// <summary>
     /// Enqueues <c>SummarizeSession</c> with <c>IsSessionEnd: false</c> — a mid-session checkpoint

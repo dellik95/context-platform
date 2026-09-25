@@ -29,6 +29,8 @@ namespace Context.Dashboard.Server;
 /// <c>Context.Dashboard.Server</c> instance can share one job queue (see Program.cs's registration
 /// and <c>Jobs/RedisJobSignal.cs</c>). Unset means single-instance operation, unchanged from
 /// before this existed.</item>
+/// <item><c>CONTEXT_PLATFORM_JOB_WORKERS_PER_PROJECT</c> — optional. Concurrent jobs per project
+/// lane (see <c>JobDispatcherOptions</c>); read directly in Program.cs.</item>
 /// </list>
 /// </summary>
 public sealed class ContextHostOptions

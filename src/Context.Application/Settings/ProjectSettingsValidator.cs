@@ -2,8 +2,8 @@ namespace Context.Application.Settings;
 
 /// <summary>
 /// Floor-validates the numeric knobs that would otherwise silently misbehave rather than error:
-/// <see cref="ProjectSettingsDto.MinEventsForMemoryExtraction"/> at 0 makes
-/// <c>EventThresholdExtractionTrigger</c> fire on every chunk regardless of size, and the other
+/// <see cref="ProjectSettingsDto.MinEventsForMemoryExtraction"/> at 0 would claim an extraction
+/// batch (one LLM call) on every single recorded event, and the other
 /// two follow the same "count/size, not a sentinel" shape. <see cref="ProjectSettingsDto.SessionSummaryIntervalMinutes"/>,
 /// <see cref="ProjectSettingsDto.StaleSessionTimeoutMinutes"/> and
 /// <see cref="ProjectSettingsDto.MemoryCompactionIntervalMinutes"/> are deliberately excluded -

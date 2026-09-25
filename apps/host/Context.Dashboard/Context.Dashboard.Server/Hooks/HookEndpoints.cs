@@ -92,7 +92,7 @@ public static class HookEndpoints
         await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.UserPromptSubmit, input, ct).ConfigureAwait(false);
 
         var sessionId = await GetOrStartSessionAsync(engine, project, sessionMap, input.SessionId, ct).ConfigureAwait(false);
-        await engine.RecordEventAsync(sessionId, SessionEventType.Prompt, new { prompt = input.Prompt }, ct).ConfigureAwait(false);
+        await engine.RecordEventAsync(project.ProjectId, sessionId, SessionEventType.Prompt, new { prompt = input.Prompt }, ct).ConfigureAwait(false);
 
         var additionalContext = await TryBuildPromptContextAsync(engine, project.ProjectId, sessionId, input.Prompt, ct).ConfigureAwait(false);
         return Results.Ok(new HookOutput(additionalContext));
@@ -122,7 +122,7 @@ public static class HookEndpoints
 
         // `path` is lifted out of the tool input here, at the producer, so the downstream
         // extractor never needs to know Claude Code's snake_case tool-input schema.
-        await engine.RecordEventAsync(sessionId, type, new
+        await engine.RecordEventAsync(project.ProjectId, sessionId, type, new
         {
             toolName = input.ToolName,
             path = HookToolPath.TryExtract(input.ToolInputJson, project.Project.RootPath),
@@ -158,7 +158,8 @@ public static class HookEndpoints
     /// A <c>/compact</c> (manual or auto) is a natural mid-session checkpoint, same idea as
     /// <see cref="Context.Application.Scheduling.SessionSummaryScheduler"/>'s periodic pass but
     /// event-driven instead of timer-driven — enqueues a new <see cref="Context.Domain.Entities.SessionSummaryChunk"/>
-    /// via <see cref="IContextEngine.RequestSessionSummaryAsync"/> without ending the session.
+    /// via <see cref="IContextEngine.RequestSessionSummaryAsync"/> without ending the session, and
+    /// memory extraction over Claude Code's own compaction summary.
     /// </summary>
     private static async Task<IResult> PostCompactAsync(
         PostCompactInput input,
@@ -177,6 +178,11 @@ public static class HookEndpoints
         await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.PostCompact, recordedPayload, ct).ConfigureAwait(false);
 
         var sessionId = await GetOrStartSessionAsync(engine, project, sessionMap, input.SessionId, ct).ConfigureAwait(false);
+        if (compactSummary is not null)
+        {
+            await engine.ExtractMemoryFromCompactSummaryAsync(project.ProjectId, sessionId, compactSummary, ct).ConfigureAwait(false);
+        }
+
         await engine.RequestSessionSummaryAsync(project.ProjectId, sessionId, ct).ConfigureAwait(false);
         return Results.Ok(new HookOutput(AdditionalContext: null));
     }

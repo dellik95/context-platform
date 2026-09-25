@@ -33,6 +33,23 @@ public sealed class ReindexCancellationRegistryTests
     }
 
     [Fact]
+    public void TryBegin_leaves_a_running_pass_alone_and_succeeds_again_once_it_ends()
+    {
+        var registry = new ReindexCancellationRegistry();
+        var projectId = Guid.NewGuid();
+        var running = registry.Begin(projectId);
+
+        registry.TryBegin(projectId, out _).Should().BeFalse();
+        running.IsCancellationRequested.Should().BeFalse();
+
+        registry.End(projectId, running);
+
+        registry.TryBegin(projectId, out var next).Should().BeTrue();
+        registry.Cancel(projectId).Should().BeTrue();
+        next.IsCancellationRequested.Should().BeTrue();
+    }
+
+    [Fact]
     public void IsRunning_reflects_Begin_and_End()
     {
         var registry = new ReindexCancellationRegistry();

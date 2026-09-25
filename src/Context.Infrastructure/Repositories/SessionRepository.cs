@@ -91,7 +91,7 @@ public class SessionRepository(ContextDbContext db) : ISessionRepository
         // SQLite's EF Core provider cannot translate comparisons over DateTimeOffset columns,
         // so events are fetched by sessionId and the upTo cutoff is applied client-side.
         var events = await db.SessionEvents
-            .Where(e => e.SessionId == sessionId)
+            .Where(e => e.SessionId == sessionId && e.ExtractedAt != null)
             .ToListAsync(ct);
 
         var toDelete = events.Where(e => e.Timestamp <= upTo).ToList();
@@ -104,6 +104,42 @@ public class SessionRepository(ContextDbContext db) : ISessionRepository
         db.SessionEvents.RemoveRange(toDelete);
         await db.SaveChangesAsync(ct);
     }
+
+    public async Task<Guid?> ClaimEventsForExtractionAsync(Guid sessionId, int minEvents, CancellationToken ct)
+    {
+        // One UPDATE with the threshold as an uncorrelated subquery, so the count and the claim can't
+        // interleave with a concurrent hook call's: SQLite runs the statement under its write lock.
+        var batchId = Guid.NewGuid();
+        var claimed = await db.SessionEvents
+            .Where(e => e.SessionId == sessionId
+                && e.ExtractionBatchId == null
+                && db.SessionEvents.Count(x => x.SessionId == sessionId && x.ExtractionBatchId == null) >= minEvents)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(e => e.ExtractionBatchId, batchId), ct);
+
+        return claimed > 0 ? batchId : null;
+    }
+
+    public async Task<IReadOnlyList<SessionEvent>> GetEventsByExtractionBatchAsync(
+        Guid projectId, Guid sessionId, Guid batchId, CancellationToken ct)
+    {
+        var owned = await db.Sessions.AsNoTracking()
+            .AnyAsync(s => s.Id == sessionId && s.ProjectId == projectId, ct);
+        if (!owned)
+        {
+            return [];
+        }
+
+        var events = await db.SessionEvents.AsNoTracking()
+            .Where(e => e.SessionId == sessionId && e.ExtractionBatchId == batchId)
+            .ToListAsync(ct);
+
+        return [.. events.OrderBy(e => e.Timestamp)];
+    }
+
+    public Task MarkExtractionBatchDoneAsync(Guid batchId, DateTimeOffset extractedAt, CancellationToken ct) =>
+        db.SessionEvents
+            .Where(e => e.ExtractionBatchId == batchId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(e => e.ExtractedAt, extractedAt), ct);
 
     public async Task UpsertSummaryAsync(SessionSummary summary, CancellationToken ct)
     {

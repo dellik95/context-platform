@@ -22,13 +22,12 @@ namespace Context.Application.Tests;
 /// session's first-ever chunk while it's still active: at session end
 /// (<c>ContextEngine.EndSessionAsync</c>, which enqueues unconditionally) it's waived entirely, since
 /// there's no later pass to catch a short session and its hook activity must still turn into a
-/// summary and a chained ExtractMemory job.
+/// summary.
 /// </summary>
 public sealed class SummarizeSessionJobHandlerTests
 {
     private readonly Mock<ISessionSummarizer> _summarizer = new();
     private readonly Mock<ISessionRepository> _sessionRepository = new();
-    private readonly Mock<IJobQueue> _jobQueue = new();
     private readonly Mock<IProjectSettingsService> _settingsService = new();
     private readonly Mock<IProviderResolver> _providerResolver = new();
     private readonly Mock<ISessionSummaryVectorIndex> _sessionSummaryVectorIndex = new();
@@ -43,7 +42,7 @@ public sealed class SummarizeSessionJobHandlerTests
             .ReturnsAsync(new FakeEmbeddingGenerator([0.1f, 0.2f, 0.3f]));
 
         _sut = new SummarizeSessionJobHandler(
-            _summarizer.Object, _sessionRepository.Object, _jobQueue.Object, _settingsService.Object,
+            _summarizer.Object, _sessionRepository.Object, _settingsService.Object,
             _providerResolver.Object, _sessionSummaryVectorIndex.Object);
     }
 
@@ -109,7 +108,6 @@ public sealed class SummarizeSessionJobHandlerTests
         _summarizer.Verify(s => s.SummarizeAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<DateTimeOffset?>(), It.IsAny<CancellationToken>()), Times.Never);
         _sessionRepository.Verify(r => r.AddSummaryChunkAsync(It.IsAny<SessionSummaryChunk>(), It.IsAny<CancellationToken>()), Times.Never);
         _sessionRepository.Verify(r => r.UpsertSummaryAsync(It.IsAny<SessionSummary>(), It.IsAny<CancellationToken>()), Times.Never);
-        _jobQueue.Verify(q => q.EnqueueAsync(It.IsAny<JobType>(), It.IsAny<object>(), It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -132,7 +130,7 @@ public sealed class SummarizeSessionJobHandlerTests
     }
 
     [Fact]
-    public async Task HandleAsync_still_persists_and_extracts_when_a_short_session_ends_below_the_MinEventsForSessionSummary_bar()
+    public async Task HandleAsync_still_persists_when_a_short_session_ends_below_the_MinEventsForSessionSummary_bar()
     {
         var projectId = Guid.NewGuid();
         var sessionId = Guid.NewGuid();
@@ -142,8 +140,7 @@ public sealed class SummarizeSessionJobHandlerTests
         // Three trivial events - well under the default MinEventsForSessionSummary of 15 - and this
         // would be the session's first-ever chunk (no existing chunks). IsSessionEnd is true, so
         // there's no later pass to catch this session: the bar is waived and it must still get a
-        // summary and a chained ExtractMemory job, or a short-lived session's hook activity would
-        // never turn into memory at all.
+        // summary.
         var events = new List<SessionEvent> { MakeEvent(startedAt.AddSeconds(1)), MakeEvent(startedAt.AddSeconds(2)), MakeEvent(startedAt.AddSeconds(3)) };
 
         var producedChunk = new SessionSummaryChunk
@@ -173,14 +170,6 @@ public sealed class SummarizeSessionJobHandlerTests
 
         _sessionRepository.Verify(r => r.AddSummaryChunkAsync(producedChunk, It.IsAny<CancellationToken>()), Times.Once);
         _sessionRepository.Verify(r => r.UpsertSummaryAsync(It.Is<SessionSummary>(sum => sum.Title == "Quick fix"), It.IsAny<CancellationToken>()), Times.Once);
-        _jobQueue.Verify(
-            q => q.EnqueueAsync(
-                JobType.ExtractMemory,
-                It.Is<object>(p => p is ExtractMemoryPayload && ((ExtractMemoryPayload)p).SummaryChunkId == producedChunk.Id),
-                projectId,
-                It.IsAny<int>(),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
     }
 
     [Fact]
@@ -219,10 +208,6 @@ public sealed class SummarizeSessionJobHandlerTests
 
         _sessionRepository.Verify(r => r.AddSummaryChunkAsync(producedChunk, It.IsAny<CancellationToken>()), Times.Once);
         _sessionRepository.Verify(r => r.UpsertSummaryAsync(It.Is<SessionSummary>(sum => sum.Title == "Real work happened"), It.IsAny<CancellationToken>()), Times.Once);
-        // 15 events < MinEventsForMemoryExtraction(20) and this isn't a session-end pass, so
-        // ExtractMemory should not be chained yet - unrelated to the summary gate, but worth
-        // confirming the refactor didn't disturb this pre-existing rule.
-        _jobQueue.Verify(q => q.EnqueueAsync(It.IsAny<JobType>(), It.IsAny<object>(), It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -316,14 +301,5 @@ public sealed class SummarizeSessionJobHandlerTests
 
         _sessionRepository.Verify(r => r.AddSummaryChunkAsync(tailChunk, It.IsAny<CancellationToken>()), Times.Once);
         _sessionRepository.Verify(r => r.UpsertSummaryAsync(It.IsAny<SessionSummary>(), It.IsAny<CancellationToken>()), Times.Once);
-        // IsSessionEnd bypasses the MinEventsForMemoryExtraction gate unconditionally (pre-existing rule).
-        _jobQueue.Verify(
-            q => q.EnqueueAsync(
-                JobType.ExtractMemory,
-                It.Is<object>(p => p is ExtractMemoryPayload && ((ExtractMemoryPayload)p).SummaryChunkId == tailChunk.Id),
-                projectId,
-                It.IsAny<int>(),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
     }
 }

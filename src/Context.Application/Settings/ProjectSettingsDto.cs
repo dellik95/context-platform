@@ -29,10 +29,9 @@ public sealed record ProjectSettingsDto(
     // Maximum number of ranked memories included in each context section (historical notes/open
     // issues). Runtime-tunable so projects can trade retrieval breadth vs prompt size.
     int MaxMemoryNotesPerSection = 20,
-    // Gates SummarizeSessionJobHandler's chain into ExtractMemory: a periodic mid-session chunk
-    // only triggers memory extraction (LLM candidate generation + embedding + dedup - real work,
-    // unlike a summary pass) once it covers at least this many events. Bypassed entirely when the
-    // session is actually ending, since every chunk must be processed then regardless of size.
+    // Batch size for memory extraction: once this many SessionEvents are waiting, ContextEngine
+    // claims them as one batch and enqueues a single ExtractMemory job (one LLM call over the raw
+    // events). Session end flushes whatever is left, however few.
     int MinEventsForMemoryExtraction = 20,
     // Lets a project opt out of the memory_remember/memory_forget MCP tools entirely if its owner
     // doesn't want agent-initiated memory writes (creation or deletion) outside the normal

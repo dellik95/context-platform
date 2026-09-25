@@ -1,4 +1,4 @@
-using Context.Application.Abstractions;
+using Context.Application.Indexing;
 using Context.Application.Settings;
 using Context.Infrastructure.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,13 +18,14 @@ namespace Context.Application.Scheduling;
 /// <remarks>
 /// <see cref="IProjectSettingsService.UpdateAsync"/> stamps <c>LastReindexScheduledAt</c> BEFORE
 /// the reindex is fired (not after it completes) so a slow reindex can't still be running when
-/// the next poll ticks and re-triggers it. The reindex itself runs via a fire-and-forget
-/// <see cref="Task.Run(Func{Task})"/> against its own fresh <see cref="IServiceScope"/> — same
-/// shape as <c>Context.Dashboard.Server.Api.ProjectEndpoints.TriggerIndex</c> — so one project's failure or
-/// slowness can never block another project's turn or delay the next poll.
+/// the next poll ticks and re-triggers it. The reindex itself runs in the background through
+/// <see cref="ReindexRunner"/>, same as the Dashboard's manual trigger, so it is cancellable from
+/// the Dashboard and one project's failure or slowness can never block another project's turn.
+/// A project whose previous run is still going is skipped, never interrupted.
 /// </remarks>
 public sealed class ReindexSchedulerService(
     IServiceScopeFactory scopeFactory,
+    ReindexRunner reindexRunner,
     TimeProvider? timeProvider = null,
     ILogger<ReindexSchedulerService>? logger = null)
     : PeriodicScheduler(PollInterval, timeProvider ?? TimeProvider.System, logger ?? NullLogger<ReindexSchedulerService>.Instance)
@@ -74,24 +75,9 @@ public sealed class ReindexSchedulerService(
         await settingsService.UpdateAsync(projectId, settings with { LastReindexScheduledAt = TimeProvider.GetUtcNow() }, ct)
             .ConfigureAwait(false);
 
-        FireReindex(projectId);
-    }
-
-    private void FireReindex(Guid projectId)
-    {
-        _ = Task.Run(async () =>
+        if (!reindexRunner.TryStart(projectId, full: false))
         {
-            using var scope = _scopeFactory.CreateScope();
-            var pipeline = scope.ServiceProvider.GetRequiredService<IIndexingPipeline>();
-            try
-            {
-                await pipeline.ReindexProjectAsync(projectId, full: false, CancellationToken.None).ConfigureAwait(false);
-                Logger.LogInformation("Scheduled reindex of project {ProjectId} completed.", projectId);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError(ex, "Scheduled reindex of project {ProjectId} failed.", projectId);
-            }
-        });
+            Logger.LogInformation("Skipped scheduled reindex of project {ProjectId}: one is already running.", projectId);
+        }
     }
 }

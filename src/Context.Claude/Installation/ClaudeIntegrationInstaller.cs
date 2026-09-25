@@ -106,6 +106,19 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         // 6) .gitignore — make sure the local secret + data dir are never committed.
         await EnsureGitignoreEntriesAsync(projectRoot, backupRoot, ct).ConfigureAwait(false);
 
+        List<string> written =
+        [
+            claudeDir, hooksDir, pluginDir, Path.GetDirectoryName(backupRoot)!,
+            settingsPath, Path.Combine(projectRoot, ".mcp.json"), pluginPath, localConfigPath,
+            Path.Combine(projectRoot, ".gitignore"),
+        ];
+        foreach (var hook in HookDefinition.All)
+        {
+            written.Add(Path.Combine(hooksDir, $"{hook.FileBaseName}.sh"));
+            written.Add(Path.Combine(hooksDir, $"{hook.FileBaseName}.ps1"));
+        }
+        ProjectFileOwnership.MatchProjectRoot(projectRoot, written, [backupRoot], _logger);
+
         _logger.LogInformation(
             "Installed Claude Code integration for project {ProjectId} at {ProjectRoot}", projectId, projectRoot);
     }
@@ -137,6 +150,12 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
 
         await WriteMcpJsonAsync(projectRoot, backupRoot, resolvedToken, ct).ConfigureAwait(false);
         await WriteLocalConfigAsync(projectId, localConfigPath, projectRoot, backupRoot, resolvedToken, ct).ConfigureAwait(false);
+
+        ProjectFileOwnership.MatchProjectRoot(
+            projectRoot,
+            [claudeDir, Path.GetDirectoryName(backupRoot)!, Path.Combine(projectRoot, ".mcp.json"), localConfigPath],
+            [backupRoot],
+            _logger);
 
         _logger.LogInformation(
             "Registered MCP-only Claude Code integration for project {ProjectId} at {ProjectRoot}", projectId, projectRoot);
@@ -197,6 +216,12 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         var skillPath = Path.Combine(skillDir, "SKILL.md");
         BackupIfExists(skillPath, projectRoot, backupRoot);
         await WriteTextAsync(skillPath, BuildSkillMarkdown(), ct).ConfigureAwait(false);
+
+        ProjectFileOwnership.MatchProjectRoot(
+            projectRoot,
+            [claudeDir, Path.Combine(claudeDir, "skills"), skillDir, skillPath, Path.GetDirectoryName(backupRoot)!],
+            [backupRoot],
+            _logger);
 
         _logger.LogInformation(
             "Installed context-memory skill for project {ProjectId} at {ProjectRoot}", projectId, projectRoot);

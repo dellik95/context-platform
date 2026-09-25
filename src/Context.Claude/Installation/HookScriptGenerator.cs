@@ -36,10 +36,19 @@ internal static class HookScriptGenerator
             }
 
             [ -f "$CONFIG_FILE" ] || exit 0
+            # A config this user can't read (e.g. written 0600 by a host running as another user)
+            # used to fail silently here, since grep's error is discarded below.
+            if [ ! -r "$CONFIG_FILE" ]; then
+                log_error "config not readable by $(id -un 2>/dev/null): $CONFIG_FILE"
+                exit 0
+            fi
 
             TOKEN="$(grep -o '"bearerToken"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/')"
             PORT="$(grep -o '"port"[[:space:]]*:[[:space:]]*[0-9]\+' "$CONFIG_FILE" 2>/dev/null | grep -o '[0-9]\+')"
-            [ -n "$TOKEN" ] || exit 0
+            if [ -z "$TOKEN" ]; then
+                log_error "no bearerToken in $CONFIG_FILE"
+                exit 0
+            fi
             PORT="${PORT:-{{options.HostPort}}}"
 
             # Same host-resolution problem/heuristic as OllamaHostFallbackHandler: 127.0.0.1 always
@@ -118,7 +127,7 @@ internal static class HookScriptGenerator
             $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
             $token = $config.bearerToken
             $port = $config.port
-            if ([string]::IsNullOrWhiteSpace($token)) { exit 0 }
+            if ([string]::IsNullOrWhiteSpace($token)) { Write-HookError "no bearerToken in $configPath"; exit 0 }
             if (-not $port) { $port = {{options.HostPort}} }
 
             # Same host-resolution problem/heuristic as OllamaHostFallbackHandler: 127.0.0.1 always

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Context.Application.Notifications;
 using Context.Domain.Entities;
@@ -7,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Context.Application.Jobs;
 
@@ -33,20 +35,18 @@ namespace Context.Application.Jobs;
 /// exactly as documented on <see cref="Handlers.IJobHandler"/> itself.
 /// </remarks>
 /// <remarks>
-/// <b>Bounded concurrency, not one worker per job:</b> a single <see cref="DrainAsync"/> loop
-/// (woken by <see cref="IJobSignal"/> and by a fallback poll timer) repeatedly claims the next
-/// runnable job and hands it to <see cref="ProcessClaimedJobAsync"/> without awaiting it, gated by a
-/// <see cref="SemaphoreSlim"/> sized to <see cref="MaxConcurrentJobs"/> -- up to that many jobs run
-/// concurrently in this process, but claiming itself is single-threaded so there is exactly one
-/// <see cref="IJobRepository.DequeueNextAsync"/> call in flight at a time rather than every worker
-/// polling independently.
+/// <b>One lane per project:</b> every project (plus one lane for host-wide jobs with no
+/// <see cref="Job.ProjectId"/>) gets its own <see cref="JobLane"/> — its own claim loop over
+/// <see cref="IJobRepository.DequeueNextForProjectAsync"/> and its own
+/// <see cref="JobDispatcherOptions.WorkersPerProject"/> slots. A single shared pool let one
+/// project's reindex or a hung LLM call occupy every slot and stall every other project's hooks,
+/// summaries and extraction behind it; now a project can only exhaust its own lane. Lanes are
+/// created lazily from <see cref="IJobRepository.ListProjectsWithPendingJobsAsync"/> (on every
+/// <see cref="IJobSignal"/> wake-up and poll tick) and kicked directly by <see cref="EnqueueAsync"/>.
 /// <para>
-/// That size is half the core count, capped at 8, rather than the full core count: handlers spend
-/// their time in blocking file and SQLite I/O rather than on the CPU, some of them (reindex) fan out
-/// further internally, and Microsoft.Data.Sqlite has no true async path -- so an in-flight job
-/// generally means an occupied thread-pool thread. Sizing this to the core count let bursts outrun
-/// the pool's ~1-2-threads-per-second injection rate and starve unrelated callbacks, Redis pub/sub
-/// among them.
+/// Per-lane slots stay small: handlers spend their time in blocking file and SQLite I/O rather than
+/// on the CPU, and Microsoft.Data.Sqlite has no true async path, so an in-flight job generally means
+/// an occupied thread-pool thread (the host raises the pool's floor for exactly that reason).
 /// </para>
 /// </remarks>
 /// <remarks>
@@ -77,11 +77,11 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     private readonly ILogger<JobDispatcher> _logger;
     private readonly IJobCountsNotifier _jobCountsNotifier;
     private readonly IJobSignal _jobSignal;
-    /// <summary>See this type's remarks on bounded concurrency for why this is well under
-    /// <see cref="Environment.ProcessorCount"/>.</summary>
-    private static readonly int MaxConcurrentJobs = Math.Clamp(Environment.ProcessorCount / 2, 1, 8);
+    private readonly int _workersPerProject;
 
-    private readonly SemaphoreSlim _concurrencyGate = new(MaxConcurrentJobs);
+    /// <summary>Keyed by project id, <see cref="Guid.Empty"/> for the host-wide lane
+    /// (<see cref="ConcurrentDictionary{TKey,TValue}"/> rejects a null key).</summary>
+    private readonly ConcurrentDictionary<Guid, JobLane> _lanes = new();
 
     private CancellationTokenSource? _lifetimeCts;
     private Task? _processingTask;
@@ -99,12 +99,14 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         IServiceScopeFactory scopeFactory,
         ILogger<JobDispatcher>? logger = null,
         IJobCountsNotifier? jobCountsNotifier = null,
-        IJobSignal? jobSignal = null)
+        IJobSignal? jobSignal = null,
+        IOptions<JobDispatcherOptions>? options = null)
     {
         _scopeFactory = scopeFactory;
         _logger = logger ?? NullLogger<JobDispatcher>.Instance;
         _jobCountsNotifier = jobCountsNotifier ?? NullJobCountsNotifier.Instance;
         _jobSignal = jobSignal ?? new InMemoryJobSignal();
+        _workersPerProject = Math.Max(1, (options?.Value ?? new JobDispatcherOptions()).WorkersPerProject);
     }
 
     /// <summary>
@@ -157,6 +159,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
             job = await jobRepository.EnqueueAsync(job, ct).ConfigureAwait(false);
         }
 
+        KickLane(projectId);
         await _jobSignal.PublishAsync(ct).ConfigureAwait(false);
         await PublishJobCountsAsync(projectId, ct).ConfigureAwait(false);
         return job.Id;
@@ -192,6 +195,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 
         _logger.LogInformation("Job {JobId} ({JobType}) manually requeued after permanent failure.", job.Id, job.Type);
 
+        KickLane(job.ProjectId);
         await _jobSignal.PublishAsync(ct).ConfigureAwait(false);
         await PublishJobCountsAsync(job.ProjectId, ct).ConfigureAwait(false);
     }
@@ -200,7 +204,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     /// Resets every currently <see cref="JobStatus.Running"/> job back to <see cref="JobStatus.Pending"/>:
     /// this being a single-writer-per-row model with no heartbeat, a job still marked Running at
     /// startup can only mean whichever process claimed it died mid-job. Deliberately does NOT
-    /// re-enqueue anything itself any more -- <see cref="DrainAsync"/>, started right after this by
+    /// re-enqueue anything itself any more -- <see cref="KickPendingLanesAsync"/>, started right after this by
     /// <see cref="StartAsync"/>, claims everything runnable (including what this just reset) on its
     /// own first pass.
     /// </summary>
@@ -229,7 +233,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     /// reacts to <see cref="IJobSignal"/> notifications (near-instant), <see cref="PollLoopAsync"/>
     /// is the fallback that catches anything a dropped/never-sent signal would otherwise miss (an
     /// elapsed retry backoff, a signal lost before this process was listening). Both ultimately call
-    /// the same <see cref="DrainAsync"/>, which is safe to run concurrently with itself.
+    /// the same <see cref="KickPendingLanesAsync"/>, which is safe to run concurrently with itself.
     /// </summary>
     private Task StartProcessingAsync(CancellationToken ct) =>
         Task.WhenAll(ListenLoopAsync(ct), PollLoopAsync(ct));
@@ -240,7 +244,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         {
             await foreach (var _ in _jobSignal.ListenAsync(ct).ConfigureAwait(false))
             {
-                await DrainAsync(ct).ConfigureAwait(false);
+                await KickPendingLanesAsync(ct).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -261,15 +265,15 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     {
         try
         {
-            // Drain once immediately (covers whatever HydrateOnStartupAsync just reset, plus
+            // Kick once immediately (covers whatever HydrateOnStartupAsync just reset, plus
             // anything already Pending from before this process started) rather than waiting out
             // the first full interval.
-            await DrainAsync(ct).ConfigureAwait(false);
+            await KickPendingLanesAsync(ct).ConfigureAwait(false);
 
             using var timer = new PeriodicTimer(PollInterval);
             while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
             {
-                await DrainAsync(ct).ConfigureAwait(false);
+                await KickPendingLanesAsync(ct).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -278,62 +282,142 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Claims and dispatches runnable jobs one at a time (so there is only ever one
-    /// <see cref="IJobRepository.DequeueNextAsync"/> call in flight from this loop) until either
-    /// none remain or <see cref="_concurrencyGate"/> is full, at which point it stops -- whichever
-    /// in-flight job finishes next releases a slot but does not itself resume draining, so the next
-    /// signal or poll tick is what picks up any work still waiting for that freed slot. Safe to
-    /// invoke concurrently with itself (<see cref="ListenLoopAsync"/> and <see cref="PollLoopAsync"/>
-    /// both call it): both instances simply compete for the same semaphore and the same atomic
-    /// database claim.
-    /// </summary>
-    private async Task DrainAsync(CancellationToken ct)
+    /// <summary>Wakes the lane of every project that has Pending work, creating lanes as needed.</summary>
+    private async Task KickPendingLanesAsync(CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested)
+        IReadOnlyList<Guid?> projectIds;
+        try
         {
-            if (!await _concurrencyGate.WaitAsync(0, ct).ConfigureAwait(false))
-            {
-                return;
-            }
+            using var scope = _scopeFactory.CreateScope();
+            var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
+            projectIds = await jobRepository.ListProjectsWithPendingJobsAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unhandled error while looking for pending jobs; the next signal or poll tick will try again.");
+            return;
+        }
 
-            Job? job;
-            try
-            {
-                using var scope = _scopeFactory.CreateScope();
-                var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
-                job = await jobRepository.DequeueNextAsync(ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                _concurrencyGate.Release();
-                return;
-            }
-            catch (Exception ex)
-            {
-                _concurrencyGate.Release();
-                _logger.LogError(ex, "Unhandled error while claiming the next job; the next signal or poll tick will try again.");
-                return;
-            }
+        foreach (var projectId in projectIds)
+        {
+            KickLane(projectId);
+        }
+    }
 
-            if (job is null)
-            {
-                _concurrencyGate.Release();
-                return;
-            }
+    private void KickLane(Guid? projectId)
+    {
+        if (_lifetimeCts is not { } cts || Volatile.Read(ref _stopped) != 0)
+        {
+            // Not started yet: StartAsync's first poll pass picks this job up.
+            return;
+        }
 
-            _ = ProcessClaimedJobAsync(job, ct).ContinueWith(
-                _ => _concurrencyGate.Release(),
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+        _lanes.GetOrAdd(projectId ?? Guid.Empty, static (_, state) => new JobLane(state.Dispatcher, state.ProjectId), (Dispatcher: this, ProjectId: projectId))
+            .Kick(cts.Token);
+    }
+
+    /// <summary>
+    /// One project's queue (or the host-wide one). Claims are single-threaded per lane — at most one
+    /// <see cref="IJobRepository.DequeueNextForProjectAsync"/> in flight for it — and dispatch is
+    /// bounded by the lane's own slots. A finishing job frees a slot and re-kicks its own lane, so a
+    /// backlog drains without waiting on a signal or poll tick.
+    /// </summary>
+    private sealed class JobLane(JobDispatcher owner, Guid? projectId)
+    {
+        private readonly SemaphoreSlim _slots = new(owner._workersPerProject);
+        private int _draining;
+        private int _kickPending;
+
+        public void Kick(CancellationToken ct)
+        {
+            Interlocked.Exchange(ref _kickPending, 1);
+            if (Interlocked.CompareExchange(ref _draining, 1, 0) == 0)
+            {
+                _ = Task.Run(() => DrainLoopAsync(ct), CancellationToken.None);
+            }
+        }
+
+        private async Task DrainLoopAsync(CancellationToken ct)
+        {
+            do
+            {
+                Volatile.Write(ref _kickPending, 0);
+                try
+                {
+                    await DrainAsync(ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    Volatile.Write(ref _draining, 0);
+                }
+            }
+            // A Kick landing after DrainAsync's last empty claim saw _draining still set and left
+            // it to us; without this re-check that wake-up would be lost.
+            while (Volatile.Read(ref _kickPending) == 1
+                && !ct.IsCancellationRequested
+                && Interlocked.CompareExchange(ref _draining, 1, 0) == 0);
+        }
+
+        private async Task DrainAsync(CancellationToken ct)
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                if (!_slots.Wait(0))
+                {
+                    return;
+                }
+
+                Job? job;
+                try
+                {
+                    using var scope = owner._scopeFactory.CreateScope();
+                    var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
+                    job = await jobRepository.DequeueNextForProjectAsync(projectId, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    _slots.Release();
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    _slots.Release();
+                    owner._logger.LogError(ex,
+                        "Unhandled error while claiming the next job for project {ProjectId}; the next signal or poll tick will try again.",
+                        projectId);
+                    return;
+                }
+
+                if (job is null)
+                {
+                    _slots.Release();
+                    return;
+                }
+
+                _ = owner.ProcessClaimedJobAsync(job, ct).ContinueWith(
+                    _ =>
+                    {
+                        _slots.Release();
+                        if (!ct.IsCancellationRequested)
+                        {
+                            Kick(ct);
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
         }
     }
 
     /// <summary>
     /// Runs one job already claimed (marked <see cref="JobStatus.Running"/>) by
-    /// <see cref="IJobRepository.DequeueNextAsync"/>. Never lets an exception escape -- this is
-    /// invoked fire-and-forget from <see cref="DrainAsync"/>, so an unhandled exception here would
+    /// <see cref="IJobRepository.DequeueNextForProjectAsync"/>. Never lets an exception escape -- this is
+    /// invoked fire-and-forget from <see cref="JobLane"/>, so an unhandled exception here would
     /// otherwise become an unobserved task exception instead of a logged, recoverable failure.
     /// </summary>
     private async Task ProcessClaimedJobAsync(Job job, CancellationToken ct)
@@ -365,12 +449,6 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
                 job.NextRetryAt = null;
                 await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
                 await PublishJobCountsAsync(job.ProjectId, ct).ConfigureAwait(false);
-
-                // This job finishing just freed a concurrency-gate slot; wake the drain loop
-                // immediately rather than leaving anything already waiting for that slot to sit
-                // idle until the next poll tick (see this type's remarks on retry scheduling for
-                // why that tradeoff is fine for a *backoff* wakeup but not for this one).
-                await _jobSignal.PublishAsync(ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {

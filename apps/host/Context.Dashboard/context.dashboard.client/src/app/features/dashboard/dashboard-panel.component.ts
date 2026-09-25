@@ -225,7 +225,7 @@ export class DashboardPanelComponent {
   }
 
   protected cancelIndex(): void {
-    this.ctx.cancelIndex();
+    this.ctx.cancelIndex(() => this.showReindexProgress.set(false));
   }
 
   protected formatUptime(seconds: number): string {

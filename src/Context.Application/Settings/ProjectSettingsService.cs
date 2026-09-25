@@ -37,7 +37,14 @@ public sealed class ProjectSettingsService(
         var localSettings = await LocalProjectSettingsReader.TryReadAsync(project.RootPath, ct).ConfigureAwait(false);
         if (localSettings is not null)
         {
-            effective = localSettings;
+            // The Last*ScheduledAt stamps are scheduler state that UpdateAsync only ever writes to the
+            // DB. Letting the local file's (usually null or stale) copy win made every poll see the
+            // project as due, re-firing its reindex once a minute.
+            effective = localSettings with
+            {
+                LastReindexScheduledAt = effective.LastReindexScheduledAt,
+                LastMemoryCompactionScheduledAt = effective.LastMemoryCompactionScheduledAt,
+            };
         }
 
         return effective;

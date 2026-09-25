@@ -37,7 +37,7 @@ public class HookEndpointsPostToolUseTests
 
         var engine = new Mock<IContextEngine>(MockBehavior.Strict);
         engine
-            .Setup(e => e.RecordEventAsync(sessionId, SessionEventType.FileRead, It.IsAny<object>(), It.IsAny<CancellationToken>()))
+            .Setup(e => e.RecordEventAsync(projectId, sessionId, SessionEventType.FileRead, It.IsAny<object>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var project = new Project { Id = projectId, Name = "Hook Project", RootPath = "C:/hook-project", CreatedAt = DateTimeOffset.UtcNow };
@@ -59,7 +59,7 @@ public class HookEndpointsPostToolUseTests
 
         result.Should().NotBeNull();
         engine.Verify(
-            e => e.RecordEventAsync(sessionId, SessionEventType.FileRead, It.IsAny<object>(), It.IsAny<CancellationToken>()),
+            e => e.RecordEventAsync(projectId, sessionId, SessionEventType.FileRead, It.IsAny<object>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -77,8 +77,8 @@ public class HookEndpointsPostToolUseTests
         object? recordedPayload = null;
         var engine = new Mock<IContextEngine>(MockBehavior.Strict);
         engine
-            .Setup(e => e.RecordEventAsync(sessionId, SessionEventType.FileEdit, It.IsAny<object>(), It.IsAny<CancellationToken>()))
-            .Callback<Guid, SessionEventType, object, CancellationToken>((_, _, payload, _) => recordedPayload = payload)
+            .Setup(e => e.RecordEventAsync(projectId, sessionId, SessionEventType.FileEdit, It.IsAny<object>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, Guid, SessionEventType, object, CancellationToken>((_, _, _, payload, _) => recordedPayload = payload)
             .Returns(Task.CompletedTask);
 
         var project = new Project { Id = projectId, Name = "Hook Project", RootPath = root, CreatedAt = DateTimeOffset.UtcNow };

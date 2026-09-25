@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Context.Application.Notifications;
+using Context.Application.Settings;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
 using Context.Infrastructure.Abstractions;
@@ -9,14 +10,14 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Context.Application.Jobs.Handlers;
 
-/// <summary>Extracts durable memories from the single <see cref="SessionSummaryChunk"/> a
-/// <see cref="SummarizeSessionJobHandler"/> pass just produced - not the session's full merged
-/// history, so a periodic mid-session pass only ever re-examines what's new since the last one.</summary>
+/// <summary>Extracts durable memories from one piece of session material: a claimed batch of raw
+/// SessionEvents, a /compact conversation summary, or (legacy jobs only) a SessionSummaryChunk.</summary>
 public sealed class ExtractMemoryJobHandler(
     IMemoryExtractor extractor,
     ISessionRepository sessionRepository,
     IProjectActivityNotifier? activityNotifier = null,
-    ILogger<ExtractMemoryJobHandler>? logger = null) : IJobHandler
+    ILogger<ExtractMemoryJobHandler>? logger = null,
+    IProjectSettingsService? settingsService = null) : IJobHandler
 {
     private readonly IProjectActivityNotifier _activityNotifier = activityNotifier ?? NullProjectActivityNotifier.Instance;
     private readonly ILogger<ExtractMemoryJobHandler> _logger = logger ?? NullLogger<ExtractMemoryJobHandler>.Instance;
@@ -28,32 +29,72 @@ public sealed class ExtractMemoryJobHandler(
         var payload = JsonSerializer.Deserialize<ExtractMemoryPayload>(job.PayloadJson)
             ?? throw new InvalidOperationException($"Job {job.Id}: could not deserialize {nameof(ExtractMemoryPayload)}.");
 
-        // ExtractMemory jobs are always enqueued with the owning session's ProjectId (see
-        // SummarizeSessionJobHandler) - required here to scope the now project-checked
-        // ISessionRepository lookups below.
         var projectId = job.ProjectId
             ?? throw new InvalidOperationException($"Job {job.Id}: {nameof(JobType)}.{nameof(JobType.ExtractMemory)} jobs must carry a ProjectId.");
 
-        var chunk = await sessionRepository.GetSummaryChunkByIdAsync(projectId, payload.SummaryChunkId, ct).ConfigureAwait(false)
-            ?? throw new InvalidOperationException(
-                $"No SessionSummaryChunk {payload.SummaryChunkId} found for session {payload.SessionId}; ExtractMemory must run after SummarizeSession.");
+        // Reprocessing the same material (a retried job) is safe against duplicate memories only as
+        // a side effect of MemoryConsolidator's >0.92 similarity reinforce path
+        // (MEMORY_PIPELINE_PLAN.md §D.6/Gap #6) - not a designed idempotency guarantee.
+        IReadOnlyList<Context.Domain.Entities.Memory> memories;
+        string source;
+        if (payload.EventBatchId is { } batchId)
+        {
+            var events = await sessionRepository.GetEventsByExtractionBatchAsync(projectId, payload.SessionId, batchId, ct).ConfigureAwait(false);
+            if (events.Count == 0)
+            {
+                _logger.LogInformation("Extraction batch {BatchId} for session {SessionId} has no events left; skipping.", batchId, payload.SessionId);
+                return;
+            }
 
-        // IMemoryExtractor.ExtractAsync writes new/reinforced/superseded memories itself via
-        // IMemoryStore - nothing further to persist here. Reprocessing this same chunk (a retried
-        // job) is safe against duplicate memories only as a side effect of MemoryConsolidator's
-        // >0.92 similarity reinforce path (MEMORY_PIPELINE_PLAN.md §D.6/Gap #6) - not a designed
-        // idempotency guarantee, so don't assume it survives an unrelated change to that threshold.
-        var memories = await extractor.ExtractAsync(projectId, chunk, ct).ConfigureAwait(false);
+            memories = await extractor.ExtractFromEventsAsync(projectId, payload.SessionId, events, ct).ConfigureAwait(false);
+            await sessionRepository.MarkExtractionBatchDoneAsync(batchId, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+            await DeleteSummarizedEventsAsync(projectId, payload.SessionId, ct).ConfigureAwait(false);
+            source = $"event batch {batchId} ({events.Count} events)";
+        }
+        else if (!string.IsNullOrWhiteSpace(payload.CompactSummary))
+        {
+            memories = await extractor.ExtractFromCompactSummaryAsync(projectId, payload.SessionId, payload.CompactSummary, ct).ConfigureAwait(false);
+            source = "compact summary";
+        }
+        else if (payload.SummaryChunkId is { } chunkId)
+        {
+            var chunk = await sessionRepository.GetSummaryChunkByIdAsync(projectId, chunkId, ct).ConfigureAwait(false)
+                ?? throw new InvalidOperationException(
+                    $"No SessionSummaryChunk {chunkId} found for session {payload.SessionId}; ExtractMemory must run after SummarizeSession.");
+            memories = await extractor.ExtractAsync(projectId, chunk, ct).ConfigureAwait(false);
+            source = $"chunk {chunkId}";
+        }
+        else
+        {
+            throw new InvalidOperationException($"Job {job.Id}: {nameof(ExtractMemoryPayload)} names no source to extract from.");
+        }
 
         _logger.LogInformation(
-            "Memory extraction produced {MemoryCount} memories for session {SessionId}, chunk {ChunkId}.",
-            memories.Count, payload.SessionId, payload.SummaryChunkId);
+            "Memory extraction produced {MemoryCount} memories for session {SessionId} from {Source}.",
+            memories.Count, payload.SessionId, source);
 
-        // SessionSummaryChunk carries no ProjectId of its own - the owning Session is the only path to it.
-        var session = await sessionRepository.GetByIdAsync(projectId, payload.SessionId, ct).ConfigureAwait(false);
-        if (session is not null)
+        await _activityNotifier.NotifyAsync(projectId, ProjectActivityKind.MemoryCreated, ct).ConfigureAwait(false);
+    }
+
+    // Summarization and extraction finish in either order; whichever runs second frees the events
+    // (ISessionRepository.DeleteEventsUpToAsync only deletes extracted ones up to the last chunk).
+    private async Task DeleteSummarizedEventsAsync(Guid projectId, Guid sessionId, CancellationToken ct)
+    {
+        if (settingsService is null)
         {
-            await _activityNotifier.NotifyAsync(session.ProjectId, ProjectActivityKind.MemoryCreated, ct).ConfigureAwait(false);
+            return;
+        }
+
+        var settings = await settingsService.GetAsync(projectId, ct).ConfigureAwait(false);
+        if (!settings.DeleteSessionEventsAfterSummary)
+        {
+            return;
+        }
+
+        var chunks = await sessionRepository.GetSummaryChunksAsync(projectId, sessionId, ct).ConfigureAwait(false);
+        if (chunks.Count > 0)
+        {
+            await sessionRepository.DeleteEventsUpToAsync(sessionId, chunks[^1].ToEventAt, ct).ConfigureAwait(false);
         }
     }
 }

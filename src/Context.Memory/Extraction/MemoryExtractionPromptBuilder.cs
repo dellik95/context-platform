@@ -1,15 +1,28 @@
 using System.Text;
+using System.Text.Json;
 using Context.Domain.Entities;
+using Context.Domain.Enums;
+using Context.Memory.Summarization;
 
 namespace Context.Memory.Extraction;
 
-/// <summary>Builds the prompt that asks an LLM to propose candidate durable memories from one session summary chunk.</summary>
+/// <summary>Builds the prompt that asks an LLM to propose candidate durable memories from one piece
+/// of session material: a batch of raw session events, a compaction summary, or a summary chunk.</summary>
 internal static class MemoryExtractionPromptBuilder
 {
+    private const int MaxPromptChars = 2000;
+    private const int MaxToolInputChars = 1000;
+    private const int MaxToolResponseChars = 600;
+    private const int MaxOtherPayloadChars = 600;
+    private const int MaxEventsSectionChars = 60_000;
+    private const int MaxCompactSummaryChars = 60_000;
+
     public const string SystemPrompt =
         """
-        You extract durable, reusable ENGINEERING KNOWLEDGE about this repository from a coding
-        session's summary, so it can be remembered across future sessions. Memory is a long-term
+        You extract durable, reusable ENGINEERING KNOWLEDGE about this repository from coding-session
+        material — a batch of raw session events (prompts, tool calls with their inputs and outputs,
+        file reads/edits, shell commands, errors), a conversation summary written when the session
+        was compacted, or a session summary — so it can be remembered across future sessions. Memory is a long-term
         engineering knowledge base for this codebase — not a transcript of what happened in this
         session. Propose between 0 and 5 candidate memories.
 
@@ -141,7 +154,8 @@ internal static class MemoryExtractionPromptBuilder
         FILES_READ / FILES_MODIFIED are the specific files THIS memory is about — not every file
         touched in the whole session, only the ones this particular decision/fix/discovery
         concerns. Choose FILES_READ only from the "Files read" list below, and FILES_MODIFIED only
-        from the "Changed files" list below — never invent a path, and never move a path from one
+        from the "Changed files" list below (when the material has no such lists, use only paths
+        that appear verbatim in it) — never invent a path, and never move a path from one
         list into the other (a file that was only read is not "modified" just because this memory
         discusses it). FILES_READ is for files that were examined/relevant but not changed;
         FILES_MODIFIED is for files that were actually edited because of this memory's content. Omit
@@ -162,6 +176,134 @@ internal static class MemoryExtractionPromptBuilder
         AppendSection(sb, "Open issues", chunk.OpenIssues);
         AppendSection(sb, "Next steps", chunk.NextSteps);
         return sb.ToString();
+    }
+
+    public static string BuildUserPromptFromEvents(Guid sessionId, IReadOnlyList<SessionEvent> events)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"Session: {sessionId}");
+        sb.AppendLine($"Session events, oldest first ({events.Count} total):");
+        sb.AppendLine();
+
+        var eventsStart = sb.Length;
+        for (var i = 0; i < events.Count; i++)
+        {
+            if (sb.Length - eventsStart > MaxEventsSectionChars)
+            {
+                sb.AppendLine($"(... {events.Count - i} later events omitted for length)");
+                break;
+            }
+
+            AppendEvent(sb, events[i]);
+        }
+
+        AppendList(sb, "Files read", PayloadFieldExtractor.ExtractDistinctPaths(events, SessionEventType.FileRead));
+        AppendList(sb, "Changed files", PayloadFieldExtractor.ExtractDistinctPaths(events, SessionEventType.FileEdit));
+        return sb.ToString();
+    }
+
+    public static string BuildUserPromptFromCompactSummary(Guid sessionId, string compactSummary)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"Session: {sessionId}");
+        sb.AppendLine("Conversation summary written when the session was compacted:");
+        sb.AppendLine();
+        sb.AppendLine(Truncate(compactSummary.Trim(), MaxCompactSummaryChars));
+        return sb.ToString();
+    }
+
+    private static void AppendEvent(StringBuilder sb, SessionEvent evt)
+    {
+        sb.Append('[').Append(evt.Timestamp.UtcDateTime.ToString("HH:mm:ss")).Append("] ").Append(evt.Type);
+
+        JsonElement root;
+        try
+        {
+            using var doc = JsonDocument.Parse(evt.PayloadJson);
+            root = doc.RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            sb.AppendLine().Append("  ").AppendLine(Truncate(evt.PayloadJson, MaxOtherPayloadChars));
+            return;
+        }
+
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            sb.AppendLine().Append("  ").AppendLine(Truncate(root.GetRawText(), MaxOtherPayloadChars));
+            return;
+        }
+
+        if (GetString(root, "toolName") is { } toolName)
+        {
+            sb.Append(' ').Append(toolName);
+        }
+
+        if (GetString(root, "path") is { } path)
+        {
+            sb.Append(' ').Append(path);
+        }
+
+        sb.AppendLine();
+        var known = new HashSet<string>(StringComparer.Ordinal) { "toolName", "path" };
+        AppendField(sb, root, known, "prompt", null, MaxPromptChars);
+        AppendField(sb, root, known, "toolInput", "input", MaxToolInputChars);
+        AppendField(sb, root, known, "toolResponse", "output", MaxToolResponseChars);
+
+        foreach (var property in root.EnumerateObject().Where(p => !known.Contains(p.Name)))
+        {
+            AppendValue(sb, property.Name, property.Value, MaxOtherPayloadChars);
+        }
+    }
+
+    private static void AppendField(StringBuilder sb, JsonElement root, HashSet<string> known, string name, string? label, int maxChars)
+    {
+        known.Add(name);
+        if (root.TryGetProperty(name, out var value))
+        {
+            AppendValue(sb, label, value, maxChars);
+        }
+    }
+
+    private static void AppendValue(StringBuilder sb, string? label, JsonElement value, int maxChars)
+    {
+        var text = value.ValueKind == JsonValueKind.String ? value.GetString() : value.GetRawText();
+        if (string.IsNullOrWhiteSpace(text) || value.ValueKind == JsonValueKind.Null)
+        {
+            return;
+        }
+
+        sb.Append("  ");
+        if (label is not null)
+        {
+            sb.Append(label).Append(": ");
+        }
+
+        sb.AppendLine(Truncate(text.Trim(), maxChars));
+    }
+
+    private static string? GetString(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString())
+            ? value.GetString()
+            : null;
+
+    private static string Truncate(string text, int maxChars) =>
+        text.Length <= maxChars ? text : string.Concat(text.AsSpan(0, maxChars), "…");
+
+    private static void AppendList(StringBuilder sb, string label, IReadOnlyList<string> items)
+    {
+        sb.AppendLine();
+        sb.AppendLine($"{label}:");
+        if (items.Count == 0)
+        {
+            sb.AppendLine("(none)");
+            return;
+        }
+
+        foreach (var item in items)
+        {
+            sb.Append("- ").AppendLine(item);
+        }
     }
 
     private static void AppendSection(StringBuilder sb, string label, string? content)

@@ -17,6 +17,15 @@ public interface IJobRepository
     /// within the same priority), marking it Running, or null if none are runnable right now.</summary>
     Task<Job?> DequeueNextAsync(CancellationToken ct);
 
+    /// <summary><see cref="DequeueNextAsync"/> restricted to jobs whose <see cref="Job.ProjectId"/>
+    /// equals <paramref name="projectId"/> exactly — null claims only host-wide jobs, not "any".
+    /// Backs the dispatcher's per-project lanes.</summary>
+    Task<Job?> DequeueNextForProjectAsync(Guid? projectId, CancellationToken ct);
+
+    /// <summary>Distinct <see cref="Job.ProjectId"/> values (null = host-wide) that have at least
+    /// one Pending job, including ones still waiting out a retry backoff.</summary>
+    Task<IReadOnlyList<Guid?>> ListProjectsWithPendingJobsAsync(CancellationToken ct);
+
     /// <summary>When <paramref name="projectId"/> is null, returns jobs for every project (plus
     /// host-wide maintenance jobs) — the pre-filtering, host-wide behavior.</summary>
     Task<IReadOnlyList<Job>> ListByStatusAsync(JobStatus status, Guid? projectId, CancellationToken ct);
