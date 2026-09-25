@@ -37,7 +37,7 @@
     <PackageVersion Include="ModelContextProtocol" Version="2.2.0" />
     <!-- Multi-instance job dispatch (IJobSignal Redis pub/sub backend, opt-in via CONTEXT_PLATFORM_REDIS).
          3.x is a major bump over 2.9.17 - needs a build/test pass. -->
-    <PackageVersion Include="StackExchange.Redis" Version="3.2.0" />
+    <PackageVersion Include="StackExchange.Redis" Version="3.3.1" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
     <!-- Logging -->
     <PackageVersion Include="Serilog" Version="4.4.0" />
@@ -74,7 +74,7 @@
          anything newer removes a member it binds to, throwing MissingMethodException at runtime
          despite both compiling cleanly (verified live against a throwaway probe app). Revisit once
          SqliteVec itself ships a build against a newer VectorData.Abstractions. -->
-    <PackageVersion Include="Microsoft.Extensions.VectorData.Abstractions" Version="10.1.0" />
+    <PackageVersion Include="Microsoft.Extensions.VectorData.Abstractions" Version="10.10.0" />
     <PackageVersion Include="Microsoft.SemanticKernel.Connectors.SqliteVec" Version="1.74.0-preview" />
     <!-- Context.Application: token-aware overlapping-window chunking for whole-file doc/markdown
          chunks (see IndexingPipeline.IndexUnparsedFileAsync), same 10.10.0 line as the
@@ -92,12 +92,12 @@
          against the real native libs, no separate language-pack/runtime-redirect package needed. -->
     <PackageVersion Include="TreeSitter.DotNet" Version="1.3.0" />
     <!-- Testing -->
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
     <!-- 8.10.0: v8+ requires a paid Xceed license for commercial use - confirmed accepted. -->
-    <PackageVersion Include="FluentAssertions" Version="8.10.0" />
-    <PackageVersion Include="Moq" Version="4.20.72" />
+    <PackageVersion Include="FluentAssertions" Version="8.11.0" />
+    <PackageVersion Include="Moq" Version="4.21.0" />
     <PackageVersion Include="coverlet.collector" Version="10.0.1" />
   </ItemGroup>
 </Project>
