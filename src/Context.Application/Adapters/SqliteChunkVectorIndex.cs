@@ -55,6 +55,7 @@ public sealed class SqliteChunkVectorIndex(string dbPath, IDbContextFactory<Cont
     // 10 matches the interceptor's 10000ms so both connections back off for the same duration.
     private readonly string _connectionString = $"Data Source={dbPath};Default Timeout=10";
     private readonly ConcurrentDictionary<string, Lazy<Task<SqliteCollection<Guid, ChunkVectorRecord>>>> _collections = new();
+    private readonly ConcurrentDictionary<string, byte> _pendingBackfills = new();
 
     public async Task UpsertAsync(Guid chunkId, Guid projectId, string provider, float[] vector, CancellationToken ct)
     {
@@ -170,30 +171,57 @@ public sealed class SqliteChunkVectorIndex(string dbPath, IDbContextFactory<Cont
         }
     }
 
-    private Task<SqliteCollection<Guid, ChunkVectorRecord>> GetOrCreateCollectionAsync(
-        string provider, int dimensions, CancellationToken ct) =>
-        _collections.GetOrAdd(
+    private async Task<SqliteCollection<Guid, ChunkVectorRecord>> GetOrCreateCollectionAsync(
+        string provider, int dimensions, CancellationToken ct)
+    {
+        var lazy = _collections.GetOrAdd(
             provider,
-            p => new Lazy<Task<SqliteCollection<Guid, ChunkVectorRecord>>>(() => CreateCollectionAsync(p, dimensions, ct))
-        ).Value;
+            p => new Lazy<Task<SqliteCollection<Guid, ChunkVectorRecord>>>(() => CreateCollectionAsync(p, dimensions, ct)));
+        try
+        {
+            return await lazy.Value.ConfigureAwait(false);
+        }
+        catch
+        {
+            // Never cache a failed creation: one 'database is locked' during the backfill under
+            // write load otherwise failed every later upsert and search for this provider until
+            // the process restarted.
+            _collections.TryRemove(new KeyValuePair<string, Lazy<Task<SqliteCollection<Guid, ChunkVectorRecord>>>>(provider, lazy));
+            throw;
+        }
+    }
 
     private async Task<SqliteCollection<Guid, ChunkVectorRecord>> CreateCollectionAsync(
         string provider, int dimensions, CancellationToken ct)
     {
         var collection = BuildCollection(provider, dimensions);
-
-        // A brand-new collection (this provider has never been searched/embedded into before in
-        // this database) starts backfilled from whatever the old Embeddings content-hash cache
-        // already has for it, so upgrading onto this index doesn't silently blank out search
-        // results for a project that was already indexed before this feature existed.
-        var existedBefore = await collection.CollectionExistsAsync(ct).ConfigureAwait(false);
-        await collection.EnsureCollectionExistsAsync(ct).ConfigureAwait(false);
-        if (!existedBefore)
+        try
         {
-            await BackfillFromEmbeddingCacheAsync(collection, provider, ct).ConfigureAwait(false);
-        }
+            // A brand-new collection (this provider has never been searched/embedded into before in
+            // this database) starts backfilled from whatever the old Embeddings content-hash cache
+            // already has for it, so upgrading onto this index doesn't silently blank out search
+            // results for a project that was already indexed before this feature existed. Tracked
+            // outside this attempt because EnsureCollectionExistsAsync has already created the
+            // table by the time a backfill can fail, so a retry would otherwise skip it.
+            if (!await collection.CollectionExistsAsync(ct).ConfigureAwait(false))
+            {
+                _pendingBackfills.TryAdd(provider, 0);
+            }
 
-        return collection;
+            await collection.EnsureCollectionExistsAsync(ct).ConfigureAwait(false);
+            if (_pendingBackfills.ContainsKey(provider))
+            {
+                await BackfillFromEmbeddingCacheAsync(collection, provider, ct).ConfigureAwait(false);
+                _pendingBackfills.TryRemove(provider, out _);
+            }
+
+            return collection;
+        }
+        catch
+        {
+            collection.Dispose();
+            throw;
+        }
     }
 
     private async Task BackfillFromEmbeddingCacheAsync(

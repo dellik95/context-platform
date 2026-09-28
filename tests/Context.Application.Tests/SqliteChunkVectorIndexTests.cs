@@ -121,6 +121,45 @@ public sealed class SqliteChunkVectorIndexTests : IDisposable
         await index.DeleteAsync([Guid.NewGuid()], CancellationToken.None);
     }
 
+    [Fact]
+    public async Task A_failed_backfill_is_not_cached_and_is_retried_by_the_next_call()
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<ContextDbContext>();
+        optionsBuilder.UseSqlite($"Data Source={_dbPath}");
+        await using (var db = new ContextDbContext(optionsBuilder.Options))
+        {
+            await db.Database.MigrateAsync();
+        }
+
+        var factory = new FailFirstDbContextFactory(_dbPath);
+        using var index = new SqliteChunkVectorIndex(_dbPath, factory);
+        var projectId = Guid.NewGuid();
+        var chunkId = Guid.NewGuid();
+
+        var firstUpsert = () => index.UpsertAsync(chunkId, projectId, "ollama", [1f, 0f, 0f], CancellationToken.None);
+        await firstUpsert.Should().ThrowAsync<SqliteException>();
+
+        await index.UpsertAsync(chunkId, projectId, "ollama", [1f, 0f, 0f], CancellationToken.None);
+
+        factory.Calls.Should().Be(2, "the table already exists after the failed attempt, but its backfill never completed");
+        (await index.SearchAsync(projectId, "ollama", [1f, 0f, 0f], limit: 10, CancellationToken.None))
+            .Should().ContainSingle(r => r.ChunkId == chunkId);
+    }
+
+    private sealed class FailFirstDbContextFactory(string dbPath) : IDbContextFactory<ContextDbContext>
+    {
+        private readonly PooledDbContextFactoryStub _inner = new(dbPath);
+
+        public int Calls { get; private set; }
+
+        public ContextDbContext CreateDbContext() => throw new NotSupportedException();
+
+        public Task<ContextDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
+            ++Calls == 1
+                ? Task.FromException<ContextDbContext>(new SqliteException("SQLite Error 5: 'database is locked'.", 5))
+                : _inner.CreateDbContextAsync(cancellationToken);
+    }
+
     /// <summary>
     /// Minimal <see cref="IDbContextFactory{TContext}"/> so this test doesn't need the full
     /// pooled-factory DI registration <c>AddContextApplication</c> normally provides --
