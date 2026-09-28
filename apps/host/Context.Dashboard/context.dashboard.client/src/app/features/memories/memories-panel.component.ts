@@ -3,6 +3,7 @@ import { Component, DestroyRef, computed, effect, inject, signal } from '@angula
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormField, form } from '@angular/forms/signals';
 import { MatButtonModule } from '@angular/material/button';
+import { MatButtonToggleChange, MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatCardModule } from '@angular/material/card';
 import { MatCheckboxChange, MatCheckboxModule } from '@angular/material/checkbox';
 import { MatFormFieldModule } from '@angular/material/form-field';
@@ -10,12 +11,15 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
-import { MatTabsModule } from '@angular/material/tabs';
+import { MatTabChangeEvent, MatTabsModule } from '@angular/material/tabs';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { ApiService } from '../../core/api.service';
-import { Memory } from '../../core/models';
+import { Memory, MemoryDetail, MemoryKind } from '../../core/models';
 import { SignalrService } from '../../core/signalr.service';
 import { ProjectContextService } from '../projects/project-context.service';
+import { ConsolidationPanelComponent } from './consolidation-panel.component';
+
+type DetailState = MemoryDetail | 'loading' | 'error';
 
 @Component({
   selector: 'app-memories-panel',
@@ -24,6 +28,7 @@ import { ProjectContextService } from '../projects/project-context.service';
     FormField,
     MatCardModule,
     MatButtonModule,
+    MatButtonToggleModule,
     MatIconModule,
     MatFormFieldModule,
     MatInputModule,
@@ -31,6 +36,7 @@ import { ProjectContextService } from '../projects/project-context.service';
     MatProgressBarModule,
     MatTabsModule,
     MatTooltipModule,
+    ConsolidationPanelComponent,
   ],
   templateUrl: './memories-panel.component.html',
   styleUrl: './memories-panel.component.scss',
@@ -45,7 +51,10 @@ export class MemoriesPanelComponent {
   protected readonly searchModel = signal({ query: '', includeSuperseded: false });
   protected readonly searchForm = form(this.searchModel);
 
-  private readonly committedQuery = signal<{ projectId: string; query: string; includeSuperseded: boolean } | undefined>(undefined);
+  protected readonly kindFilter = signal<MemoryKind | null>(null);
+  private readonly committedQuery = signal<
+    { projectId: string; query: string; includeSuperseded: boolean; kind: MemoryKind | null } | undefined
+  >(undefined);
   private readonly resource = this.api.memoriesResource(this.committedQuery);
   protected readonly memories = computed(() => (this.resource.hasValue() ? this.resource.value() : []));
   protected readonly loading = this.resource.isLoading;
@@ -54,6 +63,7 @@ export class MemoriesPanelComponent {
   // existing results visible while it refetches instead of blanking the panel.
   protected readonly initialLoading = computed(() => this.loading() && !this.resource.hasValue());
   protected readonly deletingId = signal<string | null>(null);
+  protected readonly details = signal<Record<string, DetailState>>({});
 
   private lastSearchedProjectId = '';
 
@@ -95,9 +105,36 @@ export class MemoriesPanelComponent {
     this.searchModel.update((current) => ({ ...current, includeSuperseded: event.checked }));
   }
 
+  protected setKind(event: MatButtonToggleChange): void {
+    this.kindFilter.set(event.value === 'All' ? null : (event.value as MemoryKind));
+    this.commitSearch();
+  }
+
   private commitSearch(): void {
     const { query, includeSuperseded } = this.searchForm().value();
-    this.committedQuery.set({ projectId: this.ctx.projectId(), query, includeSuperseded });
+    this.committedQuery.set({ projectId: this.ctx.projectId(), query, includeSuperseded, kind: this.kindFilter() });
+  }
+
+  protected onTabChange(memory: Memory, event: MatTabChangeEvent): void {
+    const state = this.details()[memory.id];
+    if (event.tab.textLabel !== 'Evidence' || (state && state !== 'error')) {
+      return;
+    }
+
+    this.setDetail(memory.id, 'loading');
+    this.api.memoryDetail(memory.id).subscribe({
+      next: (detail) => this.setDetail(memory.id, detail),
+      error: () => this.setDetail(memory.id, 'error'),
+    });
+  }
+
+  protected detail(memory: Memory): MemoryDetail | null {
+    const state = this.details()[memory.id];
+    return typeof state === 'object' ? state : null;
+  }
+
+  private setDetail(id: string, state: DetailState): void {
+    this.details.update((current) => ({ ...current, [id]: state }));
   }
 
   /** Parses Memory.factsJson (a JSON array of short bullet-point facts) — an LLM-produced field,
@@ -161,11 +198,11 @@ export class MemoriesPanelComponent {
   protected chipClass(type: Memory['type']): string {
     switch (type) {
       case 'Decision':
+      case 'Constraint':
       case 'Architecture':
         return 'chip--decision';
-      case 'BugFix':
       case 'Issue':
-        return 'chip--bugfix';
+        return 'chip--issue';
       case 'Discovery':
         return 'chip--discovery';
       default:

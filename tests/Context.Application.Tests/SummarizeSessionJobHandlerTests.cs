@@ -46,8 +46,7 @@ public sealed class SummarizeSessionJobHandlerTests
             _providerResolver.Object, _sessionSummaryVectorIndex.Object);
     }
 
-    /// <summary>Always returns <paramref name="vector"/>, regardless of the input text — same shape
-    /// as CompactMemoryJobHandlerTests.FakeEmbeddingGenerator.</summary>
+    /// <summary>Always returns <paramref name="vector"/>, regardless of the input text.</summary>
     private sealed class FakeEmbeddingGenerator(float[] vector) : IEmbeddingGenerator<string, Embedding<float>>
     {
         public Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(

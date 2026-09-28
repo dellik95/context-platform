@@ -11,53 +11,47 @@ using Moq;
 namespace Context.Memory.Tests;
 
 /// <summary>
-/// MEMORY_PIPELINE_PLAN.md §D.5/Gap #5 + §H test #14: <see cref="LlmMemoryExtractor.ExtractAsync"/>'s
-/// new structured `LogInformation` calls (candidates-extracted count, consolidation summary) must
-/// carry only counts/IDs, never the candidate's own Title/Body text — the same content-safety
-/// discipline this class's pre-existing `LogWarning` calls already follow. <see cref="IMemoryConsolidator"/>
-/// is mocked here (its own decision logic is covered by <see cref="MemoryConsolidatorTests"/>); this
-/// test is only about what <c>LlmMemoryExtractor</c> itself writes to the logger.
+/// <see cref="LlmMemoryExtractor"/> with a mocked <see cref="IMemoryConsolidator"/>: what it hands to
+/// consolidation and what it writes to the logger (counts and IDs only, never candidate text).
 /// </summary>
-public class LlmMemoryExtractorTests
+public sealed class LlmMemoryExtractorTests
 {
     private const string SecretTitle = "SECRET_TITLE_57f3d2 database migration notes";
     private const string SecretBody = "SECRET_BODY_57f3d2 rotated the prod credentials for the payments service";
 
     [Fact]
-    public async Task ExtractAsync_logs_counts_only_and_never_leaks_the_candidates_title_or_body_text()
+    public async Task ExtractFromEventsAsync_logs_counts_only_and_never_leaks_the_candidates_title_or_body_text()
     {
         var projectId = Guid.NewGuid();
-        var chunk = MakeChunk();
-
-        var store = new Mock<IMemoryStore>();
-        store.Setup(s => s.GetExistingWithEmbeddingsAsync(projectId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<ExistingMemoryWithEmbedding>)[]);
+        var sessionId = Guid.NewGuid();
+        var events = MakeEvents(sessionId);
 
         var consolidator = new Mock<IMemoryConsolidator>();
         consolidator
-            .Setup(c => c.ConsolidateAsync(projectId, chunk.SessionId, It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), false, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Guid _, Guid? _, MemoryCandidate cand, List<ExistingMemoryWithEmbedding> _, bool _, CancellationToken _) =>
+            .Setup(c => c.ConsolidateAsync(projectId, sessionId, It.IsAny<MemoryCandidate>(), false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid _, Guid? _, MemoryCandidate cand, bool _, CancellationToken _) =>
                 new ConsolidationResult(MakeMemory(projectId, cand), ConsolidationOutcome.Created));
 
         var resolver = new FakeProviderResolver(new FakeChatClient(CandidateResponse()));
         var logger = new CapturingLogger<LlmMemoryExtractor>();
-        var sut = new LlmMemoryExtractor(store.Object, consolidator.Object, resolver, new FakeUsageRecorder(), logger);
+        var sut = new LlmMemoryExtractor(consolidator.Object, resolver, new FakeUsageRecorder(), logger);
 
-        await sut.ExtractAsync(projectId, chunk, CancellationToken.None);
+        await sut.ExtractFromEventsAsync(projectId, sessionId, events, CancellationToken.None);
 
-        // Prove the secret text really did flow through this call (via the parsed candidate),
-        // so the absence asserted below is a meaningful content-safety guarantee and not just an
-        // empty-log false negative.
+        // The secret text must really reach the consolidator, or the absence asserted below proves nothing.
         consolidator.Verify(
             c => c.ConsolidateAsync(
-                projectId, chunk.SessionId,
-                It.Is<MemoryCandidate>(cand => cand.Title == SecretTitle && cand.Body.Contains("SECRET_BODY_57f3d2", StringComparison.Ordinal)),
-                It.IsAny<List<ExistingMemoryWithEmbedding>>(), false, It.IsAny<CancellationToken>()),
+                projectId, sessionId,
+                It.Is<MemoryCandidate>(cand => cand.Title == SecretTitle
+                    && cand.Body.Contains("SECRET_BODY_57f3d2", StringComparison.Ordinal)
+                    && !cand.Body.Contains("CONFIDENCE", StringComparison.Ordinal)
+                    && cand.Source == EvidenceSource.EventBatch),
+                false, It.IsAny<CancellationToken>()),
             Times.Once);
 
         logger.Messages.Should().HaveCountGreaterThanOrEqualTo(2);
         logger.Messages.Should().Contain(m => m.Contains("candidate memories", StringComparison.Ordinal));
-        logger.Messages.Should().Contain(m => m.Contains("1 created, 0 reinforced, 0 superseded", StringComparison.Ordinal));
+        logger.Messages.Should().Contain(m => m.Contains("1 created, 0 reinforced, 0 merged, 0 superseded, 0 contested, 0 events", StringComparison.Ordinal));
         logger.Messages.Should().NotContain(m => m.Contains(SecretTitle, StringComparison.Ordinal));
         logger.Messages.Should().NotContain(m => m.Contains("SECRET_BODY_57f3d2", StringComparison.Ordinal));
     }
@@ -65,59 +59,52 @@ public class LlmMemoryExtractorTests
     /// <summary>
     /// A chat client that throws mid-call is a transient provider failure, and the only component
     /// that can recover it is <c>ExtractMemoryJobHandler</c>'s retry/backoff — which never sees a
-    /// swallowed exception. So the failure is logged and rethrown: the chunk's memories are retried
+    /// swallowed exception. So the failure is logged and rethrown: the batch's memories are retried
     /// later rather than lost to a job that reported success having extracted nothing.
     /// </summary>
     [Fact]
-    public async Task ExtractAsync_rethrows_an_exception_from_the_chat_client_so_the_job_can_retry()
+    public async Task ExtractFromEventsAsync_rethrows_an_exception_from_the_chat_client_so_the_job_can_retry()
     {
         var projectId = Guid.NewGuid();
-        var chunk = MakeChunk();
+        var sessionId = Guid.NewGuid();
+        var events = MakeEvents(sessionId);
 
-        var store = new Mock<IMemoryStore>();
         var consolidator = new Mock<IMemoryConsolidator>();
         var resolver = new FakeProviderResolver(new ThrowingChatClient());
         var logger = new CapturingLogger<LlmMemoryExtractor>();
-        var sut = new LlmMemoryExtractor(store.Object, consolidator.Object, resolver, new FakeUsageRecorder(), logger);
+        var sut = new LlmMemoryExtractor(consolidator.Object, resolver, new FakeUsageRecorder(), logger);
 
-        var act = async () => await sut.ExtractAsync(projectId, chunk, CancellationToken.None);
+        var act = async () => await sut.ExtractFromEventsAsync(projectId, sessionId, events, CancellationToken.None);
 
         await act.Should().ThrowAsync<Exception>();
         consolidator.Verify(
-            c => c.ConsolidateAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            c => c.ConsolidateAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<MemoryCandidate>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Never);
         logger.WarningMessages.Should().Contain(m => m.Contains("failed to extract candidate memories", StringComparison.Ordinal));
     }
 
-    /// <summary>
-    /// MEMORY_PIPELINE_PLAN.md §H case #8: invalid LLM response → no malformed memory stored,
-    /// proven end-to-end through <see cref="LlmMemoryExtractor.ExtractAsync"/> rather than only at
-    /// the <see cref="MemoryCandidateParser"/> unit level (already covered by
-    /// <c>MemoryCandidateParserTests</c>). A response that matches none of the
-    /// TYPE:/TITLE:/BODY:/... block format must parse to zero candidates, so extraction returns no
-    /// memories and never reaches the consolidator.
-    /// </summary>
+    /// <summary>A response in none of the TYPE:/TITLE:/BODY: block format parses to zero candidates and
+    /// never reaches the consolidator.</summary>
     [Theory]
     [InlineData("This is just some unrelated prose the model returned instead of the expected block format.")]
     [InlineData("")]
-    public async Task ExtractAsync_stores_no_memories_when_the_llm_response_is_unparseable(string garbageResponse)
+    public async Task ExtractFromEventsAsync_stores_no_memories_when_the_llm_response_is_unparseable(string garbageResponse)
     {
         var projectId = Guid.NewGuid();
-        var chunk = MakeChunk();
+        var sessionId = Guid.NewGuid();
+        var events = MakeEvents(sessionId);
 
-        var store = new Mock<IMemoryStore>();
         var consolidator = new Mock<IMemoryConsolidator>();
         var resolver = new FakeProviderResolver(new FakeChatClient(garbageResponse));
         var logger = new CapturingLogger<LlmMemoryExtractor>();
-        var sut = new LlmMemoryExtractor(store.Object, consolidator.Object, resolver, new FakeUsageRecorder(), logger);
+        var sut = new LlmMemoryExtractor(consolidator.Object, resolver, new FakeUsageRecorder(), logger);
 
-        var result = await sut.ExtractAsync(projectId, chunk, CancellationToken.None);
+        var result = await sut.ExtractFromEventsAsync(projectId, sessionId, events, CancellationToken.None);
 
         result.Should().BeEmpty();
         consolidator.Verify(
-            c => c.ConsolidateAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            c => c.ConsolidateAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<MemoryCandidate>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Never);
-        store.Verify(s => s.GetExistingWithEmbeddingsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     private static string CandidateResponse() =>
@@ -129,16 +116,10 @@ public class LlmMemoryExtractorTests
         END_MEMORY
         """;
 
-    private static SessionSummaryChunk MakeChunk() => new()
-    {
-        Id = Guid.NewGuid(),
-        SessionId = Guid.NewGuid(),
-        Title = "Some session work",
-        EventCount = 20,
-        FromEventAt = DateTimeOffset.UtcNow.AddMinutes(-10),
-        ToEventAt = DateTimeOffset.UtcNow,
-        GeneratedAt = DateTimeOffset.UtcNow
-    };
+    private static SessionEvent[] MakeEvents(Guid sessionId) =>
+    [
+        new() { SessionId = sessionId, Type = SessionEventType.FileEdit, Timestamp = DateTimeOffset.UtcNow, PayloadJson = """{"toolName":"Edit","path":"src/Foo.cs"}""" },
+    ];
 
     private static Context.Domain.Entities.Memory MakeMemory(Guid projectId, MemoryCandidate candidate) => new()
     {
@@ -147,7 +128,6 @@ public class LlmMemoryExtractorTests
         Type = candidate.Type,
         Title = candidate.Title,
         Body = candidate.Body,
-        Confidence = candidate.Confidence,
         Tier = MemoryTier.Working,
         CreatedAt = DateTimeOffset.UtcNow,
         LastReinforcedAt = DateTimeOffset.UtcNow
@@ -159,7 +139,7 @@ public class LlmMemoryExtractorTests
     private sealed class FakeProviderResolver(IChatClient chatClient) : IProviderResolver
     {
         public Task<IEmbeddingGenerator<string, Embedding<float>>> GetEmbeddingGeneratorAsync(Guid projectId, CancellationToken ct) =>
-            throw new NotSupportedException("LlmMemoryExtractor.ExtractAsync doesn't need an embedding generator directly.");
+            throw new NotSupportedException("LlmMemoryExtractor doesn't need an embedding generator directly.");
 
         public Task<IChatClient> GetChatClientAsync(Guid projectId, CancellationToken ct) => Task.FromResult(chatClient);
     }
@@ -192,11 +172,7 @@ public class LlmMemoryExtractorTests
         public Task RecordAsync(UsageRecord record, CancellationToken ct) => Task.CompletedTask;
     }
 
-    /// <summary>Always throws from <see cref="GetResponseAsync"/>, simulating a provider that is
-    /// unreachable/erroring mid-call (§H case #7) — distinct from <see cref="FakeChatClient"/>,
-    /// which always succeeds, and from the <c>IsNoOp()</c> fallback, which never calls the client
-    /// at all. Reports the same non-"noop" provider metadata so <c>ExtractAsync</c> takes the real
-    /// LLM path before hitting the failure.</summary>
+    /// <summary>A reachable (non-"noop") provider that fails mid-call.</summary>
     private sealed class ThrowingChatClient : IChatClient
     {
         private static readonly ChatClientMetadata Metadata = new("fake", null, "fake-model");

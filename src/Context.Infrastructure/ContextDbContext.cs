@@ -6,7 +6,7 @@ namespace Context.Infrastructure;
 
 /// <summary>
 /// EF Core context for the Context Platform's SQLite-backed store. One <see cref="DbSet{TEntity}"/>
-/// per entity declared in <c>Context.Domain.Entities</c> (CONTRACTS.md §1).
+/// per entity declared in <c>Context.Domain.Entities</c>.
 /// </summary>
 public class ContextDbContext : DbContext
 {
@@ -29,6 +29,9 @@ public class ContextDbContext : DbContext
     public DbSet<SessionSummaryChunk> SessionSummaryChunks => Set<SessionSummaryChunk>();
     public DbSet<Memory> Memories => Set<Memory>();
     public DbSet<MemoryEmbedding> MemoryEmbeddings => Set<MemoryEmbedding>();
+    public DbSet<MemoryEvidence> MemoryEvidence => Set<MemoryEvidence>();
+    public DbSet<MemoryEntity> MemoryEntities => Set<MemoryEntity>();
+    public DbSet<MemoryConsolidationReport> MemoryConsolidationReports => Set<MemoryConsolidationReport>();
     public DbSet<Job> Jobs => Set<Job>();
     public DbSet<Provider> Providers => Set<Provider>();
     public DbSet<ProviderModel> ProviderModels => Set<ProviderModel>();
@@ -48,7 +51,7 @@ public class ContextDbContext : DbContext
     /// connection is physically opened: WAL journaling (readers don't block writers),
     /// foreign-key constraint enforcement (off by default per-connection in SQLite), and a
     /// 10-second busy_timeout so a writer blocked behind another connection's transaction
-    /// retries instead of failing immediately with SQLITE_BUSY (BACKLOG-07).
+    /// retries instead of failing immediately with SQLITE_BUSY.
     /// Registered at <see cref="DbContextOptionsBuilder"/> configuration time (see
     /// <c>ServiceCollectionExtensions.AddContextInfrastructure</c>) rather than via an
     /// <c>OnConfiguring</c> override, because EF Core forbids mutating options in

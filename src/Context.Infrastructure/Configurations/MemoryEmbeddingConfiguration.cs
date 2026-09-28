@@ -12,6 +12,7 @@ public class MemoryEmbeddingConfiguration : IEntityTypeConfiguration<MemoryEmbed
         builder.HasKey(e => e.MemoryId);
 
         builder.Property(e => e.Vector).IsRequired();
+        builder.Property(e => e.ModelKey).HasMaxLength(256);
 
         builder.HasOne<Memory>()
             .WithOne()

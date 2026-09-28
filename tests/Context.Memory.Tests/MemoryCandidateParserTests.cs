@@ -4,7 +4,7 @@ using FluentAssertions;
 
 namespace Context.Memory.Tests;
 
-public class MemoryCandidateParserTests
+public sealed class MemoryCandidateParserTests
 {
     [Fact]
     public void Parse_reads_the_TOPIC_line_when_present()
@@ -20,7 +20,7 @@ public class MemoryCandidateParserTests
             END_MEMORY
             """;
 
-        var candidates = MemoryCandidateParser.Parse(response).Candidates;
+        var candidates = MemoryCandidateParser.Parse(response, EvidenceSource.EventBatch).Candidates;
 
         candidates.Should().ContainSingle();
         candidates[0].Topic.Should().Be("Search indexing");
@@ -39,7 +39,7 @@ public class MemoryCandidateParserTests
             END_MEMORY
             """;
 
-        var candidates = MemoryCandidateParser.Parse(response).Candidates;
+        var candidates = MemoryCandidateParser.Parse(response, EvidenceSource.EventBatch).Candidates;
 
         candidates.Should().ContainSingle();
         candidates[0].Topic.Should().BeNull();
@@ -58,7 +58,7 @@ public class MemoryCandidateParserTests
             CONFIDENCE: 0.85
             END_MEMORY
             MEMORY 2
-            TYPE: BugFix
+            TYPE: Behavior
             TITLE: Second fix
             BODY: Second body.
             TOPIC: Embedding pipeline concurrency
@@ -66,13 +66,32 @@ public class MemoryCandidateParserTests
             END_MEMORY
             """;
 
-        var candidates = MemoryCandidateParser.Parse(response).Candidates;
+        var candidates = MemoryCandidateParser.Parse(response, EvidenceSource.EventBatch).Candidates;
 
         candidates.Should().HaveCount(2);
         candidates[0].Type.Should().Be(MemoryType.Decision);
         candidates[0].Topic.Should().Be("Job dispatcher retry logic");
-        candidates[1].Type.Should().Be(MemoryType.BugFix);
+        candidates[1].Type.Should().Be(MemoryType.Behavior);
         candidates[1].Topic.Should().Be("Embedding pipeline concurrency");
+    }
+
+    [Theory]
+    [InlineData("BugFix")]
+    [InlineData("3")]
+    public void Parse_maps_an_unknown_or_numeric_TYPE_to_Fact(string rawType)
+    {
+        var response = $"""
+            MEMORY 1
+            TYPE: {rawType}
+            TITLE: Some title
+            BODY: A concrete, specific body sentence.
+            END_MEMORY
+            """;
+
+        var candidates = MemoryCandidateParser.Parse(response, EvidenceSource.EventBatch).Candidates;
+
+        candidates.Should().ContainSingle();
+        candidates[0].Type.Should().Be(MemoryType.Fact);
     }
 
     [Fact]
@@ -81,7 +100,7 @@ public class MemoryCandidateParserTests
         const string response = """
             MEMORY_COUNT: 1
             MEMORY 1
-            TYPE: BugFix
+            TYPE: Behavior
             TITLE: Fixed retry backoff
             BODY: JobDispatcher now caps retry backoff at 30s.
             FILES_MODIFIED:
@@ -91,7 +110,7 @@ public class MemoryCandidateParserTests
             END_MEMORY
             """;
 
-        var candidates = MemoryCandidateParser.Parse(response).Candidates;
+        var candidates = MemoryCandidateParser.Parse(response, EvidenceSource.EventBatch).Candidates;
 
         candidates.Should().ContainSingle();
         candidates[0].ScopePath.Should().Be("src/Context.Application/Jobs");
@@ -110,7 +129,7 @@ public class MemoryCandidateParserTests
             END_MEMORY
             """;
 
-        var candidates = MemoryCandidateParser.Parse(response).Candidates;
+        var candidates = MemoryCandidateParser.Parse(response, EvidenceSource.EventBatch).Candidates;
 
         candidates.Should().ContainSingle();
         candidates[0].ScopePath.Should().BeNull();
@@ -127,7 +146,7 @@ public class MemoryCandidateParserTests
             END_MEMORY
             """;
 
-        var result = MemoryCandidateParser.Parse(response);
+        var result = MemoryCandidateParser.Parse(response, EvidenceSource.EventBatch);
 
         result.Candidates.Should().ContainSingle();
         result.Candidates[0].Title.Should().Be("Title came first");
@@ -144,7 +163,7 @@ public class MemoryCandidateParserTests
             END_MEMORY
             """;
 
-        var result = MemoryCandidateParser.Parse(response);
+        var result = MemoryCandidateParser.Parse(response, EvidenceSource.EventBatch);
 
         result.Candidates.Should().BeEmpty();
         result.DiscardedBlocks.Should().Be(1);
@@ -157,9 +176,56 @@ public class MemoryCandidateParserTests
             MEMORY_COUNT: 0
             """;
 
-        var result = MemoryCandidateParser.Parse(response);
+        var result = MemoryCandidateParser.Parse(response, EvidenceSource.EventBatch);
 
         result.Candidates.Should().BeEmpty();
         result.DiscardedBlocks.Should().Be(0);
+    }
+
+    [Fact]
+    public void Parse_stamps_the_source_and_swallows_a_CONFIDENCE_line_inside_the_body()
+    {
+        const string response = """
+            MEMORY 1
+            TYPE: Decision
+            TITLE: Ledger writes go through LedgerService
+            BODY: LedgerService is the only writer.
+            It wraps each movement in one transaction.
+            CONFIDENCE: 0.95
+            END_MEMORY
+            """;
+
+        var candidate = MemoryCandidateParser.Parse(response, EvidenceSource.CompactSummary).Candidates.Should().ContainSingle().Subject;
+
+        candidate.Source.Should().Be(EvidenceSource.CompactSummary);
+        candidate.Body.Should().Be($"LedgerService is the only writer.{Environment.NewLine}It wraps each movement in one transaction.");
+        candidate.Body.Should().NotContain("CONFIDENCE");
+    }
+
+    [Fact]
+    public void Parse_reads_ENTITIES_inline_or_as_a_bulleted_list()
+    {
+        const string response = """
+            MEMORY 1
+            TYPE: Configuration
+            TITLE: Bills client URL
+            BODY: BillsGraphQlClient reads AWS_BILLS_GQL_URL.
+            ENTITIES: config:AWS_BILLS_GQL_URL, symbol:BillsGraphQlClient; PAY-231
+            END_MEMORY
+            MEMORY 2
+            TYPE: Fact
+            TITLE: Ledger table
+            BODY: Ledger rows live in the ledger table.
+            ENTITIES:
+            - file:src/Ledger/LedgerService.cs
+            - LedgerService
+            END_MEMORY
+            """;
+
+        var candidates = MemoryCandidateParser.Parse(response, EvidenceSource.EventBatch).Candidates;
+
+        candidates.Should().HaveCount(2);
+        candidates[0].Entities.Should().Equal("config:AWS_BILLS_GQL_URL", "symbol:BillsGraphQlClient", "PAY-231");
+        candidates[1].Entities.Should().Equal("file:src/Ledger/LedgerService.cs", "LedgerService");
     }
 }

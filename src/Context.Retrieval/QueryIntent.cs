@@ -1,13 +1,8 @@
 namespace Context.Retrieval;
 
 /// <summary>
-/// Basic query-intent detection for the codemem-inspired hybrid pack re-ranking refinements
-/// (ROADMAP.md). Deliberately a small keyword-match helper, not an NLP classifier: good enough to
-/// route "what's still pending?" and "what did we do last time?" style queries differently from a
-/// neutral one, shared between <see cref="ContextPackBuilder"/> (reordering the notes/issues text
-/// it already has) and <see cref="Context.Application.ContextEngine"/> (which has the underlying
-/// <see cref="Context.Domain.Entities.Memory"/> timestamps <see cref="ContextPackBuilder"/> does
-/// not).
+/// Keyword-match query intent, not an NLP classifier: routes "what's still pending?" and
+/// "what changed?" style queries differently from a neutral one.
 /// </summary>
 public static class QueryIntent
 {
@@ -35,16 +30,19 @@ public static class QueryIntent
     ];
 
     /// <summary>
-    /// Substrings identifying a "what happened before" query. Tune here -- matched
-    /// case-insensitively against the raw query text.
+    /// Substrings identifying a change-history query, the only kind that surfaces Event memories
+    /// in a context pack.
     /// </summary>
-    public static readonly IReadOnlyList<string> RecallKeywords =
+    public static readonly IReadOnlyList<string> ChangeHistoryKeywords =
     [
-        "what did we do",
-        "what we did",
+        "what changed",
+        "when did",
+        "history",
+        "timeline",
         "last time",
-        "previously",
-        "before",
+        "recently",
+        "changelog",
+        "what did we do",
     ];
 
     /// <summary>
@@ -68,7 +66,7 @@ public static class QueryIntent
 
     public static bool IsPendingWork(string queryText) => ContainsAny(queryText, PendingWorkKeywords);
 
-    public static bool IsRecall(string queryText) => ContainsAny(queryText, RecallKeywords);
+    public static bool IsChangeHistory(string queryText) => ContainsAny(queryText, ChangeHistoryKeywords);
 
     /// <summary>Whether a piece of note/issue text itself reads as pending-work/next-steps flavored.</summary>
     public static bool IsPendingWorkFlavored(string noteText) => ContainsAny(noteText, PendingWorkContentKeywords);

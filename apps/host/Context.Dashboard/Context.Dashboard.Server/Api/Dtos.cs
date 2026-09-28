@@ -1,4 +1,6 @@
 using Context.Domain.Entities;
+using Context.Domain.Enums;
+using Context.Memory.Consolidation;
 
 namespace Context.Dashboard.Server.Api;
 
@@ -34,3 +36,21 @@ public sealed record HealthResponse(
     string EmbeddingProvider,
     string RerankerProvider,
     string LlmProvider);
+
+public sealed record ReconsolidationTriggerResponse(Guid ProjectId, Guid JobId, bool DryRun, Guid? ReportId, string Status);
+
+public sealed record ApplyReconsolidationRequest(IReadOnlyList<int>? ExcludeGroups);
+
+public sealed record ReconsolidationReportSummaryDto(
+    Guid Id,
+    DateTimeOffset CreatedAt,
+    ConsolidationReportStatus Status,
+    DateTimeOffset? AppliedAt,
+    ReconsolidationStats? Stats);
+
+public sealed record ReconsolidationReportDto(
+    Guid Id,
+    DateTimeOffset CreatedAt,
+    ConsolidationReportStatus Status,
+    DateTimeOffset? AppliedAt,
+    ReconsolidationReport Report);

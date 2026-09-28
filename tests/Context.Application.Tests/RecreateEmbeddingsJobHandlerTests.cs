@@ -17,8 +17,8 @@ namespace Context.Application.Tests;
 /// Tests for <see cref="RecreateEmbeddingsJobHandler"/>'s three defining behaviors: it never gates
 /// on an existing <c>(ContentHash, Provider)</c> cache row (that's the whole point of a *force*
 /// regeneration job — see <see cref="EmbedChunkJobHandler"/> for the handler that DOES cache-gate),
-/// every chunk id sharing one content hash gets its own vector-index upsert, and every currently
-/// active memory gets re-embedded and re-saved.
+/// every chunk id sharing one content hash gets its own vector-index upsert, and every live
+/// knowledge memory gets re-embedded (events are never embedded).
 /// </summary>
 public sealed class RecreateEmbeddingsJobHandlerTests
 {
@@ -55,12 +55,12 @@ public sealed class RecreateEmbeddingsJobHandlerTests
             });
 
         var chunkVectorIndex = new Mock<IChunkVectorIndex>();
-        var memoryStore = new FakeMemoryStore();
+        var memoryStore = new Mock<IMemoryStore>();
         var resolver = new FakeProviderResolver(FixedVector);
 
         var sut = new RecreateEmbeddingsJobHandler(
             chunkRepository.Object, memoryRepository.Object, embeddingRepository.Object,
-            chunkVectorIndex.Object, memoryStore, resolver);
+            chunkVectorIndex.Object, memoryStore.Object, resolver);
 
         await sut.HandleAsync(MakeJob(projectId), CancellationToken.None);
 
@@ -90,12 +90,12 @@ public sealed class RecreateEmbeddingsJobHandlerTests
 
         var embeddingRepository = new Mock<IEmbeddingRepository>();
         var chunkVectorIndex = new Mock<IChunkVectorIndex>();
-        var memoryStore = new FakeMemoryStore();
+        var memoryStore = new Mock<IMemoryStore>();
         var resolver = new FakeProviderResolver(FixedVector);
 
         var sut = new RecreateEmbeddingsJobHandler(
             chunkRepository.Object, memoryRepository.Object, embeddingRepository.Object,
-            chunkVectorIndex.Object, memoryStore, resolver);
+            chunkVectorIndex.Object, memoryStore.Object, resolver);
 
         await sut.HandleAsync(MakeJob(projectId), CancellationToken.None);
 
@@ -108,10 +108,11 @@ public sealed class RecreateEmbeddingsJobHandlerTests
     }
 
     [Fact]
-    public async Task HandleAsync_re_embeds_and_saves_every_active_memory_returned_by_ListByProjectAsync()
+    public async Task HandleAsync_re_embeds_live_knowledge_and_skips_events()
     {
         var projectId = Guid.NewGuid();
-        var memory = MakeMemory(projectId);
+        var knowledge = MakeMemory(projectId, MemoryType.Decision);
+        var sessionEvent = MakeMemory(projectId, MemoryType.Event);
 
         var chunkRepository = new Mock<IChunkRepository>();
         chunkRepository.Setup(r => r.ListByProjectAsync(projectId, It.IsAny<CancellationToken>()))
@@ -119,24 +120,22 @@ public sealed class RecreateEmbeddingsJobHandlerTests
 
         var memoryRepository = new Mock<IMemoryRepository>();
         memoryRepository.Setup(r => r.ListByProjectAsync(projectId, false, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<Context.Domain.Entities.Memory>)[memory]);
+            .ReturnsAsync((IReadOnlyList<Context.Domain.Entities.Memory>)[knowledge, sessionEvent]);
 
-        var embeddingRepository = new Mock<IEmbeddingRepository>();
-        var chunkVectorIndex = new Mock<IChunkVectorIndex>();
-        var memoryStore = new FakeMemoryStore();
-        var resolver = new FakeProviderResolver(FixedVector);
-
+        var memoryStore = new Mock<IMemoryStore>();
         var sut = new RecreateEmbeddingsJobHandler(
-            chunkRepository.Object, memoryRepository.Object, embeddingRepository.Object,
-            chunkVectorIndex.Object, memoryStore, resolver);
+            chunkRepository.Object, memoryRepository.Object, new Mock<IEmbeddingRepository>().Object,
+            new Mock<IChunkVectorIndex>().Object, memoryStore.Object, new FakeProviderResolver(FixedVector));
 
         await sut.HandleAsync(MakeJob(projectId), CancellationToken.None);
 
-        memoryStore.Saved.Should().ContainSingle();
-        var (savedMemory, savedEmbedding) = memoryStore.Saved.Single();
-        savedMemory.Id.Should().Be(memory.Id);
-        savedEmbedding.Should().NotBeNull();
-        savedEmbedding!.Should().BeEquivalentTo(FixedVector);
+        memoryStore.Verify(
+            s => s.UpsertEmbeddingAsync(
+                It.Is<Context.Domain.Entities.Memory>(m => m.Id == knowledge.Id),
+                It.Is<MemoryVector>(v => v.ModelKey == "unknown" && v.Vector.SequenceEqual(FixedVector)),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        memoryStore.VerifyNoOtherCalls();
     }
 
     private static Job MakeJob(Guid projectId) => new()
@@ -157,11 +156,11 @@ public sealed class RecreateEmbeddingsJobHandlerTests
         ContentHash = contentHash
     };
 
-    private static Context.Domain.Entities.Memory MakeMemory(Guid projectId) => new()
+    private static Context.Domain.Entities.Memory MakeMemory(Guid projectId, MemoryType type) => new()
     {
         Id = Guid.NewGuid(),
         ProjectId = projectId,
-        Type = MemoryType.Decision,
+        Type = type,
         Title = "Use SQLite for local caching",
         Body = "The team decided to use SQLite for local caching due to zero-ops deployment.",
         CreatedAt = DateTimeOffset.UtcNow,
@@ -194,32 +193,5 @@ public sealed class RecreateEmbeddingsJobHandlerTests
         public void Dispose()
         {
         }
-    }
-
-    /// <summary>In-memory <see cref="IMemoryStore"/> that just accumulates every <see cref="SaveAsync"/>
-    /// call so a test can assert on what was (re-)saved -- <see cref="GetExistingWithEmbeddingsAsync"/>/
-    /// <see cref="MarkSupersededAsync"/> are never called by <see cref="RecreateEmbeddingsJobHandler"/>
-    /// (it reads memories via <see cref="IMemoryRepository.ListByProjectAsync"/> directly), so they're
-    /// implemented only to satisfy the interface.</summary>
-    private sealed class FakeMemoryStore : IMemoryStore
-    {
-        public List<(Context.Domain.Entities.Memory Memory, float[]? Embedding)> Saved { get; } = [];
-
-        public Task<IReadOnlyList<ExistingMemoryWithEmbedding>> GetExistingWithEmbeddingsAsync(Guid projectId, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<ExistingMemoryWithEmbedding>>([]);
-
-        public Task SaveAsync(Context.Domain.Entities.Memory memory, float[]? embedding, CancellationToken ct)
-        {
-            Saved.Add((memory, embedding));
-            return Task.CompletedTask;
-        }
-
-        public Task MarkSupersededAsync(Guid oldMemoryId, Guid newMemoryId, CancellationToken ct) => Task.CompletedTask;
-
-        public Task SaveMergedAsync(Context.Domain.Entities.Memory merged, float[] embedding, IReadOnlyCollection<Guid> supersededIds, CancellationToken ct) =>
-            throw new NotSupportedException("Only CompactMemoryJobHandler merges memories.");
-
-        public Task<int?> ReinforceAsync(Guid memoryId, DateTimeOffset reinforcedAt, int promotionReinforcementThreshold, CancellationToken ct) =>
-            Task.FromResult<int?>(null);
     }
 }

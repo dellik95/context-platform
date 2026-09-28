@@ -1,52 +1,53 @@
 using Context.Domain.Entities;
+using Context.Domain.Enums;
 
 namespace Context.Infrastructure.Abstractions;
 
+/// <summary>
+/// "Live" throughout means <see cref="MemoryStatus.Active"/> or <see cref="MemoryStatus.Contested"/>
+/// (<see cref="Memory.IsLive"/>); Superseded and Obsolete memories are kept for history.
+/// </summary>
 public interface IMemoryRepository
 {
     Task<Memory?> GetByIdAsync(Guid id, CancellationToken ct);
     Task<Memory> AddAsync(Memory memory, CancellationToken ct);
     Task UpdateAsync(Memory memory, CancellationToken ct);
 
-    /// <summary>Hard delete — a user explicitly discarding a memory, not a supersession
-    /// (superseded memories are kept for history via <see cref="Memory.SupersededById"/>).
-    /// No-op (does not throw) if the id doesn't exist.</summary>
+    /// <summary>Hard delete of the memory with its evidence, entities and embedding. Memories it
+    /// superseded lose their pointer and become Obsolete. No-op if the id doesn't exist.</summary>
     Task DeleteAsync(Guid id, CancellationToken ct);
-
-    /// <summary>Simple substring match over Title/Body scoped to a project — the offline-friendly
-    /// fallback path; a real implementation can layer embedding similarity on top via
-    /// Context.Retrieval without changing this contract. When <paramref name="topic"/> is
-    /// non-null/whitespace, results are additionally restricted to memories whose
-    /// <see cref="Memory.Topic"/> matches it (case-insensitive, exact match) — lets a caller
-    /// combine free-text search with "only this topic" the way the dashboard's filter bar does.</summary>
-    Task<IReadOnlyList<Memory>> SearchAsync(Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null);
 
     Task<IReadOnlyList<Memory>> ListByProjectAsync(Guid projectId, bool includeSuperseded, CancellationToken ct);
 
-    /// <summary>Batch fetch by id, e.g. to materialize hits from a vector-search pass
-    /// (<c>IMemoryVectorIndex.SearchAsync</c>) that only returns ids/scores. Missing ids are
-    /// silently omitted rather than erroring — a stale vector-index record pointing at a since-
-    /// deleted memory should just drop out of the result set.</summary>
+    /// <summary>Live memories sharing <paramref name="topicKey"/> (exact match on the normalized key).</summary>
+    Task<IReadOnlyList<Memory>> ListLiveByTopicKeyAsync(Guid projectId, string topicKey, CancellationToken ct);
+
+    /// <summary>Batch fetch by id; missing ids are silently omitted.</summary>
     Task<IReadOnlyList<Memory>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct);
 
-    /// <summary>Points <paramref name="oldMemoryId"/> at <paramref name="newMemoryId"/> and nothing
-    /// else. False when the row no longer exists.</summary>
-    /// <remarks>Single-column update rather than read-modify-<see cref="UpdateAsync"/>: the latter
-    /// writes back every column of a stale snapshot, reverting whatever else changed meanwhile.</remarks>
-    Task<bool> MarkSupersededAsync(Guid oldMemoryId, Guid newMemoryId, CancellationToken ct);
+    /// <summary>Appends evidence rows; empty ids are assigned.</summary>
+    Task AddEvidenceAsync(IReadOnlyCollection<MemoryEvidence> evidence, CancellationToken ct);
 
-    /// <summary>Points every id in <paramref name="oldMemoryIds"/> at <paramref name="newMemoryId"/>
-    /// in one statement. Returns the number of rows updated; ids that no longer exist are ignored.</summary>
-    /// <remarks>One statement rather than a loop over <see cref="MarkSupersededAsync"/> so a
-    /// compaction merge can supersede a whole cluster inside the transaction that inserted the
-    /// merged memory — a partial loop would otherwise leave some sources pointing at the merge and
-    /// the rest still active, i.e. the same fact live twice.</remarks>
-    Task<int> MarkSupersededBatchAsync(IReadOnlyCollection<Guid> oldMemoryIds, Guid newMemoryId, CancellationToken ct);
+    /// <summary>Evidence for the given memories, oldest first.</summary>
+    Task<IReadOnlyList<MemoryEvidence>> ListEvidenceAsync(IReadOnlyCollection<Guid> memoryIds, CancellationToken ct);
 
-    /// <summary>Atomically increments <see cref="Memory.ReinforcementCount"/>, stamps
-    /// <see cref="Memory.LastReinforcedAt"/>, and promotes the memory to
-    /// <see cref="Domain.Enums.MemoryTier.LongTerm"/> at or above
-    /// <paramref name="promotionReinforcementThreshold"/> (or when pinned). Returns the new count,
-    /// or null when the row no longer exists.</summary>
-    Task<int?> ReinforceAsync(Guid memoryId, DateTimeOffset reinforcedAt, int promotionReinforcementThreshold, CancellationToken ct);
+    /// <summary>Replaces the full entity set of <paramref name="memoryId"/>; duplicate keys collapse.</summary>
+    Task ReplaceEntitiesAsync(Guid memoryId, IReadOnlyCollection<MemoryEntity> entities, CancellationToken ct);
+
+    Task<IReadOnlyList<MemoryEntity>> ListEntitiesAsync(IReadOnlyCollection<Guid> memoryIds, CancellationToken ct);
+
+    /// <summary>Entity rows with any of <paramref name="keys"/> that belong to live memories of the project.</summary>
+    Task<IReadOnlyList<MemoryEntity>> ListLiveEntitiesByKeysAsync(Guid projectId, IReadOnlyCollection<string> keys, CancellationToken ct);
+
+    Task<MemoryConsolidationReport> AddReportAsync(MemoryConsolidationReport report, CancellationToken ct);
+    Task<MemoryConsolidationReport?> GetReportAsync(Guid id, CancellationToken ct);
+
+    /// <summary>Newest first.</summary>
+    Task<IReadOnlyList<MemoryConsolidationReport>> ListReportsAsync(Guid projectId, CancellationToken ct);
+
+    /// <summary>Atomically moves a report from <paramref name="from"/> to <paramref name="to"/>, replacing its
+    /// JSON when <paramref name="reportJson"/> is non-null. False when the report is missing or not in
+    /// <paramref name="from"/>, so two callers can never both claim the same transition.</summary>
+    Task<bool> SetReportStatusAsync(
+        Guid id, ConsolidationReportStatus from, ConsolidationReportStatus to, DateTimeOffset? appliedAt, string? reportJson, CancellationToken ct);
 }

@@ -1,0 +1,104 @@
+using Context.Application.Jobs;
+using Context.Dashboard.Server.Security;
+using Context.Domain.Entities;
+using Context.Domain.Enums;
+using Context.Infrastructure.Abstractions;
+using Context.Memory.Consolidation;
+
+namespace Context.Dashboard.Server.Api;
+
+/// <summary>
+/// Batch memory reconsolidation: enqueue a run (a dry run by default, which only stores a Pending
+/// report), review reports, and apply or discard a Pending one. Apply claims the report (Pending to
+/// Applying) before enqueueing, so a report is applied at most once. A report of another project
+/// reports 404, like <see cref="MemoryEndpoints"/>.
+/// </summary>
+public static class MemoryReconsolidationEndpoints
+{
+    public static void MapMemoryReconsolidationEndpoints(this WebApplication app)
+    {
+        var group = app.MapGroup("/api/memories/reconsolidation").RequireBearerToken().RequireMatchingProjectId();
+        group.MapPost("", EnqueueAsync);
+        group.MapGet("/reports", ListAsync);
+        group.MapGet("/reports/{id:guid}", GetAsync);
+        group.MapPost("/reports/{id:guid}/apply", ApplyAsync);
+        group.MapPost("/reports/{id:guid}/discard", DiscardAsync);
+    }
+
+    private static async Task<IResult> EnqueueAsync(
+        Guid? projectId, bool? dryRun, IJobQueue jobQueue, CurrentProjectAccessor currentProject, CancellationToken ct)
+    {
+        var id = projectId ?? currentProject.ProjectId;
+        var payload = new ReconsolidateMemoryPayload(id, DryRun: dryRun ?? true);
+        var jobId = await jobQueue.EnqueueAsync(JobType.ReconsolidateMemory, payload, id, JobPriority.Session, ct).ConfigureAwait(false);
+        return Results.Accepted(value: new ReconsolidationTriggerResponse(id, jobId, payload.DryRun, null, "queued"));
+    }
+
+    private static async Task<IResult> ListAsync(
+        Guid? projectId, IMemoryRepository memories, CurrentProjectAccessor currentProject, CancellationToken ct)
+    {
+        var reports = await memories.ListReportsAsync(projectId ?? currentProject.ProjectId, ct).ConfigureAwait(false);
+        return Results.Ok(reports.Select(r => new ReconsolidationReportSummaryDto(
+            r.Id, r.CreatedAt, r.Status, r.AppliedAt, ReconsolidationReport.FromJson(r.ReportJson).Stats)).ToList());
+    }
+
+    private static async Task<IResult> GetAsync(
+        Guid id, IMemoryRepository memories, CurrentProjectAccessor currentProject, CancellationToken ct)
+    {
+        var report = await FindAsync(id, memories, currentProject, ct).ConfigureAwait(false);
+        return report is null
+            ? Results.NotFound()
+            : Results.Ok(new ReconsolidationReportDto(report.Id, report.CreatedAt, report.Status, report.AppliedAt, ReconsolidationReport.FromJson(report.ReportJson)));
+    }
+
+    private static async Task<IResult> ApplyAsync(
+        Guid id, ApplyReconsolidationRequest? request, IMemoryRepository memories, IJobQueue jobQueue,
+        CurrentProjectAccessor currentProject, CancellationToken ct)
+    {
+        var report = await FindAsync(id, memories, currentProject, ct).ConfigureAwait(false);
+        if (report is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (!await memories.SetReportStatusAsync(id, ConsolidationReportStatus.Pending, ConsolidationReportStatus.Applying, null, null, ct).ConfigureAwait(false))
+        {
+            return Results.Conflict(new { message = $"Report '{id}' is no longer Pending; only a Pending report can be applied." });
+        }
+
+        var payload = new ReconsolidateMemoryPayload(report.ProjectId, DryRun: false, ReportId: id, ExcludeGroups: request?.ExcludeGroups);
+        Guid jobId;
+        try
+        {
+            jobId = await jobQueue.EnqueueAsync(JobType.ReconsolidateMemory, payload, report.ProjectId, JobPriority.Session, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            await memories.SetReportStatusAsync(id, ConsolidationReportStatus.Applying, ConsolidationReportStatus.Pending, null, null, CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+
+        return Results.Accepted(value: new ReconsolidationTriggerResponse(report.ProjectId, jobId, false, id, "queued"));
+    }
+
+    private static async Task<IResult> DiscardAsync(
+        Guid id, IMemoryRepository memories, CurrentProjectAccessor currentProject, CancellationToken ct)
+    {
+        var report = await FindAsync(id, memories, currentProject, ct).ConfigureAwait(false);
+        if (report is null)
+        {
+            return Results.NotFound();
+        }
+
+        return await memories.SetReportStatusAsync(id, ConsolidationReportStatus.Pending, ConsolidationReportStatus.Discarded, null, null, ct).ConfigureAwait(false)
+            ? Results.NoContent()
+            : Results.Conflict(new { message = $"Report '{id}' is no longer Pending; only a Pending report can be discarded." });
+    }
+
+    private static async Task<MemoryConsolidationReport?> FindAsync(
+        Guid id, IMemoryRepository memories, CurrentProjectAccessor currentProject, CancellationToken ct)
+    {
+        var report = await memories.GetReportAsync(id, ct).ConfigureAwait(false);
+        return report is not null && report.ProjectId == currentProject.ProjectId ? report : null;
+    }
+}

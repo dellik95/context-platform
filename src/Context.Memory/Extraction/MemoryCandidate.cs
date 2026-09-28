@@ -2,29 +2,34 @@ using Context.Domain.Enums;
 
 namespace Context.Memory.Extraction;
 
-/// <summary>A proposed memory, before dedup/embedding/persistence.</summary>
-/// <param name="Facts">Atomic, standalone facts extracted alongside the narrative <paramref name="Body"/> —
-/// the compact form shown when a search result needs to say something useful in few tokens.</param>
-/// <param name="Topic">Short, reusable phrase naming the feature/subsystem/component this memory is
-/// about (see <see cref="MemoryExtractionPromptBuilder"/>'s TOPIC documentation) — distinct from
-/// <paramref name="Title"/>, which is specific to this one memory, so that memories about the same
-/// subject extracted across different sessions share the same Topic. Null when the LLM omitted it.</param>
-/// <param name="Concepts">Knowledge-category tags drawn from a fixed taxonomy (see
-/// <see cref="MemoryExtractionPromptBuilder"/>'s CONCEPTS documentation) — e.g. "gotcha", "pattern".</param>
-/// <param name="FilesRead">Files this specific memory is about but that weren't modified (read for context/investigation).</param>
-/// <param name="FilesModified">Files this specific memory is about that were actually changed.</param>
-/// <param name="ScopePath">Repo-relative directory/module path this memory is scoped to (see
-/// <see cref="Context.Domain.Entities.Memory.ScopePath"/>) — structured and hierarchical, unlike
-/// <paramref name="Topic"/> (a short human-readable phrase). Null when the LLM omitted it or a
-/// heuristic couldn't derive one.</param>
+/// <summary>A proposed memory, before consolidation.</summary>
+/// <param name="Source">Where the candidate came from; drives its base confidence and whether it may
+/// supersede an existing memory.</param>
+/// <param name="Facts">Atomic standalone facts, the compact form of <paramref name="Body"/>.</param>
+/// <param name="Concepts">Knowledge-category tags from a fixed taxonomy (e.g. "gotcha", "pattern").</param>
+/// <param name="FilesRead">Files the memory is about that were only read.</param>
+/// <param name="FilesModified">Files the memory is about that were changed.</param>
+/// <param name="Topic">Short reusable subsystem phrase shared across sessions, unlike the specific
+/// <paramref name="Title"/>. Null when omitted.</param>
+/// <param name="ScopePath">Repo-relative directory the memory is scoped to.</param>
 public sealed record MemoryCandidate(
     MemoryType Type,
     string Title,
     string Body,
-    double Confidence,
+    EvidenceSource Source,
     IReadOnlyList<string> Facts,
     IReadOnlyList<string> Concepts,
     IReadOnlyList<string> FilesRead,
     IReadOnlyList<string> FilesModified,
     string? Topic = null,
-    string? ScopePath = null);
+    string? ScopePath = null)
+{
+    /// <summary>Concrete names the producer called out (ticket keys, symbols, config keys, files);
+    /// merged with the entities extracted from the text.</summary>
+    public IReadOnlyList<string> Entities { get; init; } = [];
+
+    /// <summary>When the claim was observed (the newest event it was extracted from, or when the
+    /// compact summary was captured); null means now. Newer-versus-older decisions compare this, not
+    /// when consolidation happened to run.</summary>
+    public DateTimeOffset? ObservedAt { get; init; }
+}

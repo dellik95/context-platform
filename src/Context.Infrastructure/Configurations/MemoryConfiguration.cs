@@ -14,14 +14,19 @@ public class MemoryConfiguration : IEntityTypeConfiguration<Memory>
         builder.Property(m => m.Title).IsRequired().HasMaxLength(512);
         builder.Property(m => m.Body).IsRequired();
         builder.Property(m => m.Topic).HasMaxLength(100);
+        builder.Property(m => m.TopicKey).HasMaxLength(100);
         builder.Property(m => m.ScopePath).HasMaxLength(400);
         builder.Property(m => m.Confidence).IsRequired().HasDefaultValue(0.7);
         builder.Property(m => m.Tier).IsRequired();
+        builder.Property(m => m.Status).IsRequired();
+        builder.Property(m => m.SourceCount).IsRequired();
         builder.Property(m => m.CreatedAt).IsRequired();
         builder.Property(m => m.LastReinforcedAt).IsRequired();
 
         builder.HasIndex(m => new { m.ProjectId, m.Type });
+        builder.HasIndex(m => new { m.ProjectId, m.Status });
         builder.HasIndex(m => new { m.ProjectId, m.Topic });
+        builder.HasIndex(m => new { m.ProjectId, m.TopicKey });
         builder.HasIndex(m => new { m.ProjectId, m.ScopePath });
         builder.HasIndex(m => m.SupersededById);
 
@@ -29,6 +34,8 @@ public class MemoryConfiguration : IEntityTypeConfiguration<Memory>
             .WithMany()
             .HasForeignKey(m => m.ProjectId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Ignore(m => m.IsLive);
 
         // Self-referencing supersession link: Restrict to avoid cascade cycles.
         builder.HasOne<Memory>()

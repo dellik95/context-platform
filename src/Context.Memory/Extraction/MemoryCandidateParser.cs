@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using Context.Domain.Enums;
@@ -8,12 +7,11 @@ namespace Context.Memory.Extraction;
 /// <summary>Parses the strict-format response requested by <see cref="MemoryExtractionPromptBuilder"/>.</summary>
 internal static partial class MemoryCandidateParser
 {
-    private const double DefaultConfidence = 0.7;
-
     /// <summary>Which bulleted-list section (if any) subsequent bullet lines belong to.</summary>
-    private enum ListSection { None, Facts, Concepts, FilesRead, FilesModified }
+    private enum ListSection { None, Facts, Concepts, FilesRead, FilesModified, Entities }
 
-    public static MemoryCandidateParseResult Parse(string llmResponse)
+    /// <param name="source">Stamped on every candidate: the material the response was extracted from.</param>
+    public static MemoryCandidateParseResult Parse(string llmResponse, EvidenceSource source)
     {
         var results = new List<MemoryCandidate>();
         var discardedBlocks = 0;
@@ -25,12 +23,12 @@ internal static partial class MemoryCandidateParser
         MemoryType? type = null;
         string? title = null;
         string? topic = null;
-        var confidence = DefaultConfidence;
         var body = new StringBuilder();
         var facts = new List<string>();
         var concepts = new List<string>();
         var filesRead = new List<string>();
         var filesModified = new List<string>();
+        var entities = new List<string>();
         var inBody = false;
         var currentList = ListSection.None;
 
@@ -46,13 +44,16 @@ internal static partial class MemoryCandidateParser
                     type.Value,
                     title.Trim(),
                     body.ToString().Trim(),
-                    confidence,
+                    source,
                     facts.ToList(),
                     concepts.ToList(),
                     readList,
                     modifiedList,
                     string.IsNullOrWhiteSpace(topic) ? null : topic.Trim(),
-                    ScopePathHeuristics.DeriveFromFiles(modifiedList, readList)));
+                    ScopePathHeuristics.DeriveFromFiles(modifiedList, readList))
+                {
+                    Entities = entities.ToList()
+                });
             }
             else if (hadContent)
             {
@@ -64,12 +65,12 @@ internal static partial class MemoryCandidateParser
             type = null;
             title = null;
             topic = null;
-            confidence = DefaultConfidence;
             body.Clear();
             facts.Clear();
             concepts.Clear();
             filesRead.Clear();
             filesModified.Clear();
+            entities.Clear();
             inBody = false;
             currentList = ListSection.None;
         }
@@ -110,14 +111,29 @@ internal static partial class MemoryCandidateParser
                 continue;
             }
 
-            var confidenceMatch = ConfidenceRegex().Match(trimmed);
-            if (confidenceMatch.Success)
+            // Confidence is derived from evidence, not self-reported; the line is swallowed so it
+            // cannot leak into a body.
+            if (ConfidenceRegex().IsMatch(trimmed))
             {
                 inBody = false;
                 currentList = ListSection.None;
-                if (double.TryParse(confidenceMatch.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedConfidence))
+                continue;
+            }
+
+            var entitiesMatch = EntitiesRegex().Match(trimmed);
+            if (entitiesMatch.Success)
+            {
+                entities.Clear();
+                inBody = false;
+                var inline = entitiesMatch.Groups[1].Value.Trim();
+                if (inline.Length == 0)
                 {
-                    confidence = Math.Clamp(parsedConfidence, 0.0, 1.0);
+                    currentList = ListSection.Entities;
+                }
+                else
+                {
+                    entities.AddRange(inline.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                    currentList = ListSection.None;
                 }
 
                 continue;
@@ -190,6 +206,7 @@ internal static partial class MemoryCandidateParser
                             ListSection.Concepts => concepts,
                             ListSection.FilesRead => filesRead,
                             ListSection.FilesModified => filesModified,
+                            ListSection.Entities => entities,
                             _ => null,
                         };
                         target?.Add(value);
@@ -209,8 +226,11 @@ internal static partial class MemoryCandidateParser
         return new MemoryCandidateParseResult(results, discardedBlocks);
     }
 
-    private static MemoryType ParseType(string raw) =>
-        Enum.TryParse<MemoryType>(raw.Trim(), ignoreCase: true, out var parsed) ? parsed : MemoryType.Discovery;
+    private static MemoryType ParseType(string raw)
+    {
+        MemoryTypeExtensions.TryParseName(raw, out var type);
+        return type;
+    }
 
     [GeneratedRegex(@"^MEMORY\s*\d*\s*$", RegexOptions.IgnoreCase)]
     private static partial Regex MemoryHeaderRegex();
@@ -227,8 +247,11 @@ internal static partial class MemoryCandidateParser
     [GeneratedRegex(@"^TOPIC:\s*(.+)$", RegexOptions.IgnoreCase)]
     private static partial Regex TopicRegex();
 
-    [GeneratedRegex(@"^CONFIDENCE:\s*([0-9.]+)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^CONFIDENCE:", RegexOptions.IgnoreCase)]
     private static partial Regex ConfidenceRegex();
+
+    [GeneratedRegex(@"^ENTITIES:\s*(.*)$", RegexOptions.IgnoreCase)]
+    private static partial Regex EntitiesRegex();
 
     [GeneratedRegex(@"^FACTS:\s*$", RegexOptions.IgnoreCase)]
     private static partial Regex FactsHeaderRegex();

@@ -181,7 +181,7 @@ try
         builder.Services.AddSingleton<Context.Application.Jobs.IJobSignal, Context.Dashboard.Server.Jobs.RedisJobSignal>();
     }
 
-    // Dev-only, explicit allow-list — see BACKLOG-01 in docs/architecture/ARCHITECTURE_ASSESSMENT.md.
+    // Dev-only, explicit allow-list.
     // The previous SetIsOriginAllowed(_ => true).AllowCredentials() combination let ANY local
     // browser tab silently call this API/hub/MCP endpoint with the user's own cookies/credentials
     // implied — wildcard-origin + credentials is exactly the pattern browsers otherwise forbid for
@@ -266,6 +266,7 @@ try
     app.MapProjectEndpoints();
     app.MapSearchEndpoints();
     app.MapMemoryEndpoints();
+    app.MapMemoryReconsolidationEndpoints();
     app.MapGraphEndpoints();
     app.MapSessionEndpoints();
     app.MapHealthEndpoints();
@@ -309,5 +310,5 @@ finally
 // Exposes the top-level-statement Program to WebApplicationFactory<Program> in Context.IntegrationTests.
 public partial class Program;
 
-// Captured once at startup so /api/system/status can report process uptime (CONTRACTS.md §12).
+// Captured once at startup so /api/system/status can report process uptime.
 public readonly record struct HostStartTime(DateTimeOffset Value);

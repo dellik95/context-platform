@@ -1,9 +1,9 @@
-namespace Context.Memory.Extraction;
+namespace Context.Shared;
 
 public static class CosineSimilarity
 {
     /// <summary>Cosine similarity in [-1, 1]. Returns 0 for a zero-length or dimension-mismatched vector.</summary>
-    public static double Compute(float[] a, float[] b)
+    public static double Compute(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
     {
         if (a.Length != b.Length || a.Length == 0)
         {

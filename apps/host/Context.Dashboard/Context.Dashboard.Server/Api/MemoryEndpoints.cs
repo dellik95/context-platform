@@ -1,45 +1,39 @@
 using Context.Application;
 using Context.Dashboard.Server.Security;
-using Context.Infrastructure.Abstractions;
+using Context.Domain.Enums;
 
 namespace Context.Dashboard.Server.Api;
 
-/// <summary><c>GET /api/memories</c> — thin wrapper over <see cref="IContextEngine.SearchMemoryAsync"/>,
-/// plus <c>DELETE /api/memories/{id}</c> for a user explicitly discarding one. Both take an id the
-/// caller supplies, so both are scoped to the project the caller's bearer token resolved to — the
-/// query parameter by <see cref="ProjectScopeAuth.RequireMatchingProjectIdFilter"/>, the memory id
-/// by the ownership check in <see cref="DeleteAsync"/>.</summary>
+/// <summary><c>GET /api/memories</c> (search), <c>GET /api/memories/{id}</c> (memory with evidence and
+/// entities) and <c>DELETE /api/memories/{id}</c>. Scoped to the project the caller's bearer token
+/// resolved to: the query parameter by <see cref="ProjectScopeAuth.RequireMatchingProjectIdFilter"/>,
+/// a memory id by the engine's ownership check (another project's memory reports 404, not 403).</summary>
 public static class MemoryEndpoints
 {
     public static void MapMemoryEndpoints(this WebApplication app)
     {
         var group = app.MapGroup("").RequireBearerToken().RequireMatchingProjectId();
         group.MapGet("/api/memories", SearchAsync);
+        group.MapGet("/api/memories/{id:guid}", GetAsync);
         group.MapDelete("/api/memories/{id:guid}", DeleteAsync);
     }
 
     private static async Task<IResult> SearchAsync(
-        Guid? projectId, string? q, bool? includeSuperseded,
+        Guid? projectId, string? q, bool? includeSuperseded, string? topic, MemoryKind? kind,
         IContextEngine engine, CurrentProjectAccessor currentProject, CancellationToken ct)
     {
         var results = await engine
-            .SearchMemoryAsync(projectId ?? currentProject.ProjectId, q ?? string.Empty, includeSuperseded ?? false, ct)
+            .SearchMemoryAsync(projectId ?? currentProject.ProjectId, q ?? string.Empty, includeSuperseded ?? false, ct, topic, kind)
             .ConfigureAwait(false);
         return Results.Ok(results);
     }
 
-    private static async Task<IResult> DeleteAsync(
-        Guid id, IMemoryRepository memories, CurrentProjectAccessor currentProject, CancellationToken ct)
+    private static async Task<IResult> GetAsync(Guid id, IContextEngine engine, CurrentProjectAccessor currentProject, CancellationToken ct)
     {
-        // A memory belonging to another project reports 404 rather than 403: the caller has no
-        // business learning whether that id exists at all.
-        var memory = await memories.GetByIdAsync(id, ct).ConfigureAwait(false);
-        if (memory is null || memory.ProjectId != currentProject.ProjectId)
-        {
-            return Results.NotFound();
-        }
-
-        await memories.DeleteAsync(id, ct).ConfigureAwait(false);
-        return Results.NoContent();
+        var detail = await engine.GetMemoryAsync(currentProject.ProjectId, id, ct).ConfigureAwait(false);
+        return detail is null ? Results.NotFound() : Results.Ok(detail);
     }
+
+    private static async Task<IResult> DeleteAsync(Guid id, IContextEngine engine, CurrentProjectAccessor currentProject, CancellationToken ct) =>
+        await engine.ForgetMemoryAsync(currentProject.ProjectId, id, ct).ConfigureAwait(false) ? Results.NoContent() : Results.NotFound();
 }

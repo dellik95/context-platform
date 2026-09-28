@@ -1,5 +1,6 @@
 using Context.Memory;
 using Context.Memory.Abstractions;
+using Context.Memory.Consolidation;
 using Context.Memory.Extraction;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -7,17 +8,10 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Context.Memory.Tests;
 
 /// <summary>
-/// Covers MEMORY_PIPELINE_PLAN.md §H test #12: MCP's explicit-remember path
-/// (<c>ContextEngine.RememberExplicitlyAsync</c>) and the hook-driven extraction path
-/// (<c>LlmMemoryExtractor</c>) must reach the same <see cref="IMemoryConsolidator"/> - not two
-/// parallel consolidation implementations. Verified structurally at the DI-registration level
-/// (no full integration test needed): <see cref="ServiceCollectionExtensions.AddContextMemory"/>
-/// registers exactly one <see cref="IMemoryConsolidator"/> service, Scoped, backed by
-/// <see cref="MemoryConsolidator"/> - so any two consumers resolved from the same DI scope (as
-/// both <c>ContextEngine</c> and <c>LlmMemoryExtractor</c> are, within one request) necessarily
-/// get the identical instance.
+/// Explicit remember (<c>ContextEngine</c>) and extraction (<c>LlmMemoryExtractor</c>) must reach the
+/// same <see cref="IMemoryConsolidator"/>: one scoped registration means one instance per scope.
 /// </summary>
-public class ServiceCollectionExtensionsTests
+public sealed class ServiceCollectionExtensionsTests
 {
     [Fact]
     public void AddContextMemory_registers_exactly_one_scoped_IMemoryConsolidator_backed_by_MemoryConsolidator()

@@ -1,4 +1,5 @@
 using Context.Domain.Entities;
+using Context.Domain.Enums;
 using Context.Memory.Abstractions;
 using Context.Memory.Summarization;
 using Context.Providers;
@@ -10,14 +11,10 @@ namespace Context.Memory.Extraction;
 
 /// <summary>
 /// Default <see cref="IMemoryExtractor"/>. Asks an LLM (or, offline, a heuristic over the
-/// session material) to propose candidate memories, then hands each candidate to
-/// <see cref="IMemoryConsolidator"/>, which embeds it, deduplicates it against the project's
-/// existing memories, and decides whether to reinforce/supersede/insert it (see
-/// <see cref="MemoryConsolidator"/> for that decision logic — this class no longer makes it
-/// directly; it only generates candidates and orchestrates the per-candidate consolidation call).
+/// session material) to propose candidate memories and hands each one to
+/// <see cref="IMemoryConsolidator"/>, which decides where it belongs.
 /// </summary>
 public sealed class LlmMemoryExtractor(
-    IMemoryStore memoryStore,
     IMemoryConsolidator consolidator,
     IProviderResolver providerResolver,
     IUsageRecorder usageRecorder,
@@ -25,28 +22,24 @@ public sealed class LlmMemoryExtractor(
 {
     internal const int MaxCandidatesPerChunk = 25;
 
-    public Task<IReadOnlyList<Context.Domain.Entities.Memory>> ExtractAsync(Guid projectId, SessionSummaryChunk chunk, CancellationToken ct) =>
-        ExtractCoreAsync(
-            projectId,
-            chunk.SessionId,
-            () => MemoryExtractionPromptBuilder.BuildUserPrompt(chunk),
-            () => MemoryCandidateHeuristics.FromSummary(chunk),
-            ct);
-
     public Task<IReadOnlyList<Context.Domain.Entities.Memory>> ExtractFromEventsAsync(
         Guid projectId, Guid sessionId, IReadOnlyList<SessionEvent> events, CancellationToken ct) =>
         ExtractCoreAsync(
             projectId,
             sessionId,
+            EvidenceSource.EventBatch,
+            events.Count > 0 ? events.Max(e => e.Timestamp) : null,
             () => MemoryExtractionPromptBuilder.BuildUserPromptFromEvents(sessionId, events),
             () => MemoryCandidateHeuristics.FromSummary(HeuristicChunk(sessionId, events)),
             ct);
 
     public Task<IReadOnlyList<Context.Domain.Entities.Memory>> ExtractFromCompactSummaryAsync(
-        Guid projectId, Guid sessionId, string compactSummary, CancellationToken ct) =>
+        Guid projectId, Guid sessionId, string compactSummary, DateTimeOffset observedAt, CancellationToken ct) =>
         ExtractCoreAsync(
             projectId,
             sessionId,
+            EvidenceSource.CompactSummary,
+            observedAt,
             () => MemoryExtractionPromptBuilder.BuildUserPromptFromCompactSummary(sessionId, compactSummary),
             static () => [],
             ct);
@@ -54,6 +47,8 @@ public sealed class LlmMemoryExtractor(
     private async Task<IReadOnlyList<Context.Domain.Entities.Memory>> ExtractCoreAsync(
         Guid projectId,
         Guid sessionId,
+        EvidenceSource source,
+        DateTimeOffset? observedAt,
         Func<string> buildUserPrompt,
         Func<IReadOnlyList<MemoryCandidate>> heuristicCandidates,
         CancellationToken ct)
@@ -62,7 +57,7 @@ public sealed class LlmMemoryExtractor(
         var usedLlm = !chatClient.IsNoOp();
 
         var candidates = usedLlm
-            ? await ExtractCandidatesViaLlmAsync(buildUserPrompt(), sessionId, projectId, chatClient, ct).ConfigureAwait(false)
+            ? await ExtractCandidatesViaLlmAsync(buildUserPrompt(), source, sessionId, projectId, chatClient, ct).ConfigureAwait(false)
             : heuristicCandidates();
 
         candidates = Validate(candidates, sessionId);
@@ -75,8 +70,7 @@ public sealed class LlmMemoryExtractor(
             candidates = [.. candidates.Take(MaxCandidatesPerChunk)];
         }
 
-        // IDs/counts only, never candidate Title/Body text (MEMORY_PIPELINE_PLAN.md §D.5/Gap #5) -
-        // matches the discipline already used by this class's LogWarning calls below.
+        // IDs/counts only, never candidate Title/Body text.
         if (candidates.Count == 0)
         {
             // A live LLM returning nothing usable is a failure worth alerting on; the offline
@@ -98,32 +92,33 @@ public sealed class LlmMemoryExtractor(
         logger?.LogInformation(
             "Extracted {CandidateCount} candidate memories for session {SessionId}.", candidates.Count, sessionId);
 
-        var existing = (await memoryStore.GetExistingWithEmbeddingsAsync(projectId, ct).ConfigureAwait(false)).ToList();
         var results = new List<Context.Domain.Entities.Memory>();
-        int created = 0, reinforced = 0, superseded = 0;
+        var outcomes = new Dictionary<ConsolidationOutcome, int>();
 
         foreach (var candidate in candidates)
         {
             ct.ThrowIfCancellationRequested();
-            var result = await consolidator.ConsolidateAsync(projectId, sessionId, candidate, existing, isInteractive: false, ct).ConfigureAwait(false);
+            var result = await consolidator.ConsolidateAsync(
+                projectId, sessionId, candidate with { ObservedAt = observedAt }, isInteractive: false, ct).ConfigureAwait(false);
             results.Add(result.Memory);
-            switch (result.Outcome)
-            {
-                case ConsolidationOutcome.Created: created++; break;
-                case ConsolidationOutcome.Reinforced: reinforced++; break;
-                case ConsolidationOutcome.Superseded: superseded++; break;
-            }
+            outcomes[result.Outcome] = outcomes.GetValueOrDefault(result.Outcome) + 1;
         }
 
         logger?.LogInformation(
-            "Memory consolidation for session {SessionId}: {Created} created, {Reinforced} reinforced, {Superseded} superseded.",
-            sessionId, created, reinforced, superseded);
+            "Memory consolidation for session {SessionId}: {Created} created, {Reinforced} reinforced, {Merged} merged, {Superseded} superseded, {Contested} contested, {Events} events.",
+            sessionId,
+            outcomes.GetValueOrDefault(ConsolidationOutcome.Created),
+            outcomes.GetValueOrDefault(ConsolidationOutcome.Reinforced),
+            outcomes.GetValueOrDefault(ConsolidationOutcome.Merged),
+            outcomes.GetValueOrDefault(ConsolidationOutcome.Superseded),
+            outcomes.GetValueOrDefault(ConsolidationOutcome.Contested),
+            outcomes.GetValueOrDefault(ConsolidationOutcome.EventRecorded));
 
         return results;
     }
 
     private async Task<IReadOnlyList<MemoryCandidate>> ExtractCandidatesViaLlmAsync(
-        string userPrompt, Guid sessionId, Guid projectId, IChatClient chatClient, CancellationToken ct)
+        string userPrompt, EvidenceSource source, Guid sessionId, Guid projectId, IChatClient chatClient, CancellationToken ct)
     {
         List<ChatMessage> messages = [new(ChatRole.System, MemoryExtractionPromptBuilder.SystemPrompt), new(ChatRole.User, userPrompt)];
 
@@ -142,7 +137,7 @@ public sealed class LlmMemoryExtractor(
             throw;
         }
 
-        var parsed = MemoryCandidateParser.Parse(response);
+        var parsed = MemoryCandidateParser.Parse(response, source);
         if (parsed.DiscardedBlocks > 0)
         {
             logger?.LogWarning(

@@ -20,8 +20,7 @@ using DomainMemory = Context.Domain.Entities.Memory;
 namespace Context.IntegrationTests;
 
 /// <summary>
-/// True end-to-end test of the golden path described in specs/claudy-mem-specs.md §23
-/// ("Definition of Success") and CONTRACTS.md §10's IIndexingPipeline/IContextEngine surface:
+/// True end-to-end test of the golden path through the IIndexingPipeline/IContextEngine surface:
 /// index a real (tiny) source tree, search for a symbol in it, run a session that edits a file,
 /// end the session, and confirm the resulting memory can be found again by a later search.
 ///
@@ -219,11 +218,11 @@ public sealed class GoldenPathE2ETests : IAsyncLifetime
 
             summary.Should().NotBeNull("EndSessionAsync should have enqueued SummarizeSession, which persists a SessionSummary row");
 
-            var changeMemory = memories.FirstOrDefault(m => m.Type == MemoryType.Change);
+            var changeMemory = memories.FirstOrDefault(m => m.Type == MemoryType.Event);
             changeMemory.Should().NotBeNull(
-                "the offline MemoryCandidateHeuristics.TryAddChangedFiles path should turn the session's FileEdit event into a Change memory");
+                "the offline MemoryCandidateHeuristics.TryAddChangedFiles path should turn the session's FileEdit event into an Event memory");
             changeMemory!.Body.Should().Contain(orderCalculatorRelativePath,
-                "the Change memory's body lists the files touched this session");
+                "the Event memory's body lists the files touched this session");
 
             // -----------------------------------------------------------------------------------
             // Step 9: the next session picks up the prior memory via SearchMemoryAsync.

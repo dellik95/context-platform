@@ -7,13 +7,14 @@ using Context.Claude.Hooks;
 using Context.Domain.Enums;
 using Context.Dashboard.Server.Security;
 using Context.Infrastructure.Abstractions;
+using Context.Memory.Search;
 using Context.Retrieval.Abstractions;
 
 namespace Context.Dashboard.Server.Hooks;
 
 /// <summary>
-/// Local-only Claude Code lifecycle hook endpoints (CONTRACTS.md §8's <c>Context.Claude.Hooks</c>
-/// DTOs, wired here per the Context.Dashboard.Server task brief §5). Every route is guarded by
+/// Local-only Claude Code lifecycle hook endpoints for the <c>Context.Claude.Hooks</c> DTOs. Every
+/// route is guarded by
 /// <see cref="BearerTokenAuth.RequireBearerTokenFilter"/> (originally implemented here, now
 /// shared with every other REST endpoint, <c>/mcp</c>, and the SignalR hub — see that type's
 /// remarks), which resolves the request's <c>Authorization: Bearer</c> header to whichever
@@ -31,7 +32,7 @@ public static class HookEndpoints
     private const int PromptContextTokenBudget = 1200;
     private const int SnippetPreviewChars = 200;
 
-    // BACKLOG-10 / SEC-6: FormatContextPack's snippets/notes/issues are indexed *content* -- file
+    // FormatContextPack's snippets/notes/issues are indexed *content* -- file
     // text, commit messages, memory notes -- none of it written by us, some of it possibly written
     // by whoever authored the code being indexed. Claude Code trusts `AdditionalContext` as much as
     // anything else in its context window, so unframed retrieved text is a prompt-injection vector
@@ -100,8 +101,7 @@ public static class HookEndpoints
     }
 
     /// <summary>
-    /// MEMORY_PIPELINE_PLAN.md §H case #11 ("hooks contain no memory business logic"): exposed as
-    /// <c>internal</c> (see <c>InternalsVisibleTo</c> in Context.Dashboard.Server.csproj), the same
+    /// Hooks contain no memory business logic. Exposed as <c>internal</c> (see <c>InternalsVisibleTo</c> in Context.Dashboard.Server.csproj), the same
     /// pattern already used by <see cref="FormatContextPack"/>/<see cref="WrapAsRetrievedData"/>
     /// below, so Context.IntegrationTests can invoke this Minimal API handler directly with a mock
     /// <see cref="IContextEngine"/> and assert its only side effect is <c>RecordEventAsync</c> —
@@ -351,15 +351,16 @@ public static class HookEndpoints
     };
 
     /// <summary>
-    /// SessionStart's "retrieves relevant previous context" (spec §9.13): a short project snapshot
-    /// plus the project's most relevant memories. Any failure here is swallowed - Context Platform
-    /// being briefly unhealthy must never block Claude Code's own session start.
+    /// SessionStart context: a short project snapshot plus the project's most relevant knowledge
+    /// (never events). Any failure is swallowed - Context Platform being briefly unhealthy must never
+    /// block Claude Code's own session start.
     /// </summary>
-    private static async Task<string?> TryBuildSessionStartContextAsync(IContextEngine engine, Guid projectId, CancellationToken ct)
+    internal static async Task<string?> TryBuildSessionStartContextAsync(IContextEngine engine, Guid projectId, CancellationToken ct)
     {
         try
         {
-            var memories = await engine.SearchMemoryAsync(projectId, string.Empty, includeSuperseded: false, ct).ConfigureAwait(false);
+            var memories = await engine.SearchMemoryAsync(
+                projectId, string.Empty, includeSuperseded: false, ct, kind: MemoryKind.Knowledge).ConfigureAwait(false);
             if (memories.Count == 0)
             {
                 return null;
@@ -374,7 +375,7 @@ public static class HookEndpoints
 
             foreach (var memory in memories.Take(MaxRecentMemoriesForSessionStart))
             {
-                sb.Append($"- [{memory.Type}] {memory.Title}\n");
+                sb.Append($"- {MemoryNote.Header(memory)} {memory.Title}\n");
             }
 
             return sb.ToString();
@@ -386,7 +387,7 @@ public static class HookEndpoints
     }
 
     /// <summary>
-    /// UserPromptSubmit's "may perform contextual retrieval" (spec §9.13): a budgeted
+    /// UserPromptSubmit contextual retrieval: a budgeted
     /// <see cref="ContextPack"/> for the submitted prompt, formatted as plain text. Swallows every
     /// failure for the same fail-open reason as <see cref="TryBuildSessionStartContextAsync"/>.
     /// </summary>
@@ -453,7 +454,7 @@ public static class HookEndpoints
     }
 
     /// <summary>
-    /// BACKLOG-10 / SEC-6: frames a block of retrieved/indexed content with an explicit
+    /// Frames a block of retrieved/indexed content with an explicit
     /// "this is data, not instructions" preamble and unambiguous begin/end delimiters. Exposed as
     /// <c>internal</c> (see <c>InternalsVisibleTo</c> in Context.Dashboard.Server.csproj) so
     /// Context.IntegrationTests can assert on the exact framing without re-deriving it.

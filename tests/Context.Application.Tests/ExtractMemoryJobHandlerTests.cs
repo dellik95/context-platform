@@ -1,68 +1,77 @@
 using System.Text.Json;
+using Context.Application.Adapters;
 using Context.Application.Jobs;
 using Context.Application.Jobs.Handlers;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
+using Context.Infrastructure;
 using Context.Infrastructure.Abstractions;
+using Context.Infrastructure.Repositories;
 using Context.Memory.Abstractions;
+using Context.Memory.Consolidation;
 using Context.Memory.Extraction;
 using Context.Providers.Abstractions;
 using FluentAssertions;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Moq;
 
 namespace Context.Application.Tests;
 
 /// <summary>
-/// MEMORY_PIPELINE_PLAN.md §D.6/Gap #6 + §H test #13: reprocessing the SAME
-/// <see cref="SessionSummaryChunk"/> twice through <see cref="ExtractMemoryJobHandler"/> (e.g. a
-/// retried job after a transient failure elsewhere in the pipeline) must not produce two
-/// near-identical <see cref="Memory"/> rows for clearly-identical content — <c>MemoryConsolidator</c>'s
-/// existing &gt;0.92-similarity reinforce path should absorb the second pass instead of inserting a
-/// duplicate. This is existing behavior (an accidental-but-real property of similarity-based
-/// dedup, not a designed idempotency guarantee — see the comment on
-/// <see cref="ExtractMemoryJobHandler"/>), so this test wires up the real
-/// <see cref="LlmMemoryExtractor"/> + <see cref="MemoryConsolidator"/> pipeline rather than mocking
-/// <see cref="IMemoryExtractor"/> away — mocking it out would test nothing, since the dedup logic
-/// being characterized here doesn't live in <see cref="ExtractMemoryJobHandler"/> itself.
+/// The first test runs the real extractor, consolidator and SQLite-backed store: a retried job
+/// re-proposes the same candidate, which must reinforce the memory the first pass created. The other
+/// tests only check which source the handler reads.
 /// </summary>
-public sealed class ExtractMemoryJobHandlerTests
+public sealed class ExtractMemoryJobHandlerTests : IDisposable
 {
     private static readonly float[] FixedEmbedding = [1f, 0f];
 
+    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"context-extract-tests-{Guid.NewGuid():N}.db");
+
+    private DbContextOptions<ContextDbContext> Options =>
+        new DbContextOptionsBuilder<ContextDbContext>().UseSqlite($"Data Source={_dbPath}").Options;
+
     [Fact]
-    public async Task HandleAsync_reprocessing_the_same_chunk_reinforces_instead_of_duplicating_an_identical_memory()
+    public async Task HandleAsync_reprocessing_the_same_compact_summary_reinforces_instead_of_duplicating_an_identical_memory()
     {
         var projectId = Guid.NewGuid();
         var sessionId = Guid.NewGuid();
-        var chunk = MakeChunk(sessionId);
+        var payload = new ExtractMemoryPayload(sessionId, CompactSummary: "Decided to use SQLite for local caching.");
 
-        var sessionRepository = new Mock<ISessionRepository>();
-        sessionRepository.Setup(r => r.GetSummaryChunkByIdAsync(projectId, chunk.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(chunk);
-        sessionRepository.Setup(r => r.GetByIdAsync(projectId, sessionId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Session?)null);
+        await using var db = new ContextDbContext(Options);
+        await db.Database.MigrateAsync();
+        db.Projects.Add(new Project { Id = projectId, Name = "Payments", RootPath = "/repo/payments", CreatedAt = DateTimeOffset.UtcNow });
+        db.Sessions.Add(new Session { Id = sessionId, ProjectId = projectId, StartedAt = DateTimeOffset.UtcNow });
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
 
-        var store = new FakeMemoryStore();
+        using var vectorIndex = new SqliteMemoryVectorIndex(_dbPath, new FakeDbContextFactory(Options));
+        var memories = new VectorPruningMemoryRepository(new MemoryRepository(db), vectorIndex);
+        var store = new MemoryStoreAdapter(memories, db, vectorIndex);
+        var codeVerifier = new CodeVerifier(new FileRepository(db), new SymbolRepository(db), new ProjectRepository(db));
         var resolver = new FakeProviderResolver(CandidateResponse());
-        var consolidator = new MemoryConsolidator(store, resolver, new FakeUsageRecorder(), new FakeSettingsProvider());
-        var extractor = new LlmMemoryExtractor(store, consolidator, resolver, new FakeUsageRecorder());
-        var sut = new ExtractMemoryJobHandler(extractor, sessionRepository.Object);
+        var usage = new FakeUsageRecorder();
+        var extractor = new LlmMemoryExtractor(new MemoryConsolidator(store, codeVerifier, resolver, usage), resolver, usage);
+        var sut = new ExtractMemoryJobHandler(extractor, new Mock<ISessionRepository>().Object);
 
-        // Same chunk, processed twice - simulating a retried ExtractMemory job.
-        await sut.HandleAsync(MakeJob(projectId, chunk.Id), CancellationToken.None);
-        await sut.HandleAsync(MakeJob(projectId, chunk.Id), CancellationToken.None);
+        await sut.HandleAsync(MakeJob(projectId, payload), CancellationToken.None);
+        await sut.HandleAsync(MakeJob(projectId, payload), CancellationToken.None);
 
-        // Exactly one fresh row (the first pass's insert) - the second pass's identical candidate
-        // must land on the reinforce path, not insert a second near-duplicate memory.
-        store.Saved.Count(s => s.Embedding is not null).Should().Be(1);
-        store.Saved.Select(s => s.Memory.Id).Distinct().Should().ContainSingle();
-        store.Superseded.Should().BeEmpty();
+        var persisted = await db.Memories.AsNoTracking().Where(m => m.ProjectId == projectId).ToListAsync();
+        var memory = persisted.Should().ContainSingle().Subject;
+        memory.Type.Should().Be(MemoryType.Decision);
+        memory.Status.Should().Be(MemoryStatus.Active);
+        memory.Body.Should().NotContain("CONFIDENCE");
+        memory.ReinforcementCount.Should().Be(1);
+        memory.SourceCount.Should().Be(1, "both passes come from the same session");
+        memory.Tier.Should().Be(MemoryTier.Working);
 
-        // The reinforce path itself did run (not just "nothing happened the second time") -
-        // ReinforcementCount on the one memory should reflect the second pass.
-        var persisted = store.Saved.Select(s => s.Memory).Distinct().Single();
-        persisted.ReinforcementCount.Should().Be(1);
+        var evidence = await db.MemoryEvidence.AsNoTracking().Where(e => e.MemoryId == memory.Id).ToListAsync();
+        evidence.Select(e => e.Relation).Should().BeEquivalentTo([EvidenceRelation.Created, EvidenceRelation.Reinforced]);
+        evidence.Should().OnlyContain(e => e.Source == EvidenceSource.CompactSummary && e.SessionId == sessionId);
+        (await db.MemoryEmbeddings.AsNoTracking().CountAsync(e => e.MemoryId == memory.Id)).Should().Be(1);
     }
 
     [Fact]
@@ -110,24 +119,23 @@ public sealed class ExtractMemoryJobHandlerTests
     }
 
     [Fact]
-    public async Task HandleAsync_extracts_from_a_compact_summary()
+    public async Task HandleAsync_extracts_from_a_compact_summary_observed_when_the_job_was_queued()
     {
         var projectId = Guid.NewGuid();
         var sessionId = Guid.NewGuid();
         const string summary = "Moved retry policy into ResilienceOptions.";
+        var job = MakeJob(projectId, new ExtractMemoryPayload(sessionId, CompactSummary: summary));
+        job.CreatedAt = DateTimeOffset.UtcNow.AddHours(-3);
 
         var extractor = new Mock<IMemoryExtractor>();
-        extractor.Setup(e => e.ExtractFromCompactSummaryAsync(projectId, sessionId, summary, It.IsAny<CancellationToken>()))
+        extractor.Setup(e => e.ExtractFromCompactSummaryAsync(projectId, sessionId, summary, It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         var sut = new ExtractMemoryJobHandler(extractor.Object, new Mock<ISessionRepository>().Object);
 
-        await sut.HandleAsync(MakeJob(projectId, new ExtractMemoryPayload(sessionId, CompactSummary: summary)), CancellationToken.None);
+        await sut.HandleAsync(job, CancellationToken.None);
 
-        extractor.Verify(e => e.ExtractFromCompactSummaryAsync(projectId, sessionId, summary, It.IsAny<CancellationToken>()), Times.Once);
+        extractor.Verify(e => e.ExtractFromCompactSummaryAsync(projectId, sessionId, summary, job.CreatedAt, It.IsAny<CancellationToken>()), Times.Once);
     }
-
-    private static Job MakeJob(Guid projectId, Guid summaryChunkId) =>
-        MakeJob(projectId, new ExtractMemoryPayload(Guid.NewGuid(), summaryChunkId));
 
     private static Job MakeJob(Guid projectId, ExtractMemoryPayload payload) => new()
     {
@@ -138,19 +146,7 @@ public sealed class ExtractMemoryJobHandlerTests
         CreatedAt = DateTimeOffset.UtcNow
     };
 
-    private static SessionSummaryChunk MakeChunk(Guid sessionId) => new()
-    {
-        Id = Guid.NewGuid(),
-        SessionId = sessionId,
-        Title = "Decided to use SQLite for local caching",
-        EventCount = 20,
-        FromEventAt = DateTimeOffset.UtcNow.AddMinutes(-10),
-        ToEventAt = DateTimeOffset.UtcNow,
-        GeneratedAt = DateTimeOffset.UtcNow
-    };
-
-    // Same TYPE/TITLE/BODY every time this "LLM" is asked to extract - the point of this test is
-    // that identical content, reprocessed, must not duplicate.
+    // CONFIDENCE is not part of the format any more; an old-style line must be swallowed, not leak into BODY.
     private static string CandidateResponse() =>
         """
         TYPE: Decision
@@ -173,23 +169,15 @@ public sealed class ExtractMemoryJobHandlerTests
         public Task<IChatClient> GetChatClientAsync(Guid projectId, CancellationToken ct) => Task.FromResult(_chatClient);
     }
 
-    /// <summary>Returns <paramref name="candidateResponse"/> for a candidate-extraction request,
-    /// or "CONSISTENT" for a consistency-check request (identified by the "CONTRADICTORY" marker
-    /// unique to <c>MemoryConsistencyChecker.SystemPrompt</c>, since that internal class isn't
-    /// visible from this assembly) - so the second HandleAsync pass's identical candidate is
-    /// judged a restatement and reinforces rather than superseding or inserting fresh.</summary>
+    /// <summary>Answers every extraction request with the same candidate. The second pass never asks
+    /// the relation judge: an identical embedding of the same type takes the duplicate fast path.</summary>
     private sealed class FakeChatClient(string candidateResponse) : IChatClient
     {
         private static readonly ChatClientMetadata Metadata = new("fake", null, "fake-model");
 
         public Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default)
-        {
-            var systemText = messages.FirstOrDefault(m => m.Role == ChatRole.System)?.Text ?? string.Empty;
-            var isConsistencyCheck = systemText.Contains("CONTRADICTORY", StringComparison.Ordinal);
-            var text = isConsistencyCheck ? "CONSISTENT" : candidateResponse;
-            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, text)));
-        }
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default) =>
+            Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, candidateResponse)));
 
         public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
             IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default) =>
@@ -203,9 +191,6 @@ public sealed class ExtractMemoryJobHandlerTests
         }
     }
 
-    /// <summary>Always returns <paramref name="vector"/>, regardless of the input text, so the
-    /// candidate's embedding is bit-identical across both HandleAsync passes and lands at cosine
-    /// similarity 1.0 against the memory the first pass inserted.</summary>
     private sealed class FakeEmbeddingGenerator(float[] vector) : IEmbeddingGenerator<string, Embedding<float>>
     {
         public Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(
@@ -219,83 +204,26 @@ public sealed class ExtractMemoryJobHandlerTests
         }
     }
 
-    // Fully qualified: Context.Infrastructure.Abstractions and Context.Memory.Abstractions both
-    // declare an IUsageRecorder (mirrors of each other, kept separate so Context.Memory has no
-    // dependency on Context.Infrastructure) - LlmMemoryExtractor/MemoryConsolidator need the
-    // Context.Memory one.
+    // Fully qualified: Context.Infrastructure.Abstractions declares an IUsageRecorder too.
     private sealed class FakeUsageRecorder : Context.Memory.Abstractions.IUsageRecorder
     {
         public Task RecordAsync(UsageRecord record, CancellationToken ct) => Task.CompletedTask;
     }
 
-    private sealed class FakeSettingsProvider : IMemoryConsolidationSettingsProvider
+    private sealed class FakeDbContextFactory(DbContextOptions<ContextDbContext> options) : IDbContextFactory<ContextDbContext>
     {
-        public Task<MemoryConsolidationSettings> GetAsync(Guid projectId, CancellationToken ct) =>
-            Task.FromResult(new MemoryConsolidationSettings());
+        public ContextDbContext CreateDbContext() => new(options);
     }
 
-    /// <summary>In-memory <see cref="IMemoryStore"/> that actually accumulates saved memories (and
-    /// returns them from <see cref="GetExistingWithEmbeddingsAsync"/>) so the second HandleAsync
-    /// pass in this test sees what the first one inserted - unlike MemoryConsolidatorTests's fake,
-    /// which is handed a fixed "existing" list per call and doesn't need this.</summary>
-    private sealed class FakeMemoryStore : IMemoryStore
+    public void Dispose()
     {
-        // Fully qualified: bare "Memory" resolves to the Context.Memory namespace here (this file's
-        // enclosing Context.* namespace makes it visible unqualified), not Context.Domain.Entities.Memory.
-        private readonly Dictionary<Guid, (Context.Domain.Entities.Memory Memory, float[] Embedding)> _byId = [];
-
-        public List<(Context.Domain.Entities.Memory Memory, float[]? Embedding)> Saved { get; } = [];
-        public List<(Guid OldId, Guid NewId)> Superseded { get; } = [];
-        public List<Guid> Reinforced { get; } = [];
-
-        public Task<IReadOnlyList<ExistingMemoryWithEmbedding>> GetExistingWithEmbeddingsAsync(Guid projectId, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<ExistingMemoryWithEmbedding>>(
-                _byId.Values
-                    .Where(v => v.Memory.ProjectId == projectId)
-                    .Select(v => new ExistingMemoryWithEmbedding(v.Memory, v.Embedding))
-                    .ToList());
-
-        public Task SaveAsync(Context.Domain.Entities.Memory memory, float[]? embedding, CancellationToken ct)
+        SqliteConnection.ClearAllPools();
+        foreach (var path in new[] { _dbPath, _dbPath + "-wal", _dbPath + "-shm" })
         {
-            Saved.Add((memory, embedding));
-            if (embedding is not null)
+            if (System.IO.File.Exists(path))
             {
-                _byId[memory.Id] = (memory, embedding);
+                System.IO.File.Delete(path);
             }
-
-            return Task.CompletedTask;
-        }
-
-        public Task MarkSupersededAsync(Guid oldMemoryId, Guid newMemoryId, CancellationToken ct)
-        {
-            Superseded.Add((oldMemoryId, newMemoryId));
-            if (_byId.TryGetValue(oldMemoryId, out var old))
-            {
-                old.Memory.SupersededById = newMemoryId;
-            }
-
-            return Task.CompletedTask;
-        }
-
-        public Task SaveMergedAsync(Context.Domain.Entities.Memory merged, float[] embedding, IReadOnlyCollection<Guid> supersededIds, CancellationToken ct) =>
-            throw new NotSupportedException("Only CompactMemoryJobHandler merges memories.");
-
-        public Task<int?> ReinforceAsync(Guid memoryId, DateTimeOffset reinforcedAt, int promotionReinforcementThreshold, CancellationToken ct)
-        {
-            if (!_byId.TryGetValue(memoryId, out var entry))
-            {
-                return Task.FromResult<int?>(null);
-            }
-
-            entry.Memory.ReinforcementCount++;
-            entry.Memory.LastReinforcedAt = reinforcedAt;
-            if (entry.Memory.Pinned || entry.Memory.ReinforcementCount >= promotionReinforcementThreshold)
-            {
-                entry.Memory.Tier = Context.Domain.Enums.MemoryTier.LongTerm;
-            }
-
-            Reinforced.Add(memoryId);
-            return Task.FromResult<int?>(entry.Memory.ReinforcementCount);
         }
     }
 }

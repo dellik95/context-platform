@@ -16,19 +16,10 @@ using ModelContextProtocol.Server;
 namespace Context.Dashboard.Server.Mcp;
 
 /// <summary>
-/// The MCP tools named in the Context.Dashboard.Server task brief: <c>context_search</c>, <c>context_expand</c>,
-/// <c>context_get</c>, <c>code_search</c>, <c>symbol_search</c>, <c>memory_search</c>,
-/// <c>memory_get</c>, <c>memory_remember</c>, <c>memory_forget</c>, <c>graph_neighbors</c>,
-/// <c>graph_neighborhood</c>, <c>graph_path</c>, <c>graph_impact</c>, <c>session_search</c>,
-/// <c>session_get</c>, <c>project_info</c>. Every tool that has a direct <see cref="IContextEngine"/>
-/// method (CONTRACTS.md §10) is a thin wrapper over it; the others (<c>code_search</c>,
-/// <c>symbol_search</c>, <c>memory_get</c>, <c>memory_forget</c>, <c>graph_neighbors</c>,
-/// <c>graph_neighborhood</c>, <c>graph_path</c>, <c>session_search</c>, <c>session_get</c>) call
-/// directly into an already-registered repository/service, per the task brief's explicit allowance
-/// for tools with no 1:1 engine method. <c>memory_remember</c> (docs/architecture/MEMORY_PIPELINE_PLAN.md §F)
-/// and <c>memory_forget</c> are the two agent-initiated memory-write tools, both gated by the same
-/// <c>ProjectSettingsDto.ExplicitRememberEnabled</c> check (see <see cref="EnsureExplicitMemoryWritesEnabledAsync"/>)
-/// before <c>memory_remember</c> delegates to <see cref="IContextEngine.RememberExplicitlyAsync"/>.
+/// The MCP tools. Every tool with an <see cref="IContextEngine"/> method is a thin wrapper over it;
+/// <c>code_search</c>, <c>symbol_search</c>, the graph tools and the session list/detail tools call
+/// the registered repository or service directly. <c>memory_remember</c> and <c>memory_forget</c>,
+/// the agent-initiated memory writes, are gated by <see cref="EnsureExplicitMemoryWritesEnabledAsync"/>.
 /// </summary>
 /// <remarks>
 /// Registered via <c>WithToolsFromAssembly()</c> in Program.cs, which — per the official MCP C#
@@ -41,7 +32,6 @@ public sealed class ContextMcpTools(
     IContextEngine engine,
     ISearchEngine searchEngine,
     ISymbolRepository symbolRepository,
-    IMemoryRepository memoryRepository,
     ISessionRepository sessionRepository,
     IFileRepository fileRepository,
     IGraphTraversal graphTraversal,
@@ -131,26 +121,30 @@ public sealed class ContextMcpTools(
     }
 
     [McpServerTool(Name = "memory_search")]
-    [Description("Searches a project's persistent memories (decisions, discoveries, bug fixes, open issues, ...). Each memory carries a short reusable Topic tag (e.g. \"Auth middleware\") naming the feature/subsystem it's about, so memories on the same subject from different sessions can be found together via the topic filter.")]
+    [Description("Searches a project's persistent memories. Knowledge (decisions, constraints, architecture, behavior, " +
+        "configuration, discoveries, procedures, issues, facts) ranks first; events (the change log) rank lower unless the " +
+        "query asks what changed or when. Each memory carries a short reusable Topic tag (e.g. \"Auth middleware\") naming " +
+        "the feature/subsystem it's about, so memories on the same subject from different sessions can be found together via the topic filter.")]
     public async Task<IReadOnlyList<Context.Domain.Entities.Memory>> MemorySearchAsync(
-        [Description("Search query — matched both by substring (Title/Body) and by semantic similarity, so a paraphrase or synonym with no shared words can still surface a relevant memory.")] string query,
-        [Description("Include memories that have been superseded by a newer one.")] bool includeSuperseded = false,
+        [Description("Search query — matched by text, by the files/symbols/tickets it names, and by semantic similarity, so a paraphrase with no shared words can still surface a relevant memory.")] string query,
+        [Description("Include superseded and obsolete memories.")] bool includeSuperseded = false,
         [Description("Optional exact-match filter on the memory's Topic tag, e.g. \"Auth middleware\".")] string? topic = null,
+        [Description("Optional: \"knowledge\" or \"event\". Omit for both.")] string? kind = null,
         [Description("Maximum memories to return.")] int limit = DefaultMemorySearchLimit,
         CancellationToken ct = default)
     {
-        var memories = await engine.SearchMemoryAsync(currentProject.ProjectId, query, includeSuperseded, ct, topic).ConfigureAwait(false);
+        var memories = await engine.SearchMemoryAsync(currentProject.ProjectId, query, includeSuperseded, ct, topic, ParseMemoryKind(kind)).ConfigureAwait(false);
         // Every other search tool here caps its result set; without this one a project with a few
         // hundred memories returns all of them, full Body text included, into the caller's context.
         return [.. memories.Take(Math.Clamp(limit, 1, MaxMemorySearchLimit))];
     }
 
     [McpServerTool(Name = "memory_get")]
-    [Description("Fetches one memory by id, or null if it doesn't exist.")]
-    public async Task<Context.Domain.Entities.Memory?> MemoryGetAsync(
+    [Description("Fetches one memory by id with its evidence (why it exists or changed) and the entities it mentions, or null if it doesn't exist.")]
+    public async Task<MemoryDetail?> MemoryGetAsync(
         [Description("Memory id.")] Guid memoryId,
         CancellationToken ct = default)
-        => await memoryRepository.GetByIdAsync(memoryId, ct).ConfigureAwait(false);
+        => await engine.GetMemoryAsync(currentProject.ProjectId, memoryId, ct).ConfigureAwait(false);
 
     [McpServerTool(Name = "memory_remember")]
     [Description("Stores durable project knowledge, whether the user asked for it explicitly or you found it yourself. " +
@@ -170,7 +164,7 @@ public sealed class ContextMcpTools(
         [Description("The memory's main content: 2-5 self-contained sentences naming the SPECIFIC files (by path), " +
             "classes/functions/symbols (by name), and config keys actually involved — never a generic stand-in " +
             "('a service', 'some files'). State the actual mechanism/reasoning, not just that something happened.")] string content,
-        [Description("One of Decision, Discovery, BugFix, Architecture, Issue, Instruction, Implementation, Configuration, Testing, Infrastructure, Feature, Refactor, Change, Exploration. Defaults to Instruction.")] string? type = null,
+        [Description("One of Fact, Decision, Constraint, Architecture, Behavior, Configuration, Discovery, Procedure, Issue, Event. Unknown or omitted means Fact.")] string? type = null,
         [Description("Short one-line title (under 100 chars), outcome-focused (what changed/was learned, not what you did to find out). " +
             "Omit to auto-derive one from the first sentence of content.")] string? title = null,
         [Description("Short 2-5 word phrase naming the feature/subsystem/component this memory is about (e.g. \"Auth middleware\", " +
@@ -193,7 +187,8 @@ public sealed class ContextMcpTools(
     }
 
     [McpServerTool(Name = "memory_forget")]
-    [Description("Permanently deletes one memory by id (from memory_search/memory_get) — there is no undo. Use when the user " +
+    [Description("Permanently deletes one memory by id (from memory_search/memory_get) together with its evidence, entities " +
+        "and embedding — there is no undo. Use when the user " +
         "explicitly asks to forget/remove/delete something previously remembered, or when you find a memory that is now flatly " +
         "wrong or obsolete (e.g. it describes an approach that has since been replaced) rather than leaving stale/misleading " +
         "guidance for a future session. Prefer memory_remember for a memory that's merely outdated/incomplete — a fresh call " +
@@ -204,18 +199,7 @@ public sealed class ContextMcpTools(
         CancellationToken ct = default)
     {
         await EnsureExplicitMemoryWritesEnabledAsync("memory_forget", ct).ConfigureAwait(false);
-
-        // IMemoryRepository.DeleteAsync takes a bare id with no project scoping (same as the REST
-        // DELETE /api/memories/{id} it backs) -- this existence+ownership check keeps the MCP tool
-        // from letting a caller authenticated for one project delete another project's memory by
-        // guessing/reusing an id, without needing to change that repository's own contract.
-        var memory = await memoryRepository.GetByIdAsync(memoryId, ct).ConfigureAwait(false);
-        if (memory is null || memory.ProjectId != currentProject.ProjectId)
-        {
-            return;
-        }
-
-        await memoryRepository.DeleteAsync(memoryId, ct).ConfigureAwait(false);
+        await engine.ForgetMemoryAsync(currentProject.ProjectId, memoryId, ct).ConfigureAwait(false);
     }
 
     [McpServerTool(Name = "graph_neighbors")]
@@ -270,12 +254,7 @@ public sealed class ContextMcpTools(
         [Description("Maximum sessions to return.")] int limit = DefaultSessionSearchLimit,
         CancellationToken ct = default)
     {
-        // No ISessionRepository.ListByProjectAsync/SearchAsync exists in CONTRACTS.md's
-        // Context.Infrastructure surface (only GetByIdAsync/AddAsync/UpdateAsync, keyed by our own
-        // Guid) - this queries the shared ContextDbContext directly via the pooled
-        // IDbContextFactory Context.Application already registers for exactly this kind of
-        // singleton-safe cross-cutting read (see its ServiceCollectionExtensions remarks). A real
-        // fix would add a query method to ISessionRepository; out of scope for Context.Dashboard.Server.
+        // Queries ContextDbContext directly: the filters below have no ISessionRepository equivalent.
         var pid = currentProject.ProjectId;
         await using var db = await dbContextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
@@ -361,26 +340,20 @@ public sealed class ContextMcpTools(
         }
     }
 
-    /// <summary>
-    /// Case-insensitive parse of a <see cref="MemoryType"/> name for the agent-facing
-    /// <c>memory_remember</c> tool - a bad/unrecognized string from the caller must fail soft to
-    /// the default rather than throw (an agent passing a slightly-wrong type name shouldn't 500).
-    /// </summary>
+    /// <summary>Fails soft to <see cref="MemoryType.Fact"/>: an agent passing a slightly-wrong type
+    /// name shouldn't get an error.</summary>
     private MemoryType ParseMemoryType(string? type)
     {
-        if (string.IsNullOrWhiteSpace(type))
+        if (!MemoryTypeExtensions.TryParseName(type, out var parsed) && !string.IsNullOrWhiteSpace(type))
         {
-            return MemoryType.Instruction;
+            logger?.LogInformation("memory_remember received an unrecognized MemoryType {Type}; defaulting to Fact.", type);
         }
 
-        if (Enum.TryParse<MemoryType>(type, ignoreCase: true, out var parsed))
-        {
-            return parsed;
-        }
-
-        logger?.LogInformation("memory_remember received an unrecognized MemoryType {Type}; defaulting to Instruction.", type);
-        return MemoryType.Instruction;
+        return parsed;
     }
+
+    private static MemoryKind? ParseMemoryKind(string? kind) =>
+        Enum.TryParse<MemoryKind>(kind?.Trim(), ignoreCase: true, out var parsed) && Enum.IsDefined(parsed) ? parsed : null;
 
     private static GraphEdgeKind[]? ParseEdgeKinds(string[]? kinds)
     {

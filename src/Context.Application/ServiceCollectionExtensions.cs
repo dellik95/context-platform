@@ -28,8 +28,7 @@ namespace Context.Application;
 /// <c>AddContextGraph</c>, <c>AddContextRetrieval</c>, <c>AddContextMemory</c>,
 /// <c>AddContextProviders</c>) — those calls register everything <em>except</em> the small seam
 /// interfaces each layer deliberately left for its caller to implement against the real
-/// repositories/providers (see CONTRACTS.md §11 and each layer's own <c>ServiceCollectionExtensions</c>
-/// remarks). <see cref="AddContextApplication"/> supplies exactly those seam implementations, plus
+/// repositories/providers (see each layer's own <c>ServiceCollectionExtensions</c> remarks). <see cref="AddContextApplication"/> supplies exactly those seam implementations, plus
 /// the pieces that only make sense once every layer is wired together: <see cref="JobDispatcher"/>,
 /// <see cref="ContextEngine"/> and <see cref="IndexingPipeline"/>.
 /// </summary>
@@ -40,7 +39,7 @@ public static class ServiceCollectionExtensions
     /// that read the Dashboard Settings tab's saved <c>.claude/context-platform.local.json</c> override.
     /// </param>
     /// <param name="projectDataDir">
-    /// <c>{repo-root}/.context/</c> (CONTRACTS.md §9) — the same directory whose <c>context.db</c>
+    /// The host's data directory — the same directory whose <c>context.db</c>
     /// was passed to <c>AddContextInfrastructure</c>. Needed here for two things: computing the
     /// same SQLite connection string for the singleton-safe <see cref="IDbContextFactory{TContext}"/>
     /// registration below, and <c>BackupDbJobHandler</c>'s <c>VACUUM INTO ... /backups/</c> target.
@@ -160,14 +159,11 @@ public static class ServiceCollectionExtensions
 
         // Same seam pattern as the two above, forwarding to Context.Infrastructure's own
         // IUsageRecorder (registered by AddContextInfrastructure) so LlmSessionSummarizer /
-        // LlmMemoryExtractor can record token usage (BACKLOG-27) without depending on
+        // LlmMemoryExtractor can record token usage without depending on
         // Context.Infrastructure/EF Core directly.
         services.AddScoped<Context.Memory.Abstractions.IUsageRecorder, UsageRecorderAdapter>();
 
-        // Same seam pattern again: MemoryConsolidator reads its per-project thresholds through
-        // this instead of depending on IProjectSettingsService directly (Context.Memory can't
-        // reference Context.Application - see the adapter's remarks).
-        services.AddScoped<Context.Memory.Abstractions.IMemoryConsolidationSettingsProvider, MemoryConsolidationSettingsProviderAdapter>();
+        services.AddScoped<ICodeVerifier, CodeVerifier>();
 
         // ContextPackBuilder is registered by AddContextRetrieval as the singleton
         // IContextPackBuilder implementation. ContextEngine needs the concrete type directly (see
@@ -193,7 +189,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IJobHandler, DecayMemoryJobHandler>();
         services.AddScoped<IJobHandler, BackupDbJobHandler>();
         services.AddScoped<IJobHandler, RecreateEmbeddingsJobHandler>();
-        services.AddScoped<IJobHandler, CompactMemoryJobHandler>();
+        services.AddScoped<IJobHandler, ReconsolidateMemoryJobHandler>();
     }
 
     /// <summary>
@@ -214,8 +210,8 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<StaleSessionScheduler>();
         services.AddHostedService<HookInvocationRetentionScheduler>();
         services.AddHostedService<JobRetentionScheduler>();
-        services.AddHostedService<MemoryCompactionScheduler>();
         services.AddHostedService<MaintenanceScheduler>();
+        services.AddHostedService<MemoryReconsolidationScheduler>();
     }
 
     private static void AddIndexingPipeline(IServiceCollection services)

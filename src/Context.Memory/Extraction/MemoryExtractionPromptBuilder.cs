@@ -7,7 +7,7 @@ using Context.Memory.Summarization;
 namespace Context.Memory.Extraction;
 
 /// <summary>Builds the prompt that asks an LLM to propose candidate durable memories from one piece
-/// of session material: a batch of raw session events, a compaction summary, or a summary chunk.</summary>
+/// of session material: a batch of raw session events or a compaction summary.</summary>
 internal static class MemoryExtractionPromptBuilder
 {
     private const int MaxPromptChars = 2000;
@@ -70,11 +70,18 @@ internal static class MemoryExtractionPromptBuilder
         existing or being located somewhere — that's what a code index is for; only propose one
         when there is a non-obvious behavior, invariant, or relationship attached to it.
 
-        Titles must be outcome-focused (what changed or was learned), never process-focused (what
+        KNOWLEDGE vs EVENT: every TYPE except Event is knowledge and must describe how the code
+        behaves NOW, in the present tense, as an engineer reading it next month would need it.
+        "Added X", "Upgraded Y to Z", "Fixed W" are change logs: either restate them as the current
+        behavior they produced ("Authentication uses the OAuth2 PKCE flow") or, if the change itself
+        is all there is to say, propose it as TYPE Event. Never put the prior behavior in FACTS
+        ("previously ...", "used to ...") - that history is recorded separately.
+
+        Titles must be outcome-focused (what is true or was learned), never process-focused (what
         you did to find out), and must be as concrete as the session material allows - name the
         actual thing, not a category of thing. For example:
-        GOOD: "OAuth2 PKCE flow added to authentication"
-        GOOD: "Discovered flush strategy fails under concurrent sessions"
+        GOOD: "Authentication uses the OAuth2 PKCE flow"
+        GOOD: "Flush strategy fails under concurrent sessions"
         BAD:  "Analyzed authentication implementation" (describes the analysis, not what was found)
         BAD:  "Reviewed session handling code" (process narration, no outcome)
         BAD:  "Embedding service architecture spans multiple modules" (true but says nothing an
@@ -112,7 +119,7 @@ internal static class MemoryExtractionPromptBuilder
 
         MEMORY_COUNT: <n>
         MEMORY 1
-        TYPE: <one of Architecture, Decision, Implementation, BugFix, Configuration, Testing, Infrastructure, Discovery, Issue>
+        TYPE: <one of Fact, Decision, Constraint, Architecture, Behavior, Configuration, Discovery, Procedure, Issue, Event>
         TITLE: <short one-line title, under 100 characters>
         BODY: <2-5 sentences, self-contained, naming specific files/symbols/config keys and the actual mechanism or reasoning per the BODY guidance above - not a restatement of TITLE>
         TOPIC: <short 2-5 word phrase naming the feature/subsystem/component this memory is about>
@@ -125,7 +132,7 @@ internal static class MemoryExtractionPromptBuilder
         - <path 1>
         FILES_MODIFIED:
         - <path 1>
-        CONFIDENCE: <a number between 0.0 and 1.0>
+        ENTITIES: <comma-separated concrete names this memory is about>
         END_MEMORY
         MEMORY 2
         ...
@@ -162,22 +169,13 @@ internal static class MemoryExtractionPromptBuilder
         FILES_MODIFIED is for files that were actually edited because of this memory's content. Omit
         either block entirely if it doesn't apply (most memories only need FILES_MODIFIED, or neither).
 
+        ENTITIES lists the concrete names this memory is about, exactly as written in the material:
+        ticket keys (PAY-123), class/method/function names, config keys and environment variables,
+        file names, packages and tools. Only names that identify THIS memory's subject - not the
+        repository, language or framework every memory shares. Omit the line if there are none.
+
         If n is 0, respond with only "MEMORY_COUNT: 0" and nothing else.
         """;
-
-    public static string BuildUserPrompt(SessionSummaryChunk chunk)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine($"Session: {chunk.SessionId}");
-        AppendSection(sb, "Completed", chunk.Completed);
-        AppendSection(sb, "Discovered", chunk.Discovered);
-        AppendSection(sb, "Decisions", chunk.Decisions);
-        AppendSection(sb, "Files read", chunk.FilesReadJson);
-        AppendSection(sb, "Changed files", chunk.ChangedFilesJson);
-        AppendSection(sb, "Open issues", chunk.OpenIssues);
-        AppendSection(sb, "Next steps", chunk.NextSteps);
-        return sb.ToString();
-    }
 
     public static string BuildUserPromptFromEvents(Guid sessionId, IReadOnlyList<SessionEvent> events)
     {
@@ -306,12 +304,5 @@ internal static class MemoryExtractionPromptBuilder
         {
             sb.Append("- ").AppendLine(item);
         }
-    }
-
-    private static void AppendSection(StringBuilder sb, string label, string? content)
-    {
-        sb.AppendLine();
-        sb.AppendLine($"{label}:");
-        sb.AppendLine(string.IsNullOrWhiteSpace(content) ? "(none)" : content);
     }
 }

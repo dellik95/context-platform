@@ -9,6 +9,7 @@ using Context.Infrastructure.Abstractions;
 using Context.Memory.Abstractions;
 using Context.Memory.Decay;
 using Context.Memory.Extraction;
+using Context.Memory.Search;
 using Context.Providers;
 using Context.Providers.Abstractions;
 using Context.Providers.Embeddings;
@@ -22,16 +23,15 @@ using DomainFile = Context.Domain.Entities.File;
 namespace Context.Application;
 
 /// <summary>
-/// Default <see cref="IContextEngine"/> (CONTRACTS.md §10) — the single facade every MCP tool,
-/// CLI command and REST controller calls. Wires <see cref="ContextPackBuilder"/> (Context.
-/// Retrieval), <see cref="IGraphTraversal"/> (Context.Graph) and the Context.Infrastructure
-/// repositories together, plus the two behaviors CONTRACTS.md leaves to this layer's discretion
-/// (see task brief §3): merging in ranked <see cref="Memory"/> records as historical notes/open
-/// issues, and the session-scoped "already delivered" delivery cache.
+/// Default <see cref="IContextEngine"/>: the single facade every MCP tool, CLI command and REST
+/// controller calls. Wires <see cref="ContextPackBuilder"/> (Context.Retrieval),
+/// <see cref="IGraphTraversal"/> (Context.Graph) and the Context.Infrastructure repositories
+/// together, merges ranked memories into packs as historical notes/open issues, and owns the
+/// session-scoped "already delivered" delivery cache.
 /// </summary>
 /// <remarks>
 /// <b>Why the concrete <see cref="ContextPackBuilder"/>, not <see cref="IContextPackBuilder"/>:</b>
-/// the CONTRACTS-fixed <c>IContextPackBuilder.BuildAsync(SearchQuery, CancellationToken)</c> has no
+/// <c>IContextPackBuilder.BuildAsync(SearchQuery, CancellationToken)</c> has no
 /// parameter for historical notes/open issues — Context.Retrieval's own remarks on
 /// <see cref="ContextPackBuilder"/> document exactly this gap and expose a second, richer
 /// <c>BuildAsync</c> overload for a caller that (like this one) has Memory data to contribute. This
@@ -52,7 +52,6 @@ public sealed class ContextEngine(
     ISessionRepository sessionRepository,
     SessionDeliveryCache deliveryCache,
     IProjectSettingsService projectSettingsService,
-    IMemoryStore memoryStore,
     IMemoryConsolidator memoryConsolidator,
     IMemoryVectorIndex memoryVectorIndex,
     ISessionSummaryVectorIndex sessionSummaryVectorIndex,
@@ -60,19 +59,17 @@ public sealed class ContextEngine(
 {
     private const int SummaryCharLimit = 800;
     private const int ExplicitRememberTitleCharLimit = 80;
-    // The user explicitly asked for this to be remembered - high confidence by construction,
-    // not LLM-judged (see docs/architecture/MEMORY_PIPELINE_PLAN.md §F).
-    private const double ExplicitRememberConfidence = 0.95;
 
-    // memory_search previously ranked purely by decay+pinned+type bonus (RelevanceOf) -- a
-    // substring match only decided *inclusion*, never order, so the query text had zero influence
-    // on ranking. SemanticMatchWeight folds in real query relevance (lexical substring hit, or
-    // semantic cosine similarity from IMemoryVectorIndex) while still letting decay/pinned/type
-    // bonus break ties and demote stale matches, same spirit as HybridScorer for code search but
-    // with its own weight -- HybridScorer's weights are benchmark-tuned for code chunks
-    // (RetrievalQualityHarnessTests), not memory search, so they aren't reused here.
-    private const double SemanticMatchWeight = 0.6;
+    private const double MatchWeight = 0.5;
+    private const double RelevanceWeight = 0.3;
+    private const double TypeBonusWeight = 0.2;
+    private const double EventSearchWeight = 0.5;
     private const int SemanticSearchLimit = 50;
+    private const int MemorySemanticSearchLimit = 20;
+
+    // Nearest neighbours always come back, however unrelated; below this they would outrank weak lexical hits.
+    private const double MemorySemanticMinSimilarity = 0.60;
+    private const int MaxMemoryNotesPerSectionCap = 200;
 
     // Same pattern as EmbeddingLookupAdapter.InteractiveOptions / MemoryConsolidator.InteractiveOptions:
     // flags a live memory_search query so OllamaEmbeddingGeneratorDecorator skips the concurrency
@@ -84,7 +81,7 @@ public sealed class ContextEngine(
 
     public async Task<ContextPack> SearchContextAsync(SearchQuery query, CancellationToken ct)
     {
-        var (historicalNotes, openIssues) = await BuildMemorySectionsAsync(query.ProjectId, query.Text, ct).ConfigureAwait(false);
+        var (historicalNotes, openIssues) = await BuildMemorySectionsAsync(query, ct).ConfigureAwait(false);
 
         var pack = await contextPackBuilder.BuildAsync(query, historicalNotes, openIssues, ct).ConfigureAwait(false);
 
@@ -110,8 +107,7 @@ public sealed class ContextEngine(
 
     public async Task<ImpactSet> GraphImpactAsync(Guid symbolId, int maxHops, CancellationToken ct)
     {
-        // IGraphTraversal is keyed purely by node id, with no ProjectId of its own (CONTRACTS.md
-        // §4), and only warms a project's InMemoryGraphCache on the first access that project ever
+        // IGraphTraversal is keyed purely by node id, with no ProjectId of its own, and only warms a project's InMemoryGraphCache on the first access that project ever
         // gets (see Context.Graph.GraphCacheProvider). Resolving the owning project ourselves and
         // eagerly warming it here removes the "cold, never-touched project" limitation Context.
         // Graph's own remarks flag as a known gap, rather than leaving it as follow-up.
@@ -125,66 +121,108 @@ public sealed class ContextEngine(
     }
 
     /// <summary>
-    /// Hybrid lexical + semantic memory search: <see cref="IMemoryRepository.SearchAsync"/>'s
-    /// substring match still decides which memories are eligible (cheap, exact, always available
-    /// offline), while <see cref="IMemoryVectorIndex"/> now also contributes semantically similar
-    /// memories the substring pass would miss entirely (paraphrase, synonym, no shared words).
-    /// Ranking blends both into <see cref="SemanticMatchWeight"/> vs. the decay/pinned/type-bonus
-    /// <see cref="RelevanceOf"/> score (see that constant's remarks).
+    /// Knowledge-first memory search. Candidates are lexical, semantic and entity matches (every
+    /// memory in the filtered pool when the query names no subject); events count half unless the
+    /// query asks for change history.
     /// </summary>
-    public async Task<IReadOnlyList<Context.Domain.Entities.Memory>> SearchMemoryAsync(Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null)
+    public async Task<IReadOnlyList<Context.Domain.Entities.Memory>> SearchMemoryAsync(
+        Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null, MemoryKind? kind = null)
     {
-        var lexicalHits = await memoryRepository.SearchAsync(projectId, query, includeSuperseded, ct, topic).ConfigureAwait(false);
-        var lexicalIds = lexicalHits.Select(m => m.Id).ToHashSet();
-
-        var semanticScores = await SemanticSearchAsync(projectId, query, topic, ct).ConfigureAwait(false);
-
-        var byId = lexicalHits.ToDictionary(m => m.Id);
-        var missingIds = semanticScores.Keys.Where(id => !byId.ContainsKey(id)).ToList();
-        if (missingIds.Count > 0)
+        var memories = await memoryRepository.ListByProjectAsync(projectId, includeSuperseded, ct).ConfigureAwait(false);
+        var topicFilter = string.IsNullOrWhiteSpace(topic) ? null : topic.Trim();
+        var pool = memories
+            .Where(m => (topicFilter is null || string.Equals(m.Topic?.Trim(), topicFilter, StringComparison.OrdinalIgnoreCase))
+                && (kind is null || m.Type.Kind() == kind))
+            .ToList();
+        if (pool.Count == 0)
         {
-            var fetched = await memoryRepository.GetByIdsAsync(missingIds, ct).ConfigureAwait(false);
-            foreach (var memory in fetched)
-            {
-                // The vector index now filters by topic too (see SqliteMemoryVectorIndex.SearchAsync),
-                // but still only by ProjectId/Topic -- includeSuperseded still needs enforcing here
-                // so a semantic-only hit can't bypass it.
-                if (!includeSuperseded && memory.SupersededById is not null)
-                {
-                    continue;
-                }
+            return [];
+        }
 
-                byId[memory.Id] = memory;
+        var parsed = MemoryQuery.Parse(query);
+        var matches = await MatchAsync(projectId, parsed, pool, topicFilter, ct).ConfigureAwait(false);
+        var eventWeight = QueryIntent.IsChangeHistory(parsed.Text) ? 1.0 : EventSearchWeight;
+        var now = DateTimeOffset.UtcNow;
+
+        return [.. pool
+            .Where(m => !parsed.HasSubject || matches.ContainsKey(m.Id))
+            .OrderByDescending(m => Score(m, matches.GetValueOrDefault(m.Id), now) * (m.Type.IsEvent() ? eventWeight : 1.0))];
+    }
+
+    /// <summary>Best of lexical, entity and semantic match per memory of <paramref name="pool"/>;
+    /// only memories with a positive match appear. Empty when the query names no subject.</summary>
+    private async Task<Dictionary<Guid, double>> MatchAsync(
+        Guid projectId, MemoryQuery query, IReadOnlyList<Context.Domain.Entities.Memory> pool, string? topic, CancellationToken ct)
+    {
+        var matches = new Dictionary<Guid, double>();
+        if (!query.HasSubject)
+        {
+            return matches;
+        }
+
+        var poolIds = pool.Select(m => m.Id).ToHashSet();
+
+        void Offer(Guid id, double score)
+        {
+            score = Math.Min(1.0, score);
+            if (score > 0 && poolIds.Contains(id) && (!matches.TryGetValue(id, out var current) || score > current))
+            {
+                matches[id] = score;
             }
         }
 
-        if (byId.Count == 0)
+        foreach (var memory in pool)
         {
-            return [];
+            Offer(memory.Id, query.LexicalMatch(memory));
         }
 
-        var normalizedSemantic = NormalizeSemanticScores(semanticScores);
-        var now = DateTimeOffset.UtcNow;
+        if (query.EntityKeys.Count > 0)
+        {
+            var entities = await memoryRepository.ListLiveEntitiesByKeysAsync(projectId, [.. query.EntityKeys], ct).ConfigureAwait(false);
+            foreach (var group in entities.GroupBy(e => e.MemoryId))
+            {
+                Offer(group.Key, (double)group.Select(e => e.Key).Distinct(StringComparer.Ordinal).Count() / query.EntityKeys.Count);
+            }
+        }
 
-        return [.. byId.Values.OrderByDescending(m => CombinedScore(m, lexicalIds, normalizedSemantic, now))];
+        foreach (var (id, similarity) in await SemanticSearchAsync(projectId, query.Text, topic, ct).ConfigureAwait(false))
+        {
+            if (similarity >= MemorySemanticMinSimilarity)
+            {
+                Offer(id, similarity);
+            }
+        }
+
+        return matches;
     }
 
-    private async Task<Dictionary<Guid, double>> SemanticSearchAsync(Guid projectId, string query, string? topic, CancellationToken ct)
+    /// <summary>Cosine similarity of the query to indexed memories for the current embedding model.
+    /// Embedding failures leave memory search lexical-only instead of failing it.</summary>
+    private async Task<IReadOnlyList<(Guid MemoryId, double Score)>> SemanticSearchAsync(Guid projectId, string query, string? topic, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(query))
+        try
+        {
+            var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
+            var embeddingResult = await embeddingGenerator.GenerateAsync(query, InteractiveEmbeddingOptions, ct).ConfigureAwait(false);
+
+            return await memoryVectorIndex.SearchAsync(
+                projectId, embeddingGenerator.GetProviderModelKey(), embeddingResult.Vector.ToArray(), MemorySemanticSearchLimit, ct, topic)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
         {
             return [];
         }
-
-        var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
-        var embeddingResult = await embeddingGenerator.GenerateAsync(query, InteractiveEmbeddingOptions, ct).ConfigureAwait(false);
-
-        var hits = await memoryVectorIndex.SearchAsync(
-            projectId, embeddingGenerator.GetProviderModelKey(), embeddingResult.Vector.ToArray(), SemanticSearchLimit, ct, topic)
-            .ConfigureAwait(false);
-
-        return hits.ToDictionary(h => h.MemoryId, h => h.Score);
     }
+
+    private static double Score(Context.Domain.Entities.Memory memory, double match, DateTimeOffset now) =>
+        (MatchWeight * match)
+        + (RelevanceWeight * DecayCalculator.ComputeRelevanceMultiplier(memory.Confidence, memory.LastReinforcedAt, memory.Pinned, memory.Tier, now))
+        + (TypeBonusWeight * HybridScorer.NormalizedMemoryTypeBonus(memory.Type));
 
     private static IReadOnlyDictionary<Guid, double> NormalizeSemanticScores(Dictionary<Guid, double> raw)
     {
@@ -205,25 +243,35 @@ public sealed class ContextEngine(
         return result;
     }
 
-    /// <summary>A lexical substring hit counts as a maximal match (1.0) regardless of its
-    /// (unrelated) semantic score — a direct text match is a strong signal on its own, and
-    /// shouldn't be buried under a merely-decent semantic-only hit. Semantic-only hits use their
-    /// min-max-normalized cosine similarity.</summary>
-    private static double CombinedScore(
-        Context.Domain.Entities.Memory memory, HashSet<Guid> lexicalIds, IReadOnlyDictionary<Guid, double> normalizedSemantic, DateTimeOffset now)
+    public async Task<MemoryDetail?> GetMemoryAsync(Guid projectId, Guid memoryId, CancellationToken ct)
     {
-        var semanticScore = normalizedSemantic.TryGetValue(memory.Id, out var s) ? s : 0.0;
-        var matchScore = lexicalIds.Contains(memory.Id) ? Math.Max(semanticScore, 1.0) : semanticScore;
+        var memory = await memoryRepository.GetByIdAsync(memoryId, ct).ConfigureAwait(false);
+        if (memory is null || memory.ProjectId != projectId)
+        {
+            return null;
+        }
 
-        return (SemanticMatchWeight * matchScore) + ((1 - SemanticMatchWeight) * RelevanceOf(memory, now));
+        var evidence = await memoryRepository.ListEvidenceAsync([memoryId], ct).ConfigureAwait(false);
+        var entities = await memoryRepository.ListEntitiesAsync([memoryId], ct).ConfigureAwait(false);
+        return new MemoryDetail(memory, evidence, entities);
+    }
+
+    public async Task<bool> ForgetMemoryAsync(Guid projectId, Guid memoryId, CancellationToken ct)
+    {
+        var memory = await memoryRepository.GetByIdAsync(memoryId, ct).ConfigureAwait(false);
+        if (memory is null || memory.ProjectId != projectId)
+        {
+            return false;
+        }
+
+        await memoryRepository.DeleteAsync(memoryId, ct).ConfigureAwait(false);
+        return true;
     }
 
     /// <summary>
-    /// Hybrid lexical + semantic search over <see cref="SessionSummaryChunk"/>s, mirroring
-    /// <see cref="SearchMemoryAsync"/> exactly (see its own remarks) — a lexical substring hit still
-    /// counts as a maximal match, a semantic-only hit uses its min-max-normalized cosine similarity.
-    /// Unlike memories, chunks have no decay/pinned/type-bonus concept to blend in as a tie-breaker,
-    /// so the match score alone decides ranking.
+    /// Hybrid lexical + semantic search over <see cref="SessionSummaryChunk"/>s: a lexical substring
+    /// hit counts as a maximal match, a semantic-only hit uses its min-max-normalized cosine
+    /// similarity, and the match score alone decides ranking.
     /// </summary>
     public async Task<IReadOnlyList<SessionSummaryChunk>> SearchSessionSummariesAsync(
         Guid projectId, string query, CancellationToken ct, Guid? sessionId = null, int limit = 20)
@@ -274,8 +322,6 @@ public sealed class ContextEngine(
         return hits.ToDictionary(h => h.ChunkId, h => h.Score);
     }
 
-    /// <summary>Same "lexical hit is a maximal match" rule as <see cref="CombinedScore"/>, without a
-    /// decay/type-bonus term to blend in — chunks have no analogous concept.</summary>
     private static double CombinedChunkScore(SessionSummaryChunk chunk, HashSet<Guid> lexicalIds, IReadOnlyDictionary<Guid, double> normalizedSemantic)
     {
         var semanticScore = normalizedSemantic.TryGetValue(chunk.Id, out var s) ? s : 0.0;
@@ -439,10 +485,10 @@ public sealed class ContextEngine(
         ArgumentException.ThrowIfNullOrWhiteSpace(content);
 
         var candidate = new MemoryCandidate(
-            Type: type ?? MemoryType.Instruction,
+            Type: type ?? MemoryType.Fact,
             Title: string.IsNullOrWhiteSpace(title) ? BuildExplicitRememberTitle(content) : title.Trim(),
             Body: content,
-            Confidence: ExplicitRememberConfidence,
+            Source: EvidenceSource.Explicit,
             Facts: facts ?? [],
             Concepts: concepts ?? [],
             FilesRead: filesRead ?? [],
@@ -450,8 +496,7 @@ public sealed class ContextEngine(
             Topic: string.IsNullOrWhiteSpace(topic) ? null : topic.Trim(),
             ScopePath: Context.Memory.Extraction.ScopePathHeuristics.DeriveFromFiles(filesModified ?? [], filesRead ?? []));
 
-        var existing = (await memoryStore.GetExistingWithEmbeddingsAsync(projectId, ct).ConfigureAwait(false)).ToList();
-        var result = await memoryConsolidator.ConsolidateAsync(projectId, sessionId: null, candidate, existing, isInteractive: true, ct).ConfigureAwait(false);
+        var result = await memoryConsolidator.ConsolidateAsync(projectId, sessionId: null, candidate, isInteractive: true, ct).ConfigureAwait(false);
         return result.Memory;
     }
 
@@ -473,79 +518,86 @@ public sealed class ContextEngine(
     }
 
     /// <summary>
-    /// Ranks the project's active memories and splits them into the two sections
-    /// <see cref="ContextPackBuilder"/>'s richer overload accepts: <see cref="MemoryType.Issue"/>
-    /// memories become open issues, everything else becomes a historical note. Both lists are
-    /// pre-sorted, matching what <see cref="ContextPackBuilder"/> expects from a caller-supplied,
-    /// already-ordered section (see its own remarks on <c>GreedyKnapsackOrdered</c>).
+    /// Query-aware memory sections for a pack. Historical notes hold matching knowledge (Active before
+    /// Contested), preceded by events only for a change-history query, newest first. Open issues hold
+    /// matching issues, or every live issue for a pending-work query. A query naming no subject gets
+    /// the top knowledge by relevance and never events unless it asks for change history.
     /// </summary>
-    /// <remarks>
-    /// Ranking is normally <see cref="RelevanceOf"/> (decay + <see cref="HybridScorer.MemoryTypeBonus"/>,
-    /// most-relevant-first). A <see cref="QueryIntent.IsRecall"/> query ("what did we do last
-    /// time?") ranks the historical-notes section by <see cref="Context.Domain.Entities.Memory.CreatedAt"/>
-    /// instead (most-recent-first) -- <see cref="ContextPackBuilder"/> has no memory timestamps to
-    /// do this itself, so it's done here where the real <see cref="Context.Domain.Entities.Memory"/>
-    /// records are still in hand. Open issues stay relevance-ranked either way; a "what's still
-    /// pending?" query is instead handled downstream by <see cref="ContextPackBuilder"/> reordering
-    /// this same relevance-ranked text by content (see <see cref="QueryIntent.IsPendingWorkFlavored"/>).
-    /// </remarks>
     private async Task<(IReadOnlyList<string> HistoricalNotes, IReadOnlyList<string> OpenIssues)> BuildMemorySectionsAsync(
-        Guid projectId, string queryText, CancellationToken ct)
+        SearchQuery query, CancellationToken ct)
     {
-        var memories = await memoryRepository.ListByProjectAsync(projectId, includeSuperseded: false, ct).ConfigureAwait(false);
+        var memories = await memoryRepository.ListByProjectAsync(query.ProjectId, includeSuperseded: false, ct).ConfigureAwait(false);
         if (memories.Count == 0)
         {
             return ([], []);
         }
 
-        var settings = await projectSettingsService.GetAsync(projectId, ct).ConfigureAwait(false);
-        var maxMemoryNotesPerSection = Math.Clamp(settings.MaxMemoryNotesPerSection, 1, 200);
+        var settings = await projectSettingsService.GetAsync(query.ProjectId, ct).ConfigureAwait(false);
+        var maxNotes = Math.Clamp(settings.MaxMemoryNotesPerSection, 1, MaxMemoryNotesPerSectionCap);
 
+        var parsed = MemoryQuery.Parse(query.Text);
+        var matches = await MatchAsync(query.ProjectId, parsed, memories, topic: null, ct).ConfigureAwait(false);
         var now = DateTimeOffset.UtcNow;
-        var relevanceRanked = memories.OrderByDescending(m => RelevanceOf(m, now)).ToList();
 
-        var notesSource = QueryIntent.IsRecall(queryText)
-            ? memories.OrderByDescending(m => m.CreatedAt).ToList()
-            : relevanceRanked;
+        bool IsCandidate(Context.Domain.Entities.Memory m) => !parsed.HasSubject || matches.ContainsKey(m.Id);
+        double ScoreOf(Context.Domain.Entities.Memory m) => Score(m, matches.GetValueOrDefault(m.Id), now);
 
-        var historicalNotes = notesSource
-            .Where(m => m.Type != MemoryType.Issue)
-            .Take(maxMemoryNotesPerSection)
-            .Select(FormatMemoryNote)
-            .ToList();
+        var knowledge = memories
+            .Where(m => m.Type.IsKnowledge() && m.Type != MemoryType.Issue && IsCandidate(m))
+            .OrderBy(m => m.Status == MemoryStatus.Contested)
+            .ThenByDescending(ScoreOf)
+            .Take(maxNotes);
 
-        var openIssues = relevanceRanked
-            .Where(m => m.Type == MemoryType.Issue)
-            .Take(maxMemoryNotesPerSection)
-            .Select(FormatMemoryNote)
-            .ToList();
+        var events = QueryIntent.IsChangeHistory(parsed.Text)
+            ? memories.Where(m => m.Type.IsEvent() && IsCandidate(m)).OrderByDescending(m => m.CreatedAt).Take(maxNotes)
+            : [];
 
-        return (historicalNotes, openIssues);
+        var includeAllIssues = !parsed.HasSubject || QueryIntent.IsPendingWork(parsed.Text);
+        var issues = memories
+            .Where(m => m.Type == MemoryType.Issue && (includeAllIssues || matches.ContainsKey(m.Id)))
+            .OrderByDescending(ScoreOf)
+            .Take(maxNotes);
+
+        return (
+            RenderNotes([.. events, .. knowledge], (int)(query.TokenBudget * ContextPackBuilder.DefaultHistoricalReserveRatio)),
+            RenderNotes([.. issues], (int)(query.TokenBudget * ContextPackBuilder.DefaultOpenIssuesReserveRatio)));
+    }
+
+    /// <summary>Canonical notes, with facts appended in order while the section budget still has room
+    /// after every plain note <see cref="ContextPackBuilder"/> would keep.</summary>
+    private static List<string> RenderNotes(IReadOnlyList<Context.Domain.Entities.Memory> memories, int budget)
+    {
+        var notes = memories.Select(m => MemoryNote.Format(m)).ToList();
+
+        var kept = new List<int>();
+        var used = 0;
+        for (var i = 0; i < notes.Count; i++)
+        {
+            var cost = TokenEstimator.Estimate(notes[i]);
+            if (used + cost <= budget)
+            {
+                kept.Add(i);
+                used += cost;
+            }
+        }
+
+        var spare = budget - used;
+        foreach (var i in kept)
+        {
+            var withFacts = MemoryNote.Format(memories[i], includeFacts: true);
+            var extra = TokenEstimator.Estimate(withFacts) - TokenEstimator.Estimate(notes[i]);
+            if (withFacts.Length > notes[i].Length && extra <= spare)
+            {
+                notes[i] = withFacts;
+                spare -= extra;
+            }
+        }
+
+        return notes;
     }
 
     /// <summary>
-    /// Base decay-based relevance (<see cref="DecayCalculator"/>, already normalized to [0, 1])
-    /// plus the codemem-inspired kind bonus (<see cref="HybridScorer.MemoryTypeBonus"/>) for the
-    /// memory's <see cref="MemoryType"/>, re-clamped to [0, 1] via <see cref="HybridScorer.ApplyMemoryTypeBonus"/>.
-    /// </summary>
-    private static double RelevanceOf(Context.Domain.Entities.Memory memory, DateTimeOffset now) =>
-        HybridScorer.ApplyMemoryTypeBonus(
-            DecayCalculator.ComputeRelevanceMultiplier(memory.Confidence, memory.LastReinforcedAt, memory.Pinned, now),
-            memory.Type);
-
-    /// <summary>
-    /// Prefixes the memory's <see cref="Context.Domain.Entities.Memory.Topic"/> in its own bracket
-    /// when set, e.g. "[Decision][Auth middleware] ..." — otherwise unchanged from the pre-Topic
-    /// format so existing notes without a topic (and any consumer/test asserting on that exact
-    /// string) are unaffected.
-    /// </summary>
-    private static string FormatMemoryNote(Context.Domain.Entities.Memory memory) =>
-        string.IsNullOrWhiteSpace(memory.Topic)
-            ? $"[{memory.Type}] {memory.Title}: {memory.Body}"
-            : $"[{memory.Type}][{memory.Topic}] {memory.Title}: {memory.Body}";
-
-    /// <summary>
-    /// Concrete shape of the session-scoped delivery cache described in the task brief §3: any
+    /// Session-scoped delivery cache: any
     /// <see cref="SearchHit"/> whose node was already delivered in full to this session within
     /// <see cref="SessionDeliveryCache.Ttl"/> gets its <see cref="SearchHit.Snippet"/> replaced by
     /// a short back-reference (id + kind + label + when) instead of the full content again — the
@@ -702,6 +754,12 @@ public sealed record ExpandedNode(
     int? EndLine,
     string? DocComment,
     string? Content);
+
+/// <summary>Result of <see cref="IContextEngine.GetMemoryAsync"/>.</summary>
+public sealed record MemoryDetail(
+    Context.Domain.Entities.Memory Memory,
+    IReadOnlyList<MemoryEvidence> Evidence,
+    IReadOnlyList<MemoryEntity> Entities);
 
 /// <summary>Result of <see cref="IContextEngine.ProjectInfoAsync"/> — aggregate project stats.</summary>
 public sealed record ProjectInfo(

@@ -43,7 +43,7 @@ public sealed class ProjectSettingsService(
             effective = localSettings with
             {
                 LastReindexScheduledAt = effective.LastReindexScheduledAt,
-                LastMemoryCompactionScheduledAt = effective.LastMemoryCompactionScheduledAt,
+                LastMemoryReconsolidationScheduledAt = effective.LastMemoryReconsolidationScheduledAt,
             };
         }
 

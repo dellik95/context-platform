@@ -95,56 +95,6 @@ public sealed class VectorPruningRepositoryTests
     }
 
     [Fact]
-    public async Task MarkSupersededAsync_prunes_the_superseded_memorys_vector()
-    {
-        var oldId = Guid.NewGuid();
-        var newId = Guid.NewGuid();
-
-        var inner = new Mock<IMemoryRepository>();
-        inner.Setup(r => r.MarkSupersededAsync(oldId, newId, It.IsAny<CancellationToken>())).ReturnsAsync(true);
-
-        var vectorIndex = new Mock<IMemoryVectorIndex>();
-        var sut = new VectorPruningMemoryRepository(inner.Object, vectorIndex.Object);
-
-        (await sut.MarkSupersededAsync(oldId, newId, CancellationToken.None)).Should().BeTrue();
-
-        // Superseded hits are filtered only after the ANN pass has already spent its top-K on them,
-        // so leaving the vector behind lets a merged-away duplicate crowd out live memories forever.
-        vectorIndex.Verify(v => v.DeleteAsync(It.Is<IReadOnlyCollection<Guid>>(ids => ids.Single() == oldId), It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [Fact]
-    public async Task MarkSupersededAsync_leaves_the_vector_in_place_when_the_row_was_not_found()
-    {
-        var inner = new Mock<IMemoryRepository>();
-        inner.Setup(r => r.MarkSupersededAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync(false);
-
-        var vectorIndex = new Mock<IMemoryVectorIndex>();
-        var sut = new VectorPruningMemoryRepository(inner.Object, vectorIndex.Object);
-
-        (await sut.MarkSupersededAsync(Guid.NewGuid(), Guid.NewGuid(), CancellationToken.None)).Should().BeFalse();
-
-        vectorIndex.Verify(v => v.DeleteAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()), Times.Never);
-    }
-
-    [Fact]
-    public async Task MarkSupersededBatchAsync_defers_pruning_to_its_caller()
-    {
-        var oldIds = new[] { Guid.NewGuid(), Guid.NewGuid() };
-        var inner = new Mock<IMemoryRepository>();
-        inner.Setup(r => r.MarkSupersededBatchAsync(oldIds, It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync(2);
-
-        var vectorIndex = new Mock<IMemoryVectorIndex>();
-        var sut = new VectorPruningMemoryRepository(inner.Object, vectorIndex.Object);
-
-        await sut.MarkSupersededBatchAsync(oldIds, Guid.NewGuid(), CancellationToken.None);
-
-        // The batch path runs inside MemoryStoreAdapter's EF transaction; sqlite-vec is on its own
-        // connection and cannot be rolled back with it, so that caller prunes after the commit.
-        vectorIndex.Verify(v => v.DeleteAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()), Times.Never);
-    }
-
-    [Fact]
     public async Task Memory_reads_and_writes_other_than_delete_pass_straight_through()
     {
         var memory = new DomainMemory { Id = Guid.NewGuid(), Title = "t", Body = "b" };

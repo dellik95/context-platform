@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Context.Application.Abstractions;
 using Context.Application.Support;
+using Context.Domain.Enums;
 using Context.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.VectorData;
@@ -9,22 +10,15 @@ using Microsoft.SemanticKernel.Connectors.SqliteVec;
 namespace Context.Application.Adapters;
 
 /// <summary>
-/// <see cref="IMemoryVectorIndex"/> backed by sqlite-vec, mirroring <see cref="SqliteChunkVectorIndex"/>
-/// exactly -- same reasoning for per-provider collections (<c>memory_vectors_{provider}</c>),
-/// same connection/lifetime story. See that class's remarks for the full rationale; only the
-/// differences are called out here.
+/// <see cref="IMemoryVectorIndex"/> backed by sqlite-vec, mirroring <see cref="SqliteChunkVectorIndex"/>:
+/// one collection per embedding model key (<c>memory_vec_{key}</c>), same connection/lifetime story.
 /// </summary>
 /// <remarks>
-/// <b>Backfill is provider-blind, unlike the chunk side:</b> <see cref="Context.Domain.Entities.MemoryEmbedding"/>
-/// has no <c>Provider</c> column (it predates this index and was only ever read by
-/// <see cref="Context.Memory.Extraction.MemoryConsolidator"/>'s brute-force, provider-blind cosine
-/// dedup) -- so on first use, every existing <c>MemoryEmbeddings</c> row is backfilled into
-/// whichever provider's collection is created first, on the same implicit assumption the
-/// consolidator already makes: a project has exactly one active embedding provider at a time. If a
-/// project later switches providers, old vectors keep the stale dimensionality's collection; new
-/// memories embed into the new provider's collection going forward, same tradeoff
-/// <see cref="SqliteChunkVectorIndex"/> accepts for chunks (whose Embedding cache *does* key by
-/// provider, but whose vector-index collections still each start from that one shared cache).
+/// The first use of a collection in a process fills its gaps from <c>MemoryEmbeddings</c>: every live
+/// memory embedded by the same model and dimension that has no record yet, which covers both a new
+/// collection and a vector write lost after its database commit. Rows embedded by another model are
+/// never mixed in. It also drops the pre-knowledge-model <c>memory_vectors_*</c> collections, which
+/// carried vectors of unknown provenance.
 /// </remarks>
 public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<ContextDbContext> dbContextFactory)
     : IMemoryVectorIndex, IDisposable
@@ -32,15 +26,12 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
     private readonly string _connectionString = $"Data Source={dbPath};Default Timeout=10";
     private readonly ConcurrentDictionary<string, Lazy<Task<SqliteCollection<Guid, MemoryVectorRecord>>>> _collections = new();
 
-    public async Task UpsertAsync(Guid memoryId, Guid projectId, string memoryType, string? topic, string provider, float[] vector, CancellationToken ct)
+    public async Task UpsertAsync(Guid memoryId, Guid projectId, string? topic, string provider, float[] vector, CancellationToken ct)
     {
         var collection = await GetOrCreateCollectionAsync(provider, vector.Length, ct).ConfigureAwait(false);
         await collection.UpsertAsync(
-            // Topic is lower-invariant'd here (and again on the SearchAsync filter side below) so
-            // this record's Topic column is purely a case-insensitive filter key, matching
-            // IMemoryRepository.SearchAsync's case-insensitive topic semantics -- it's never read
-            // back for display.
-            new MemoryVectorRecord { MemoryId = memoryId, ProjectId = projectId, MemoryType = memoryType, Topic = topic?.ToLowerInvariant(), Vector = vector },
+            // Lower-cased: Topic is only a case-insensitive filter key, never read back for display.
+            new MemoryVectorRecord { MemoryId = memoryId, ProjectId = projectId, Topic = topic?.ToLowerInvariant(), Vector = vector },
             ct).ConfigureAwait(false);
     }
 
@@ -120,7 +111,6 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
         {
             new VectorStoreKeyProperty(nameof(MemoryVectorRecord.MemoryId), typeof(Guid)),
             new VectorStoreDataProperty(nameof(MemoryVectorRecord.ProjectId), typeof(Guid)) { IsIndexed = true },
-            new VectorStoreDataProperty(nameof(MemoryVectorRecord.MemoryType), typeof(string)),
             new VectorStoreDataProperty(nameof(MemoryVectorRecord.Topic), typeof(string)),
             new VectorStoreVectorProperty(nameof(MemoryVectorRecord.Vector), typeof(ReadOnlyMemory<float>), 1)
             {
@@ -140,54 +130,90 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
         }
     }
 
-    private Task<SqliteCollection<Guid, MemoryVectorRecord>> GetOrCreateCollectionAsync(
-        string provider, int dimensions, CancellationToken ct) =>
-        _collections.GetOrAdd(
+    private async Task<SqliteCollection<Guid, MemoryVectorRecord>> GetOrCreateCollectionAsync(
+        string provider, int dimensions, CancellationToken ct)
+    {
+        var lazy = _collections.GetOrAdd(
             provider,
-            p => new Lazy<Task<SqliteCollection<Guid, MemoryVectorRecord>>>(() => CreateCollectionAsync(p, dimensions, ct))
-        ).Value;
+            p => new Lazy<Task<SqliteCollection<Guid, MemoryVectorRecord>>>(() => CreateCollectionAsync(p, dimensions, ct)));
+        try
+        {
+            return await lazy.Value.ConfigureAwait(false);
+        }
+        catch
+        {
+            // Same as SqliteChunkVectorIndex: a faulted init must not stick for the process lifetime.
+            _collections.TryRemove(new KeyValuePair<string, Lazy<Task<SqliteCollection<Guid, MemoryVectorRecord>>>>(provider, lazy));
+            throw;
+        }
+    }
 
     private async Task<SqliteCollection<Guid, MemoryVectorRecord>> CreateCollectionAsync(
         string provider, int dimensions, CancellationToken ct)
     {
         var collection = BuildCollection(provider, dimensions);
-
-        var existedBefore = await collection.CollectionExistsAsync(ct).ConfigureAwait(false);
-        await collection.EnsureCollectionExistsAsync(ct).ConfigureAwait(false);
-        if (!existedBefore)
+        try
         {
-            await BackfillFromMemoryEmbeddingsAsync(collection, ct).ConfigureAwait(false);
+            await collection.EnsureCollectionExistsAsync(ct).ConfigureAwait(false);
+            await DropLegacyCollectionsAsync(ct).ConfigureAwait(false);
+            await BackfillMissingAsync(collection, provider, dimensions, ct).ConfigureAwait(false);
+            return collection;
         }
-
-        return collection;
+        catch
+        {
+            collection.Dispose();
+            throw;
+        }
     }
 
-    private async Task BackfillFromMemoryEmbeddingsAsync(
-        SqliteCollection<Guid, MemoryVectorRecord> collection, CancellationToken ct)
+    private async Task DropLegacyCollectionsAsync(CancellationToken ct)
+    {
+        foreach (var tableName in await SqliteVectorTables.ListAsync(_connectionString, LegacyTableNamePrefix, ct).ConfigureAwait(false))
+        {
+            using var collection = OpenForDelete(tableName);
+            await collection.EnsureCollectionDeletedAsync(ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task BackfillMissingAsync(
+        SqliteCollection<Guid, MemoryVectorRecord> collection, string provider, int dimensions, CancellationToken ct)
     {
         await using var db = await dbContextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
-        var rows = await (
+        var embedded =
             from m in db.Memories.AsNoTracking()
             join e in db.MemoryEmbeddings.AsNoTracking() on m.Id equals e.MemoryId
-            select new { MemoryId = m.Id, m.ProjectId, m.Type, m.Topic, e.Vector }
-        ).ToListAsync(ct).ConfigureAwait(false);
+            where e.ModelKey == provider
+                && e.Dim == dimensions
+                && (m.Status == MemoryStatus.Active || m.Status == MemoryStatus.Contested)
+            select new { MemoryId = m.Id, m.ProjectId, m.Topic, e.Vector };
 
-        if (rows.Count == 0)
+        var ids = await embedded.Select(r => r.MemoryId).ToListAsync(ct).ConfigureAwait(false);
+        foreach (var batch in ids.Chunk(BackfillBatchSize))
         {
-            return;
+            var present = new HashSet<Guid>();
+            await foreach (var record in collection.GetAsync(batch, options: null, ct).ConfigureAwait(false))
+            {
+                present.Add(record.MemoryId);
+            }
+
+            var missing = batch.Where(id => !present.Contains(id)).ToList();
+            if (missing.Count == 0)
+            {
+                continue;
+            }
+
+            var rows = await embedded.Where(r => missing.Contains(r.MemoryId)).ToListAsync(ct).ConfigureAwait(false);
+            await collection.UpsertAsync(
+                rows.Select(r => new MemoryVectorRecord
+                {
+                    MemoryId = r.MemoryId,
+                    ProjectId = r.ProjectId,
+                    Topic = r.Topic?.ToLowerInvariant(),
+                    Vector = new ReadOnlyMemory<float>(EmbeddingVectorCodec.Decode(r.Vector)),
+                }),
+                ct).ConfigureAwait(false);
         }
-
-        var records = rows.Select(r => new MemoryVectorRecord
-        {
-            MemoryId = r.MemoryId,
-            ProjectId = r.ProjectId,
-            MemoryType = r.Type.ToString(),
-            Topic = r.Topic?.ToLowerInvariant(),
-            Vector = new ReadOnlyMemory<float>(EmbeddingVectorCodec.Decode(r.Vector)),
-        });
-
-        await collection.UpsertAsync(records, ct).ConfigureAwait(false);
     }
 
     private SqliteCollection<Guid, MemoryVectorRecord> BuildCollection(string provider, int dimensions)
@@ -198,7 +224,6 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
             {
                 new VectorStoreKeyProperty(nameof(MemoryVectorRecord.MemoryId), typeof(Guid)),
                 new VectorStoreDataProperty(nameof(MemoryVectorRecord.ProjectId), typeof(Guid)) { IsIndexed = true },
-                new VectorStoreDataProperty(nameof(MemoryVectorRecord.MemoryType), typeof(string)) { IsIndexed = true },
                 new VectorStoreDataProperty(nameof(MemoryVectorRecord.Topic), typeof(string)) { IsIndexed = true },
                 new VectorStoreVectorProperty(nameof(MemoryVectorRecord.Vector), typeof(ReadOnlyMemory<float>), dimensions)
                 {
@@ -211,7 +236,9 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
             _connectionString, CollectionNameFor(provider), new SqliteCollectionOptions { Definition = definition });
     }
 
-    private const string TableNamePrefix = "memory_vectors_";
+    private const string TableNamePrefix = "memory_vec_";
+    private const int BackfillBatchSize = 500;
+    private const string LegacyTableNamePrefix = "memory_vectors_";
 
     private static string CollectionNameFor(string provider)
     {
@@ -223,7 +250,6 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
     {
         public required Guid MemoryId { get; set; }
         public required Guid ProjectId { get; set; }
-        public string? MemoryType { get; set; }
         public string? Topic { get; set; }
         public required ReadOnlyMemory<float> Vector { get; set; }
     }

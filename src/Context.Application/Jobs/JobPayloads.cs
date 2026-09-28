@@ -39,13 +39,11 @@ public sealed record SummarizeSessionPayload(Guid SessionId, bool IsSessionEnd =
 
 /// <summary>
 /// Exactly one source is set: <see cref="EventBatchId"/> (a batch of raw SessionEvents claimed by
-/// <c>ContextEngine.RecordEventAsync</c>/<c>EndSessionAsync</c>), <see cref="CompactSummary"/> (the
-/// text Claude Code produced on /compact), or the legacy <see cref="SummaryChunkId"/> that jobs
-/// queued before event batching still carry.
+/// <c>ContextEngine.RecordEventAsync</c>/<c>EndSessionAsync</c>) or <see cref="CompactSummary"/> (the
+/// text Claude Code produced on /compact).
 /// </summary>
 public sealed record ExtractMemoryPayload(
     Guid SessionId,
-    Guid? SummaryChunkId = null,
     Guid? EventBatchId = null,
     string? CompactSummary = null);
 
@@ -67,10 +65,12 @@ public sealed record ResolveRelationsPayload(Guid ProjectId);
 public sealed record RecreateEmbeddingsPayload(Guid ProjectId);
 
 /// <summary>
-/// Drives <see cref="Handlers.CompactMemoryJobHandler"/>: clusters and merges near-duplicate
-/// memories for <see cref="ProjectId"/>. Per-project (unlike <see cref="DecayMemoryPayload"/>'s
-/// host-wide marker) since compaction's interval/threshold are per-project
-/// <see cref="Context.Application.Settings.ProjectSettingsDto"/> settings, fired by
-/// <see cref="Context.Application.Scheduling.MemoryCompactionScheduler"/>.
+/// Drives <see cref="Handlers.ReconsolidateMemoryJobHandler"/>. A dry run only plans and stores a
+/// Pending report; with <see cref="ReportId"/> set, that stored report is applied instead of planning
+/// anew; otherwise the plan is applied straight away (the scheduled path).
 /// </summary>
-public sealed record CompactMemoryPayload(Guid ProjectId);
+public sealed record ReconsolidateMemoryPayload(
+    Guid ProjectId,
+    bool DryRun = true,
+    Guid? ReportId = null,
+    IReadOnlyList<int>? ExcludeGroups = null);

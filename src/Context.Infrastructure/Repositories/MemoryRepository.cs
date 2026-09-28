@@ -30,39 +30,20 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
 
     public async Task DeleteAsync(Guid id, CancellationToken ct)
     {
-        // MemoryConfiguration wires SupersededById as DeleteBehavior.Restrict, so a memory that
-        // superseded this one (its SupersededById points AT this row) would block the delete with
-        // an FK violation unless that pointer is cleared FIRST, not after.
-        await db.Memories.Where(m => m.SupersededById == id).ExecuteUpdateAsync(
-            setters => setters.SetProperty(m => m.SupersededById, (Guid?)null), ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
 
+        // SupersededById is Restrict, so the pointers at this row must go first.
+        await db.Memories.Where(m => m.SupersededById == id).ExecuteUpdateAsync(setters => setters
+            .SetProperty(m => m.SupersededById, (Guid?)null)
+            .SetProperty(m => m.SupersededAt, (DateTimeOffset?)null)
+            .SetProperty(m => m.Status, MemoryStatus.Obsolete), ct);
+
+        await db.MemoryEvidence.Where(e => e.MemoryId == id).ExecuteDeleteAsync(ct);
+        await db.MemoryEntities.Where(e => e.MemoryId == id).ExecuteDeleteAsync(ct);
+        await db.MemoryEmbeddings.Where(e => e.MemoryId == id).ExecuteDeleteAsync(ct);
         await db.Memories.Where(m => m.Id == id).ExecuteDeleteAsync(ct);
-        // affected == 0 (id didn't exist) is a no-op, not an error — delete is idempotent here.
-    }
 
-    public async Task<IReadOnlyList<Memory>> SearchAsync(Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null)
-    {
-        var pattern = $"%{query}%";
-        var q = db.Memories.AsNoTracking().Where(m => m.ProjectId == projectId &&
-            (EF.Functions.Like(m.Title, pattern) || EF.Functions.Like(m.Body, pattern)));
-
-        if (!includeSuperseded)
-        {
-            q = q.Where(m => m.SupersededById == null);
-        }
-
-        if (!string.IsNullOrWhiteSpace(topic))
-        {
-            // SQLite's LIKE is case-insensitive for ASCII by default (same assumption the
-            // Title/Body match above relies on) — used here with no wildcards for an
-            // effectively case-insensitive exact match against the topic tag.
-            q = q.Where(m => m.Topic != null && EF.Functions.Like(m.Topic, topic));
-        }
-
-        // SQLite's EF Core provider cannot translate ORDER BY over DateTimeOffset columns
-        // (LastReinforcedAt), so results are ordered client-side after filtering server-side.
-        var results = await q.ToListAsync(ct);
-        return [.. results.OrderByDescending(m => m.Pinned).ThenByDescending(m => m.LastReinforcedAt)];
+        await tx.CommitAsync(ct);
     }
 
     public async Task<IReadOnlyList<Memory>> ListByProjectAsync(Guid projectId, bool includeSuperseded, CancellationToken ct)
@@ -70,11 +51,16 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
         var q = db.Memories.AsNoTracking().Where(m => m.ProjectId == projectId);
         if (!includeSuperseded)
         {
-            q = q.Where(m => m.SupersededById == null);
+            q = LiveOnly(q);
         }
 
-        var results = await q.ToListAsync(ct);
-        return [.. results.OrderByDescending(m => m.Pinned).ThenByDescending(m => m.LastReinforcedAt)];
+        return OrderForDisplay(await q.ToListAsync(ct));
+    }
+
+    public async Task<IReadOnlyList<Memory>> ListLiveByTopicKeyAsync(Guid projectId, string topicKey, CancellationToken ct)
+    {
+        var q = db.Memories.AsNoTracking().Where(m => m.ProjectId == projectId && m.TopicKey == topicKey);
+        return OrderForDisplay(await LiveOnly(q).ToListAsync(ct));
     }
 
     public async Task<IReadOnlyList<Memory>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct)
@@ -87,49 +73,128 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
         return await db.Memories.AsNoTracking().Where(m => ids.Contains(m.Id)).ToListAsync(ct);
     }
 
-    public async Task<bool> MarkSupersededAsync(Guid oldMemoryId, Guid newMemoryId, CancellationToken ct)
+    public async Task AddEvidenceAsync(IReadOnlyCollection<MemoryEvidence> evidence, CancellationToken ct)
     {
-        var affected = await db.Memories
-            .Where(m => m.Id == oldMemoryId)
-            .ExecuteUpdateAsync(setters => setters.SetProperty(m => m.SupersededById, newMemoryId), ct);
+        if (evidence.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var row in evidence)
+        {
+            if (row.Id == Guid.Empty)
+            {
+                row.Id = Guid.NewGuid();
+            }
+        }
+
+        db.MemoryEvidence.AddRange(evidence);
+        await db.SaveChangesAsync(ct);
+        foreach (var row in evidence)
+        {
+            db.Entry(row).State = EntityState.Detached;
+        }
+    }
+
+    public async Task<IReadOnlyList<MemoryEvidence>> ListEvidenceAsync(IReadOnlyCollection<Guid> memoryIds, CancellationToken ct)
+    {
+        if (memoryIds.Count == 0)
+        {
+            return [];
+        }
+
+        var ids = memoryIds.ToArray();
+        var rows = await db.MemoryEvidence.AsNoTracking().Where(e => ids.Contains(e.MemoryId)).ToListAsync(ct);
+        return [.. rows.OrderBy(e => e.ObservedAt)];
+    }
+
+    public async Task ReplaceEntitiesAsync(Guid memoryId, IReadOnlyCollection<MemoryEntity> entities, CancellationToken ct)
+    {
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        await db.MemoryEntities.Where(e => e.MemoryId == memoryId).ExecuteDeleteAsync(ct);
+
+        var rows = entities
+            .DistinctBy(e => e.Key, StringComparer.Ordinal)
+            .Select(e => new MemoryEntity { ProjectId = e.ProjectId, MemoryId = memoryId, Key = e.Key, Display = e.Display })
+            .ToList();
+        if (rows.Count > 0)
+        {
+            db.MemoryEntities.AddRange(rows);
+            await db.SaveChangesAsync(ct);
+            foreach (var row in rows)
+            {
+                db.Entry(row).State = EntityState.Detached;
+            }
+        }
+
+        await tx.CommitAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<MemoryEntity>> ListEntitiesAsync(IReadOnlyCollection<Guid> memoryIds, CancellationToken ct)
+    {
+        if (memoryIds.Count == 0)
+        {
+            return [];
+        }
+
+        var ids = memoryIds.ToArray();
+        return await db.MemoryEntities.AsNoTracking().Where(e => ids.Contains(e.MemoryId)).ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<MemoryEntity>> ListLiveEntitiesByKeysAsync(Guid projectId, IReadOnlyCollection<string> keys, CancellationToken ct)
+    {
+        if (keys.Count == 0)
+        {
+            return [];
+        }
+
+        var keyArray = keys.ToArray();
+        var liveIds = LiveOnly(db.Memories.Where(m => m.ProjectId == projectId)).Select(m => m.Id);
+        return await db.MemoryEntities.AsNoTracking()
+            .Where(e => e.ProjectId == projectId && keyArray.Contains(e.Key) && liveIds.Contains(e.MemoryId))
+            .ToListAsync(ct);
+    }
+
+    public async Task<MemoryConsolidationReport> AddReportAsync(MemoryConsolidationReport report, CancellationToken ct)
+    {
+        if (report.Id == Guid.Empty)
+        {
+            report.Id = Guid.NewGuid();
+        }
+
+        db.MemoryConsolidationReports.Add(report);
+        await db.SaveChangesAsync(ct);
+        db.Entry(report).State = EntityState.Detached;
+        return report;
+    }
+
+    public Task<MemoryConsolidationReport?> GetReportAsync(Guid id, CancellationToken ct) =>
+        db.MemoryConsolidationReports.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, ct);
+
+    public async Task<IReadOnlyList<MemoryConsolidationReport>> ListReportsAsync(Guid projectId, CancellationToken ct)
+    {
+        var rows = await db.MemoryConsolidationReports.AsNoTracking().Where(r => r.ProjectId == projectId).ToListAsync(ct);
+        return [.. rows.OrderByDescending(r => r.CreatedAt)];
+    }
+
+    public async Task<bool> SetReportStatusAsync(
+        Guid id, ConsolidationReportStatus from, ConsolidationReportStatus to, DateTimeOffset? appliedAt, string? reportJson, CancellationToken ct)
+    {
+        var affected = await db.MemoryConsolidationReports
+            .Where(r => r.Id == id && r.Status == from)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(r => r.Status, to)
+                .SetProperty(r => r.AppliedAt, appliedAt)
+                .SetProperty(r => r.ReportJson, r => reportJson ?? r.ReportJson), ct);
 
         return affected > 0;
     }
 
-    public async Task<int> MarkSupersededBatchAsync(IReadOnlyCollection<Guid> oldMemoryIds, Guid newMemoryId, CancellationToken ct)
-    {
-        if (oldMemoryIds.Count == 0)
-        {
-            return 0;
-        }
+    private static IQueryable<Memory> LiveOnly(IQueryable<Memory> q) =>
+        q.Where(m => m.Status == MemoryStatus.Active || m.Status == MemoryStatus.Contested);
 
-        var ids = oldMemoryIds.ToArray();
-        return await db.Memories
-            .Where(m => ids.Contains(m.Id))
-            .ExecuteUpdateAsync(setters => setters.SetProperty(m => m.SupersededById, newMemoryId), ct);
-    }
-
-    public async Task<int?> ReinforceAsync(Guid memoryId, DateTimeOffset reinforcedAt, int promotionReinforcementThreshold, CancellationToken ct)
-    {
-        // The count is incremented from the column's own value, so two concurrent reinforcements
-        // both land instead of the second overwriting the first with a stale read + 1.
-        var affected = await db.Memories
-            .Where(m => m.Id == memoryId)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(m => m.ReinforcementCount, m => m.ReinforcementCount + 1)
-                .SetProperty(m => m.LastReinforcedAt, reinforcedAt)
-                .SetProperty(m => m.Tier, m => m.Pinned || m.ReinforcementCount + 1 >= promotionReinforcementThreshold
-                    ? MemoryTier.LongTerm
-                    : m.Tier), ct);
-
-        if (affected == 0)
-        {
-            return null;
-        }
-
-        return await db.Memories.AsNoTracking()
-            .Where(m => m.Id == memoryId)
-            .Select(m => (int?)m.ReinforcementCount)
-            .FirstOrDefaultAsync(ct);
-    }
+    // SQLite's EF provider cannot ORDER BY DateTimeOffset columns, so ordering happens client-side.
+    private static IReadOnlyList<Memory> OrderForDisplay(List<Memory> memories) =>
+        [.. memories.OrderByDescending(m => m.Pinned).ThenByDescending(m => m.LastReinforcedAt)];
 }

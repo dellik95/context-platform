@@ -17,9 +17,14 @@ import {
   JobStatus,
   LogTailDto,
   Memory,
+  MemoryDetail,
+  MemoryKind,
   ProjectDto,
   ProjectSettingsDto,
   ProjectStatusDto,
+  ReconsolidationReportDto,
+  ReconsolidationReportSummaryDto,
+  ReconsolidationTriggerResponse,
   RetryAllJobsResponse,
   SessionDetailDto,
   SessionListItemDto,
@@ -95,21 +100,54 @@ export class ApiService {
     });
   }
 
-  searchMemories(projectId: string, query: string, includeSuperseded = false): Observable<Memory[]> {
-    const params = new URLSearchParams({ projectId, q: query, includeSuperseded: String(includeSuperseded) });
-    return this.http.get<Memory[]>(`${this.base}/api/memories?${params.toString()}`);
-  }
-
-  memoriesResource(params: Signal<{ projectId: string; query: string; includeSuperseded: boolean } | undefined>): HttpResourceRef<Memory[]> {
+  memoriesResource(
+    params: Signal<{ projectId: string; query: string; includeSuperseded: boolean; kind: MemoryKind | null } | undefined>,
+  ): HttpResourceRef<Memory[]> {
     return httpResource<Memory[]>(() => {
       const p = params();
       if (!p) return undefined;
-      return { url: `${this.base}/api/memories`, params: { projectId: p.projectId, q: p.query, includeSuperseded: String(p.includeSuperseded) } };
+      const requestParams: Record<string, string> = { projectId: p.projectId, q: p.query, includeSuperseded: String(p.includeSuperseded) };
+      if (p.kind) requestParams['kind'] = p.kind;
+      return { url: `${this.base}/api/memories`, params: requestParams };
     }, { defaultValue: [] });
+  }
+
+  memoryDetail(id: string): Observable<MemoryDetail> {
+    return this.http.get<MemoryDetail>(`${this.base}/api/memories/${id}`);
   }
 
   deleteMemory(id: string): Observable<void> {
     return this.http.delete<void>(`${this.base}/api/memories/${id}`);
+  }
+
+  /** Queues a reconsolidation job; a dry run only stores a Pending report to review. */
+  triggerReconsolidation(projectId: string, dryRun: boolean): Observable<ReconsolidationTriggerResponse> {
+    return this.http.post<ReconsolidationTriggerResponse>(
+      `${this.base}/api/memories/reconsolidation?projectId=${projectId}&dryRun=${dryRun}`, {});
+  }
+
+  reconsolidationReportsResource(projectId: Signal<string>): HttpResourceRef<ReconsolidationReportSummaryDto[]> {
+    return httpResource<ReconsolidationReportSummaryDto[]>(() => {
+      const id = projectId();
+      return id ? { url: `${this.base}/api/memories/reconsolidation/reports`, params: { projectId: id } } : undefined;
+    }, { defaultValue: [] });
+  }
+
+  reconsolidationReportResource(reportId: Signal<string | null>): HttpResourceRef<ReconsolidationReportDto | undefined> {
+    return httpResource<ReconsolidationReportDto>(() => {
+      const id = reportId();
+      return id ? `${this.base}/api/memories/reconsolidation/reports/${id}` : undefined;
+    });
+  }
+
+  /** Backend responds 409 when the report is no longer Pending. */
+  applyReconsolidation(reportId: string, excludeGroups: number[]): Observable<ReconsolidationTriggerResponse> {
+    return this.http.post<ReconsolidationTriggerResponse>(
+      `${this.base}/api/memories/reconsolidation/reports/${reportId}/apply`, { excludeGroups });
+  }
+
+  discardReconsolidation(reportId: string): Observable<void> {
+    return this.http.post<void>(`${this.base}/api/memories/reconsolidation/reports/${reportId}/discard`, {});
   }
 
   graphImpact(symbolId: string, maxHops = 3): Observable<ImpactSet> {

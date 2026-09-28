@@ -9,13 +9,9 @@ namespace Context.Retrieval;
 /// historical notes / open issues / safety reserve) by score-to-token ratio, per section.
 /// </summary>
 /// <remarks>
-/// Context.Memory is not wired into Context.Retrieval (see CONTRACTS.md dependency graph), so
-/// there is no in-process source for "historical context" or "open issues" yet. The
-/// interface-mandated <see cref="BuildAsync(SearchQuery, CancellationToken)"/> therefore builds
-/// those two sections empty; the additional <see cref="BuildAsync(SearchQuery, IReadOnlyList{string}?, IReadOnlyList{string}?, CancellationToken)"/>
-/// overload lets a caller that already has Memory results (Context.Application, once it wires
-/// Context.Memory) pass them in directly. This is a documented seam, not part of the fixed
-/// <c>IContextPackBuilder</c> contract.
+/// Context.Retrieval has no access to memories, so the interface overload builds the historical
+/// notes and open issues sections empty; Context.Application passes them in through the richer
+/// <see cref="BuildAsync(SearchQuery, IReadOnlyList{string}?, IReadOnlyList{string}?, CancellationToken)"/>.
 /// </remarks>
 public sealed class ContextPackBuilder : IContextPackBuilder
 {
@@ -40,9 +36,8 @@ public sealed class ContextPackBuilder : IContextPackBuilder
         BuildAsync(query, historicalNotes: null, openIssues: null, ct);
 
     /// <summary>
-    /// Same as <see cref="BuildAsync(SearchQuery, CancellationToken)"/>, but lets a caller with
-    /// access to Context.Memory results supply the historical-notes and open-issues sections
-    /// directly, since Context.Retrieval has no path to that data on its own yet.
+    /// Same as <see cref="BuildAsync(SearchQuery, CancellationToken)"/>, with caller-ordered
+    /// historical-notes and open-issues sections.
     /// </summary>
     public async Task<ContextPack> BuildAsync(
         SearchQuery query, IReadOnlyList<string>? historicalNotes, IReadOnlyList<string>? openIssues, CancellationToken ct)
@@ -63,12 +58,8 @@ public sealed class ContextPackBuilder : IContextPackBuilder
         var architectureTokens = EstimateSection(architectureSummary);
         var unspent = Math.Max(0, architectureBudget - architectureTokens);
 
-        // Query-intent detection: a "what's still pending?" style query re-prioritizes
-        // pending-work/next-steps flavored notes ahead of the caller's relevance order within each
-        // section, before the budget knapsack decides what actually fits -- see QueryIntent's
-        // remarks for why "recall" intent is handled by the caller
-        // (Context.Application.ContextEngine) instead, which has the memory timestamps this layer
-        // does not.
+        // A "what's still pending?" query moves pending-work flavored notes ahead of the caller's
+        // order within each section before the knapsack decides what fits.
         var pendingWorkIntent = QueryIntent.IsPendingWork(query.Text);
 
         var historicalBudget = (int)(budget * _options.HistoricalReserveRatio) + unspent;

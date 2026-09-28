@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Context.Application.Jobs.Handlers;
 
 /// <summary>Extracts durable memories from one piece of session material: a claimed batch of raw
-/// SessionEvents, a /compact conversation summary, or (legacy jobs only) a SessionSummaryChunk.</summary>
+/// SessionEvents or a /compact conversation summary.</summary>
 public sealed class ExtractMemoryJobHandler(
     IMemoryExtractor extractor,
     ISessionRepository sessionRepository,
@@ -32,9 +32,8 @@ public sealed class ExtractMemoryJobHandler(
         var projectId = job.ProjectId
             ?? throw new InvalidOperationException($"Job {job.Id}: {nameof(JobType)}.{nameof(JobType.ExtractMemory)} jobs must carry a ProjectId.");
 
-        // Reprocessing the same material (a retried job) is safe against duplicate memories only as
-        // a side effect of MemoryConsolidator's >0.92 similarity reinforce path
-        // (MEMORY_PIPELINE_PLAN.md §D.6/Gap #6) - not a designed idempotency guarantee.
+        // A retried job re-proposes the same candidates; consolidation reinforces them in place (same
+        // session, so SourceCount does not grow). That is a side effect, not an idempotency guarantee.
         IReadOnlyList<Context.Domain.Entities.Memory> memories;
         string source;
         if (payload.EventBatchId is { } batchId)
@@ -53,16 +52,8 @@ public sealed class ExtractMemoryJobHandler(
         }
         else if (!string.IsNullOrWhiteSpace(payload.CompactSummary))
         {
-            memories = await extractor.ExtractFromCompactSummaryAsync(projectId, payload.SessionId, payload.CompactSummary, ct).ConfigureAwait(false);
+            memories = await extractor.ExtractFromCompactSummaryAsync(projectId, payload.SessionId, payload.CompactSummary, job.CreatedAt, ct).ConfigureAwait(false);
             source = "compact summary";
-        }
-        else if (payload.SummaryChunkId is { } chunkId)
-        {
-            var chunk = await sessionRepository.GetSummaryChunkByIdAsync(projectId, chunkId, ct).ConfigureAwait(false)
-                ?? throw new InvalidOperationException(
-                    $"No SessionSummaryChunk {chunkId} found for session {payload.SessionId}; ExtractMemory must run after SummarizeSession.");
-            memories = await extractor.ExtractAsync(projectId, chunk, ct).ConfigureAwait(false);
-            source = $"chunk {chunkId}";
         }
         else
         {

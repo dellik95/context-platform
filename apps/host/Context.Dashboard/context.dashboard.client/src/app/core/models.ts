@@ -6,10 +6,25 @@
 // these string literal unions in sync with the real enum member lists if either side changes.
 
 export type MemoryType =
-  | 'Decision' | 'Discovery' | 'BugFix' | 'Feature' | 'Refactor'
-  | 'Change' | 'Exploration' | 'Architecture' | 'Issue';
+  | 'Fact' | 'Decision' | 'Constraint' | 'Architecture' | 'Behavior'
+  | 'Configuration' | 'Discovery' | 'Procedure' | 'Issue' | 'Event';
+
+// Active and Contested are live; Superseded and Obsolete are kept for history.
+export type MemoryStatus = 'Active' | 'Contested' | 'Superseded' | 'Obsolete';
 
 export type MemoryTier = 'Working' | 'LongTerm';
+
+// Knowledge is every type but Event.
+export type MemoryKind = 'Knowledge' | 'Event';
+
+export type EvidenceRelation = 'Created' | 'Reinforced' | 'Merged' | 'Superseded' | 'Contradicted' | 'Verified' | 'Refuted';
+
+export type EvidenceSource =
+  | 'Explicit' | 'EventBatch' | 'CompactSummary' | 'Heuristic' | 'Consolidation' | 'Legacy' | 'Code';
+
+export type ConsolidationReportStatus = 'Pending' | 'Applying' | 'Applied' | 'Failed' | 'Discarded';
+
+export type CodeCheckResult = 'Unknown' | 'Verified' | 'Refuted';
 
 export type GraphNodeKind =
   | 'Project' | 'Directory' | 'File' | 'Module' | 'Class' | 'Interface'
@@ -22,7 +37,7 @@ export type GraphEdgeKind =
 export type JobType =
   | 'IndexFile' | 'ResolveRelations' | 'UpdateGraph'
   | 'EmbedChunk' | 'SummarizeSession' | 'ExtractMemory' | 'DecayMemory' | 'BackupDb'
-  | 'RecreateEmbeddings' | 'CompactMemory';
+  | 'RecreateEmbeddings' | 'ReconsolidateMemory';
 
 export type JobStatus = 'Pending' | 'Running' | 'Done' | 'Failed';
 
@@ -115,10 +130,147 @@ export interface Memory {
   tier: MemoryTier;
   pinned: boolean;
   reinforcementCount: number;
+  status: MemoryStatus;
+  topic: string | null;
+  topicKey: string | null;
+  sourceCount: number;
   supersededById: string | null;
+  supersededAt: string | null;
   createdFromSessionId: string | null;
   createdAt: string;
   lastReinforcedAt: string;
+}
+
+export interface MemoryEvidence {
+  id: string;
+  projectId: string;
+  memoryId: string;
+  relation: EvidenceRelation;
+  source: EvidenceSource;
+  sessionId: string | null;
+  sourceMemoryId: string | null;
+  observedAt: string;
+  note: string | null;
+}
+
+export interface MemoryEntity {
+  projectId: string;
+  memoryId: string;
+  key: string; // lowercase "kind:value"
+  display: string;
+}
+
+// GET /api/memories/{id}.
+export interface MemoryDetail {
+  memory: Memory;
+  evidence: MemoryEvidence[];
+  entities: MemoryEntity[];
+}
+
+// Mirrors Context.Memory.Consolidation.ReconsolidationReport and the DTOs in Api/Dtos.cs.
+export interface ReconsolidationTriggerResponse {
+  projectId: string;
+  jobId: string;
+  dryRun: boolean;
+  reportId: string | null;
+  status: string;
+}
+
+export interface ReconsolidationStats {
+  liveKnowledge: number;
+  reembedded: number;
+  groups: number;
+  ambiguousGroups: number;
+  canonicals: number;
+  sourcesMerged: number;
+  contradictions: number;
+  reclassifiedEvents: number;
+  usedModel: boolean;
+}
+
+export interface ReconsolidationReportSummaryDto {
+  id: string;
+  createdAt: string;
+  status: ConsolidationReportStatus;
+  appliedAt: string | null;
+  stats: ReconsolidationStats | null;
+}
+
+export interface ReconsolidationSource {
+  id: string;
+  title: string;
+  type: MemoryType;
+  status: MemoryStatus;
+  lastReinforcedAt: string;
+}
+
+export interface ReconsolidationCanonical {
+  type: MemoryType;
+  title: string;
+  body: string;
+  topic: string | null;
+  facts: string[];
+  entities: string[];
+  filesRead: string[];
+  filesModified: string[];
+  sourceIds: string[];
+}
+
+export interface ContradictionCodeCheck {
+  a: CodeCheckResult;
+  b: CodeCheckResult;
+  winnerId: string | null;
+  note: string | null;
+}
+
+export interface ReconsolidationContradiction {
+  a: string;
+  b: string;
+  reason: string | null;
+  codeCheck: ContradictionCodeCheck | null;
+}
+
+export interface ReconsolidationGroup {
+  index: number; // 1-based; what excludeGroups refers to
+  sources: ReconsolidationSource[];
+  canonicals: ReconsolidationCanonical[];
+  contradictions: ReconsolidationContradiction[];
+  keepSeparate: string[];
+  ambiguous: boolean; // never applied
+  note: string | null;
+}
+
+export interface ReclassifiedEvent {
+  id: string;
+  title: string;
+  status: MemoryStatus;
+  lastReinforcedAt: string;
+  reason: string;
+}
+
+export interface ReconsolidationApplyOutcome {
+  appliedAt: string;
+  appliedGroups: number[];
+  excludedGroups: number[];
+  skippedGroups: { index: number; reason: string }[];
+  reclassifiedEvents: number;
+  skippedEvents: string[];
+}
+
+export interface ReconsolidationReport {
+  groups: ReconsolidationGroup[];
+  reclassifiedEvents: ReclassifiedEvent[];
+  untouched: number;
+  stats: ReconsolidationStats;
+  outcome: ReconsolidationApplyOutcome | null;
+}
+
+export interface ReconsolidationReportDto {
+  id: string;
+  createdAt: string;
+  status: ConsolidationReportStatus;
+  appliedAt: string | null;
+  report: ReconsolidationReport;
 }
 
 // Raw Context.Domain.Entities.GraphNode.
@@ -315,8 +467,8 @@ export interface ReindexProgressEvent {
   failed?: boolean;
 }
 
-// Mirrors Context.Application.Settings.ProjectSettingsDto exactly (see CONTRACTS.md §12 and
-// apps/host/Context.Host/Api/SettingsEndpoints.cs). Provider fields are informational/
+// Mirrors Context.Application.Settings.ProjectSettingsDto exactly (see
+// Context.Dashboard.Server/Api/SettingsEndpoints.cs). Provider fields are informational/
 // override-on-next-restart only -- changing them does NOT hot-swap the running provider.
 // ReindexEnabled/ReindexIntervalMinutes DO take effect live.
 export interface ProjectSettingsDto {
@@ -339,13 +491,8 @@ export interface ProjectSettingsDto {
   staleSessionTimeoutMinutes: number; // <= 0 disables auto-ending idle Active sessions
   deleteSessionEventsAfterSummary: boolean; // opt-in cleanup of raw events once folded into a summary chunk
   hookInvocationRetentionDays: number; // <= 0 disables cleanup of HookInvocations rows
-  memoryCompactionIntervalMinutes: number; // <= 0 disables periodic near-duplicate memory compaction
-  lastMemoryCompactionScheduledAt: string | null; // ISO-8601
-  memoryCompactionSimilarityThreshold: number; // (0, 1] -- cosine similarity to cluster memories for compaction
-  memoryConsolidationSimilarityThreshold: number; // (0, 1] -- above this, reinforce/supersede instead of inserting new
-  memoryConsolidationLowSimilarityThreshold: number; // (0, 1], <= memoryConsolidationSimilarityThreshold
-  memoryConsolidationPromotionReinforcementThreshold: number; // >= 1 -- reinforcements before promotion to LongTerm tier
-  memoryConsolidationTopKForDedup: number; // >= 1 -- nearest existing memories considered per new candidate
+  memoryReconsolidationIntervalMinutes: number; // <= 0 disables periodic memory reconsolidation
+  lastMemoryReconsolidationScheduledAt: string | null; // ISO-8601
 }
 
 // Response of POST /api/projects/{id}/claude/install.

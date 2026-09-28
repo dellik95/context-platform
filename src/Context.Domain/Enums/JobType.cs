@@ -2,10 +2,7 @@ namespace Context.Domain.Enums;
 
 /// <summary>
 /// Values are explicit and permanent: the column is an int, so renumbering would silently
-/// reinterpret every already-queued row. 1 (<c>DeleteFile</c>) and 2 (<c>ParseFile</c>) are retired
-/// — both handlers did exactly what <c>IndexFile</c> already does for the same path
-/// (<c>IndexingPipeline.IndexFileAsync</c> detects a missing file and tears the record down itself),
-/// and nothing ever enqueued either one.
+/// reinterpret every already-queued row. 1, 2 and 11 are retired and must not be reused.
 /// </summary>
 public enum JobType
 {
@@ -18,5 +15,5 @@ public enum JobType
     DecayMemory = 8,
     BackupDb = 9,
     RecreateEmbeddings = 10,
-    CompactMemory = 11,
+    ReconsolidateMemory = 12,
 }

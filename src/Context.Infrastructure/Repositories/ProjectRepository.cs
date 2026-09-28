@@ -90,6 +90,7 @@ public class ProjectRepository(ContextDbContext db) : IProjectRepository
 
         // Null out the self-referencing supersession link before deleting Memories, so one memory
         // in this project superseding another doesn't block the superseded one's deletion.
+        // MemoryEvidence and MemoryEntities cascade from each Memory row.
         await db.Memories.Where(m => m.ProjectId == id)
             .ExecuteUpdateAsync(setters => setters.SetProperty(m => m.SupersededById, (Guid?)null), ct);
         await db.Memories.Where(m => m.ProjectId == id).ExecuteDeleteAsync(ct);
@@ -97,8 +98,8 @@ public class ProjectRepository(ContextDbContext db) : IProjectRepository
         // Everything else this project owns cascades automatically from here: File -> Symbol/
         // FileVersion (their competing Restrict FKs are already cleared above), Session ->
         // SessionEvent/SessionSummary (Memory's competing Restrict FK is already cleared above),
-        // ClaudeIntegration, and File/Session/Memory/GraphNode/GraphEdge/ClaudeIntegration
-        // themselves, all via their own direct Cascade FK to Project.
+        // ClaudeIntegration, MemoryConsolidationReport, and File/Session/Memory/GraphNode/GraphEdge/
+        // ClaudeIntegration themselves, all via their own direct Cascade FK to Project.
         await db.Projects.Where(p => p.Id == id).ExecuteDeleteAsync(ct);
 
         await tx.CommitAsync(ct);

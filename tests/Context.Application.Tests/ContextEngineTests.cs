@@ -19,7 +19,7 @@ using DomainMemory = Context.Domain.Entities.Memory;
 namespace Context.Application.Tests;
 
 /// <summary>
-/// Tests for <see cref="ContextEngine"/> (CONTRACTS.md §10 facade). <see cref="ContextPackBuilder"/>
+/// Tests for <see cref="ContextEngine"/>. <see cref="ContextPackBuilder"/>
 /// (Context.Retrieval) and <see cref="SessionDeliveryCache"/> are constructed for real, with only
 /// their own dependency (<see cref="ISearchEngine"/>) mocked; every repository/queue/traversal
 /// dependency of <see cref="ContextEngine"/> itself is a Moq mock.
@@ -37,7 +37,6 @@ public sealed class ContextEngineTests
     private readonly Mock<IMemoryRepository> _memoryRepository = new();
     private readonly Mock<ISessionRepository> _sessionRepository = new();
     private readonly Mock<IProjectSettingsService> _projectSettingsService = new();
-    private readonly Mock<IMemoryStore> _memoryStore = new();
     private readonly Mock<IMemoryConsolidator> _memoryConsolidator = new();
     private readonly Mock<IMemoryVectorIndex> _memoryVectorIndex = new();
     private readonly Mock<ISessionSummaryVectorIndex> _sessionSummaryVectorIndex = new();
@@ -63,7 +62,6 @@ public sealed class ContextEngineTests
             _sessionRepository.Object,
             _deliveryCache,
             _projectSettingsService.Object,
-            _memoryStore.Object,
             _memoryConsolidator.Object,
             _memoryVectorIndex.Object,
             _sessionSummaryVectorIndex.Object,
@@ -76,6 +74,8 @@ public sealed class ContextEngineTests
             .ReturnsAsync((DomainFile?)null);
         _memoryRepository.Setup(r => r.ListByProjectAsync(It.IsAny<Guid>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<DomainMemory>)[]);
+        _memoryRepository.Setup(r => r.ListLiveEntitiesByKeysAsync(It.IsAny<Guid>(), It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<MemoryEntity>)[]);
         _projectSettingsService.Setup(s => s.GetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProjectSettingsDto(
                 EmbeddingProvider: "noop",
@@ -92,9 +92,8 @@ public sealed class ContextEngineTests
         _searchEngine.Setup(s => s.SearchAsync(It.IsAny<SearchQuery>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<SearchHit>)[]);
 
-        // Semantic memory search always resolves a provider and calls SearchAsync (ContextEngine
-        // does not short-circuit on the "noop" provider) -- default it to return no hits so these
-        // tests keep exercising lexical-only ranking, same as before IMemoryVectorIndex existed.
+        // Semantic memory search always resolves a provider; default it to no hits so tests exercise
+        // lexical ranking unless they configure the vector index.
         _embeddingGenerator.Setup(g => g.GenerateAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<EmbeddingGenerationOptions>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GeneratedEmbeddings<Embedding<float>>([new Embedding<float>(new float[] { 0f })]));
         _providerResolver.Setup(p => p.GetEmbeddingGeneratorAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
@@ -120,6 +119,7 @@ public sealed class ContextEngineTests
             Pinned = pinned,
             LastReinforcedAt = lastReinforcedAt ?? now,
             CreatedAt = now,
+            Status = supersededById is null ? MemoryStatus.Active : MemoryStatus.Superseded,
             SupersededById = supersededById
         };
     }
@@ -132,19 +132,20 @@ public sealed class ContextEngineTests
         var projectId = Guid.NewGuid();
 
         var decision = MakeMemory(projectId, MemoryType.Decision, "Use SQLite", "Because it is simple", confidence: 0.9, pinned: true);
-        var issue = MakeMemory(projectId, MemoryType.Issue, "Flaky test", "CI intermittently fails", confidence: 0.8);
+        var issue = MakeMemory(projectId, MemoryType.Issue, "Flaky test", "SQLite lock contention fails CI", confidence: 0.8);
+        var unrelated = MakeMemory(projectId, MemoryType.Fact, "Dashboard theme", "Dark by default");
 
         _memoryRepository.Setup(r => r.ListByProjectAsync(projectId, false, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<DomainMemory>)[decision, issue]);
+            .ReturnsAsync((IReadOnlyList<DomainMemory>)[decision, issue, unrelated]);
 
         var query = new SearchQuery(projectId, "sqlite", null, TokenBudget: 5000);
 
         var pack = await _sut.SearchContextAsync(query, CancellationToken.None);
 
         pack.HistoricalNotes.Should().ContainSingle()
-            .Which.Should().Be("[Decision] Use SQLite: Because it is simple");
+            .Which.Should().Be("[Decision · conf 0.90 · 1 source] Use SQLite: Because it is simple");
         pack.OpenIssues.Should().ContainSingle()
-            .Which.Should().Be("[Issue] Flaky test: CI intermittently fails");
+            .Which.Should().Be("[Issue · conf 0.80 · 1 source] Flaky test: SQLite lock contention fails CI");
     }
 
     [Fact]
@@ -188,12 +189,149 @@ public sealed class ContextEngineTests
         _memoryRepository.Setup(r => r.ListByProjectAsync(projectId, false, It.IsAny<CancellationToken>()))
             .ReturnsAsync(memories);
 
-        var query = new SearchQuery(projectId, "status", null, TokenBudget: 5000);
+        var query = new SearchQuery(projectId, string.Empty, null, TokenBudget: 5000);
 
         var pack = await _sut.SearchContextAsync(query, CancellationToken.None);
 
-        pack.HistoricalNotes.Should().ContainSingle();
-        pack.OpenIssues.Should().ContainSingle();
+        pack.HistoricalNotes.Should().ContainSingle().Which.Should().Contain("Decision B");
+        pack.OpenIssues.Should().ContainSingle().Which.Should().Contain("Issue B");
+    }
+
+    // ---- 1b. Query-aware memory sections: knowledge for domain questions, events for change history ----
+
+    private void SetupLiveMemories(Guid projectId, params DomainMemory[] memories) =>
+        _memoryRepository.Setup(r => r.ListByProjectAsync(projectId, false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(memories);
+
+    private (DomainMemory Canonical, DomainMemory[] Events) SeedTokenRefreshHistory(Guid projectId)
+    {
+        var canonical = MakeMemory(projectId, MemoryType.Decision, "Token refresh strategy",
+            "Refresh tokens rotate on every refresh and expire after 14 days", confidence: 0.8);
+        canonical.SourceCount = 6;
+        canonical.Topic = "Auth";
+
+        var now = DateTimeOffset.UtcNow;
+        var events = Enumerable.Range(1, 6)
+            .Select(i =>
+            {
+                var e = MakeMemory(projectId, MemoryType.Event, $"Adjusted token refresh step {i}",
+                    $"Session {i} tweaked how the token refresh works", confidence: 0.9);
+                e.CreatedAt = now.AddDays(-i);
+                return e;
+            })
+            .ToArray();
+
+        SetupLiveMemories(projectId, [canonical, .. events]);
+        return (canonical, events);
+    }
+
+    [Fact]
+    public async Task SearchContextAsync_answers_a_domain_question_with_canonical_knowledge_and_no_events()
+    {
+        var projectId = Guid.NewGuid();
+        SeedTokenRefreshHistory(projectId);
+
+        var pack = await _sut.SearchContextAsync(
+            new SearchQuery(projectId, "how does token refresh work", null, TokenBudget: 5000), CancellationToken.None);
+
+        pack.HistoricalNotes.Should().ContainSingle()
+            .Which.Should().Be("[Decision · Auth · conf 0.80 · 6 sources] Token refresh strategy: Refresh tokens rotate on every refresh and expire after 14 days");
+    }
+
+    [Fact]
+    public async Task SearchContextAsync_answers_a_change_history_question_with_events_newest_first()
+    {
+        var projectId = Guid.NewGuid();
+        var (canonical, events) = SeedTokenRefreshHistory(projectId);
+
+        var pack = await _sut.SearchContextAsync(
+            new SearchQuery(projectId, "what changed in token refresh recently", null, TokenBudget: 5000), CancellationToken.None);
+
+        var expectedEvents = events.OrderByDescending(e => e.CreatedAt).ToList();
+        pack.HistoricalNotes.Should().HaveCount(events.Length + 1);
+        for (var i = 0; i < expectedEvents.Count; i++)
+        {
+            pack.HistoricalNotes[i].Should().StartWith($"[Event · conf 0.90 · 1 source] {expectedEvents[i].Title}:");
+        }
+
+        pack.HistoricalNotes[^1].Should().Contain(canonical.Title);
+    }
+
+    [Fact]
+    public async Task SearchContextAsync_with_an_empty_query_shows_top_knowledge_and_never_events()
+    {
+        var projectId = Guid.NewGuid();
+        var (canonical, _) = SeedTokenRefreshHistory(projectId);
+
+        var pack = await _sut.SearchContextAsync(new SearchQuery(projectId, string.Empty, null, TokenBudget: 5000), CancellationToken.None);
+
+        pack.HistoricalNotes.Should().ContainSingle().Which.Should().Contain(canonical.Title);
+    }
+
+    [Fact]
+    public async Task SearchContextAsync_lists_contested_knowledge_after_active_with_a_marker()
+    {
+        var projectId = Guid.NewGuid();
+        var contested = MakeMemory(projectId, MemoryType.Decision, "Cache TTL is 10 minutes", "Set in CacheOptions", confidence: 0.95, pinned: true);
+        contested.Status = MemoryStatus.Contested;
+        var active = MakeMemory(projectId, MemoryType.Fact, "Cache TTL is 5 minutes", "Set in CacheOptions", confidence: 0.3);
+        SetupLiveMemories(projectId, contested, active);
+
+        var pack = await _sut.SearchContextAsync(new SearchQuery(projectId, "cache ttl", null, TokenBudget: 5000), CancellationToken.None);
+
+        pack.HistoricalNotes.Should().HaveCount(2);
+        pack.HistoricalNotes[0].Should().Contain(active.Title).And.NotContain("CONTESTED");
+        pack.HistoricalNotes[1].Should().StartWith("[Decision · conf 0.95 · 1 source · CONTESTED] Cache TTL is 10 minutes");
+    }
+
+    [Fact]
+    public async Task SearchContextAsync_appends_facts_when_the_section_budget_allows()
+    {
+        var projectId = Guid.NewGuid();
+        var memory = MakeMemory(projectId, MemoryType.Configuration, "Hub port", "The hub listens on 5173", confidence: 0.5);
+        memory.FactsJson = "[\"HUB_PORT defaults to 5173\",\"Override via env\"]";
+        SetupLiveMemories(projectId, memory);
+
+        var pack = await _sut.SearchContextAsync(new SearchQuery(projectId, "hub port", null, TokenBudget: 5000), CancellationToken.None);
+
+        pack.HistoricalNotes.Should().ContainSingle()
+            .Which.Should().EndWith("The hub listens on 5173 Facts: HUB_PORT defaults to 5173; Override via env");
+    }
+
+    [Fact]
+    public async Task SearchContextAsync_matches_memories_through_entities_and_the_vector_index()
+    {
+        var projectId = Guid.NewGuid();
+        var byEntity = MakeMemory(projectId, MemoryType.Decision, "Retry budget", "Three attempts then dead-letter");
+        var bySemantics = MakeMemory(projectId, MemoryType.Behavior, "Backoff", "Exponential with jitter");
+        var unrelated = MakeMemory(projectId, MemoryType.Fact, "Dashboard theme", "Dark by default");
+        SetupLiveMemories(projectId, byEntity, bySemantics, unrelated);
+
+        _memoryRepository.Setup(r => r.ListLiveEntitiesByKeysAsync(projectId, It.Is<IReadOnlyCollection<string>>(k => k.Contains("ticket:phun-123")), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<MemoryEntity>)[new MemoryEntity { ProjectId = projectId, MemoryId = byEntity.Id, Key = "ticket:phun-123", Display = "PHUN-123" }]);
+        _memoryVectorIndex.Setup(v => v.SearchAsync(
+                projectId, It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<int>(), It.IsAny<CancellationToken>(), It.IsAny<string?>()))
+            .ReturnsAsync((IReadOnlyList<(Guid MemoryId, double Score)>)[(bySemantics.Id, 0.7)]);
+
+        var pack = await _sut.SearchContextAsync(new SearchQuery(projectId, "PHUN-123", null, TokenBudget: 5000), CancellationToken.None);
+
+        pack.HistoricalNotes.Should().HaveCount(2);
+        pack.HistoricalNotes.Should().Contain(n => n.Contains(byEntity.Title)).And.Contain(n => n.Contains(bySemantics.Title));
+    }
+
+    [Fact]
+    public async Task SearchContextAsync_shows_every_issue_for_a_pending_work_query_but_only_matching_issues_otherwise()
+    {
+        var projectId = Guid.NewGuid();
+        var sqliteIssue = MakeMemory(projectId, MemoryType.Issue, "SQLite lock", "Writers contend");
+        var uiIssue = MakeMemory(projectId, MemoryType.Issue, "Panel flicker", "Angular change detection");
+        SetupLiveMemories(projectId, sqliteIssue, uiIssue);
+
+        var pending = await _sut.SearchContextAsync(new SearchQuery(projectId, "what's still pending for sqlite", null, TokenBudget: 5000), CancellationToken.None);
+        var focused = await _sut.SearchContextAsync(new SearchQuery(projectId, "sqlite", null, TokenBudget: 5000), CancellationToken.None);
+
+        pending.OpenIssues.Should().HaveCount(2);
+        focused.OpenIssues.Should().ContainSingle().Which.Should().Contain(sqliteIssue.Title);
     }
 
     // ---- 2. Session-scoped delivery cache ----
@@ -547,31 +685,25 @@ public sealed class ContextEngineTests
         _jobQueue.VerifyNoOtherCalls();
     }
 
-    // ---- 5. SearchMemoryAsync: superseded exclusion (delegated to repository) + relevance ordering ----
+    // ---- 5. SearchMemoryAsync / GetMemoryAsync / ForgetMemoryAsync ----
 
     [Fact]
-    public async Task SearchMemoryAsync_returns_exactly_what_the_repository_yields_for_the_requested_includeSuperseded_flag()
+    public async Task SearchMemoryAsync_forwards_includeSuperseded_to_the_repository()
     {
         var projectId = Guid.NewGuid();
         var active = MakeMemory(projectId, MemoryType.Decision, "Active", "still valid");
         var superseded = MakeMemory(projectId, MemoryType.Decision, "Old", "replaced", supersededById: Guid.NewGuid());
 
-        // IMemoryRepository.SearchAsync owns the actual superseded filtering (see its own doc
-        // comment); ContextEngine.SearchMemoryAsync is a thin pass-through plus ranking, so this
-        // test asserts it forwards the flag faithfully and does not itself re-introduce excluded rows.
-        _memoryRepository.Setup(r => r.SearchAsync(projectId, "q", false, It.IsAny<CancellationToken>()))
+        _memoryRepository.Setup(r => r.ListByProjectAsync(projectId, false, It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<DomainMemory>)[active]);
-        _memoryRepository.Setup(r => r.SearchAsync(projectId, "q", true, It.IsAny<CancellationToken>()))
+        _memoryRepository.Setup(r => r.ListByProjectAsync(projectId, true, It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<DomainMemory>)[active, superseded]);
 
-        var excludingSuperseded = await _sut.SearchMemoryAsync(projectId, "q", includeSuperseded: false, CancellationToken.None);
-        var includingSuperseded = await _sut.SearchMemoryAsync(projectId, "q", includeSuperseded: true, CancellationToken.None);
+        var excludingSuperseded = await _sut.SearchMemoryAsync(projectId, string.Empty, includeSuperseded: false, CancellationToken.None);
+        var includingSuperseded = await _sut.SearchMemoryAsync(projectId, string.Empty, includeSuperseded: true, CancellationToken.None);
 
         excludingSuperseded.Should().ContainSingle().Which.Should().BeSameAs(active);
-        includingSuperseded.Should().Contain([active, superseded]);
-
-        _memoryRepository.Verify(r => r.SearchAsync(projectId, "q", false, It.IsAny<CancellationToken>()), Times.Once);
-        _memoryRepository.Verify(r => r.SearchAsync(projectId, "q", true, It.IsAny<CancellationToken>()), Times.Once);
+        includingSuperseded.Should().BeEquivalentTo([active, superseded]);
     }
 
     [Fact]
@@ -580,20 +712,14 @@ public sealed class ContextEngineTests
         var projectId = Guid.NewGuid();
         var oldTimestamp = DateTimeOffset.UtcNow.AddDays(-200);
 
-        // Pinned memories skip the age-based decay entirely (DecayCalculator.ComputeDecayFactor
-        // returns 1.0 for pinned regardless of age), so with equal confidence and equal (old)
-        // LastReinforcedAt, the pinned one must outrank the non-pinned one whose decay has kicked in.
+        // Pinned memories skip age decay, so the non-pinned one with the same old timestamp scores lower.
         var pinned = MakeMemory(projectId, MemoryType.Decision, "Pinned", "b", confidence: 0.5, pinned: true, lastReinforcedAt: oldTimestamp);
         var notPinned = MakeMemory(projectId, MemoryType.Decision, "NotPinned", "b", confidence: 0.5, pinned: false, lastReinforcedAt: oldTimestamp);
+        SetupLiveMemories(projectId, notPinned, pinned);
 
-        _memoryRepository.Setup(r => r.SearchAsync(projectId, "q", false, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<DomainMemory>)[notPinned, pinned]);
+        var result = await _sut.SearchMemoryAsync(projectId, string.Empty, includeSuperseded: false, CancellationToken.None);
 
-        var result = await _sut.SearchMemoryAsync(projectId, "q", includeSuperseded: false, CancellationToken.None);
-
-        result.Should().HaveCount(2);
-        result[0].Should().BeSameAs(pinned);
-        result[1].Should().BeSameAs(notPinned);
+        result.Should().Equal(pinned, notPinned);
     }
 
     [Fact]
@@ -604,18 +730,119 @@ public sealed class ContextEngineTests
 
         var highConfidence = MakeMemory(projectId, MemoryType.Decision, "High", "b", confidence: 0.9, lastReinforcedAt: now);
         var lowConfidence = MakeMemory(projectId, MemoryType.Decision, "Low", "b", confidence: 0.2, lastReinforcedAt: now);
+        SetupLiveMemories(projectId, lowConfidence, highConfidence);
 
-        _memoryRepository.Setup(r => r.SearchAsync(projectId, "q", false, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<DomainMemory>)[lowConfidence, highConfidence]);
+        var result = await _sut.SearchMemoryAsync(projectId, string.Empty, includeSuperseded: false, CancellationToken.None);
 
-        var result = await _sut.SearchMemoryAsync(projectId, "q", includeSuperseded: false, CancellationToken.None);
-
-        result.Should().HaveCount(2);
-        result[0].Should().BeSameAs(highConfidence);
-        result[1].Should().BeSameAs(lowConfidence);
+        result.Should().Equal(highConfidence, lowConfidence);
     }
 
-    // ---- 6. ProjectInfoAsync uses ISymbolRepository.CountByProjectAsync (BACKLOG-06) instead of an O(files) ListByFileAsync loop ----
+    [Fact]
+    public async Task SearchMemoryAsync_returns_only_matching_memories_when_the_query_names_a_subject()
+    {
+        var projectId = Guid.NewGuid();
+        var match = MakeMemory(projectId, MemoryType.Fact, "Migrations", "EF Core migrations run on startup");
+        var other = MakeMemory(projectId, MemoryType.Fact, "Dashboard theme", "Dark by default");
+        SetupLiveMemories(projectId, match, other);
+
+        var result = await _sut.SearchMemoryAsync(projectId, "migration", includeSuperseded: false, CancellationToken.None);
+
+        result.Should().ContainSingle().Which.Should().BeSameAs(match);
+    }
+
+    [Fact]
+    public async Task SearchMemoryAsync_puts_knowledge_before_events_unless_the_query_asks_for_change_history()
+    {
+        var projectId = Guid.NewGuid();
+        var evt = MakeMemory(projectId, MemoryType.Event, "SQLite migration shipped", "Moved the SQLite migration to startup", confidence: 0.9);
+        var fact = MakeMemory(projectId, MemoryType.Fact, "SQLite migration", "Runs from the SQLite migration runner", confidence: 0.5);
+        SetupLiveMemories(projectId, evt, fact);
+
+        var domain = await _sut.SearchMemoryAsync(projectId, "sqlite migration", includeSuperseded: false, CancellationToken.None);
+        var history = await _sut.SearchMemoryAsync(projectId, "what changed in sqlite migration recently", includeSuperseded: false, CancellationToken.None);
+
+        domain.Should().Equal(fact, evt);
+        history.Should().Equal(evt, fact);
+    }
+
+    [Fact]
+    public async Task SearchMemoryAsync_filters_by_kind_and_topic()
+    {
+        var projectId = Guid.NewGuid();
+        var authDecision = MakeMemory(projectId, MemoryType.Decision, "JWT", "Short-lived tokens");
+        authDecision.Topic = "Auth";
+        var authEvent = MakeMemory(projectId, MemoryType.Event, "Rotated keys", "Rotated JWT signing keys");
+        authEvent.Topic = "Auth";
+        var dbFact = MakeMemory(projectId, MemoryType.Fact, "SQLite", "WAL mode");
+        dbFact.Topic = "Storage";
+        SetupLiveMemories(projectId, authDecision, authEvent, dbFact);
+
+        var knowledge = await _sut.SearchMemoryAsync(projectId, string.Empty, includeSuperseded: false, CancellationToken.None, kind: MemoryKind.Knowledge);
+        var events = await _sut.SearchMemoryAsync(projectId, string.Empty, includeSuperseded: false, CancellationToken.None, kind: MemoryKind.Event);
+        var auth = await _sut.SearchMemoryAsync(projectId, string.Empty, includeSuperseded: false, CancellationToken.None, topic: " auth ");
+
+        knowledge.Should().BeEquivalentTo([authDecision, dbFact]);
+        events.Should().ContainSingle().Which.Should().BeSameAs(authEvent);
+        auth.Should().BeEquivalentTo([authDecision, authEvent]);
+    }
+
+    [Fact]
+    public async Task SearchMemoryAsync_falls_back_to_lexical_matching_when_embedding_fails()
+    {
+        var projectId = Guid.NewGuid();
+        var match = MakeMemory(projectId, MemoryType.Fact, "Migrations", "EF Core migrations run on startup");
+        SetupLiveMemories(projectId, match);
+        _providerResolver.Setup(p => p.GetEmbeddingGeneratorAsync(projectId, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("ollama down"));
+
+        var result = await _sut.SearchMemoryAsync(projectId, "migrations", includeSuperseded: false, CancellationToken.None);
+
+        result.Should().ContainSingle().Which.Should().BeSameAs(match);
+    }
+
+    [Fact]
+    public async Task GetMemoryAsync_returns_evidence_and_entities_only_for_the_owning_project()
+    {
+        var projectId = Guid.NewGuid();
+        var memory = MakeMemory(projectId, MemoryType.Decision, "JWT", "Short-lived tokens");
+        var evidence = new MemoryEvidence { Id = Guid.NewGuid(), ProjectId = projectId, MemoryId = memory.Id, ObservedAt = DateTimeOffset.UtcNow };
+        var entity = new MemoryEntity { ProjectId = projectId, MemoryId = memory.Id, Key = "symbol:jwtissuer", Display = "JwtIssuer" };
+        _memoryRepository.Setup(r => r.GetByIdAsync(memory.Id, It.IsAny<CancellationToken>())).ReturnsAsync(memory);
+        _memoryRepository.Setup(r => r.ListEvidenceAsync(It.Is<IReadOnlyCollection<Guid>>(ids => ids.Contains(memory.Id)), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<MemoryEvidence>)[evidence]);
+        _memoryRepository.Setup(r => r.ListEntitiesAsync(It.Is<IReadOnlyCollection<Guid>>(ids => ids.Contains(memory.Id)), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<MemoryEntity>)[entity]);
+
+        var own = await _sut.GetMemoryAsync(projectId, memory.Id, CancellationToken.None);
+        var foreign = await _sut.GetMemoryAsync(Guid.NewGuid(), memory.Id, CancellationToken.None);
+
+        own.Should().NotBeNull();
+        own!.Memory.Should().BeSameAs(memory);
+        own.Evidence.Should().ContainSingle().Which.Should().BeSameAs(evidence);
+        own.Entities.Should().ContainSingle().Which.Should().BeSameAs(entity);
+        foreign.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ForgetMemoryAsync_hard_deletes_only_a_memory_of_the_owning_project()
+    {
+        var projectId = Guid.NewGuid();
+        var memory = MakeMemory(projectId, MemoryType.Decision, "JWT", "Short-lived tokens");
+        _memoryRepository.Setup(r => r.GetByIdAsync(memory.Id, It.IsAny<CancellationToken>())).ReturnsAsync(memory);
+
+        var foreign = await _sut.ForgetMemoryAsync(Guid.NewGuid(), memory.Id, CancellationToken.None);
+        _memoryRepository.Verify(r => r.DeleteAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+
+        var own = await _sut.ForgetMemoryAsync(projectId, memory.Id, CancellationToken.None);
+        var missing = await _sut.ForgetMemoryAsync(projectId, Guid.NewGuid(), CancellationToken.None);
+
+        foreign.Should().BeFalse();
+        own.Should().BeTrue();
+        missing.Should().BeFalse();
+        _memoryRepository.Verify(r => r.DeleteAsync(memory.Id, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // ---- 6. ProjectInfoAsync uses ISymbolRepository.CountByProjectAsync instead of an O(files) ListByFileAsync loop ----
 
     [Fact]
     public async Task ProjectInfoAsync_uses_CountByProjectAsync_for_symbol_count_and_reports_correct_stats()
@@ -645,8 +872,7 @@ public sealed class ContextEngineTests
         info.LastIndexedAt.Should().Be(newerUpdatedAt);
 
         _symbolRepository.Verify(r => r.CountByProjectAsync(projectId, It.IsAny<CancellationToken>()), Times.Once);
-        // The N+1 loop this replaces (BACKLOG-06) called ListByFileAsync once per file -- assert it
-        // is never called at all from ProjectInfoAsync any more.
+        // The old N+1 loop called ListByFileAsync once per file.
         _symbolRepository.Verify(r => r.ListByFileAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -681,22 +907,17 @@ public sealed class ContextEngineTests
         await act.Should().ThrowAsync<KeyNotFoundException>();
     }
 
-    // ---- 7. RememberExplicitlyAsync (MEMORY_PIPELINE_PLAN.md §F/§H test #10): explicit-remember
-    // bypasses the N-event/session-end extraction pipeline entirely - it builds one MemoryCandidate
-    // from the raw content and hands it straight to IMemoryConsolidator, with zero dependency on
-    // event counts, chunk state, or IJobQueue/ISessionRepository/IMemoryRepository. ----
+    // ---- 7. RememberExplicitlyAsync: explicit-remember bypasses the event/session extraction
+    // pipeline and hands one Explicit candidate straight to IMemoryConsolidator. ----
 
     [Fact]
-    public async Task RememberExplicitlyAsync_calls_the_consolidator_directly_with_zero_dependency_on_event_count_or_chunk_state()
+    public async Task RememberExplicitlyAsync_hands_an_explicit_candidate_straight_to_the_consolidator()
     {
         var projectId = Guid.NewGuid();
-        var existingWithEmbeddings = new List<ExistingMemoryWithEmbedding>();
-        var consolidated = MakeMemory(projectId, MemoryType.Instruction, "Title", "Body");
+        var consolidated = MakeMemory(projectId, MemoryType.Fact, "Title", "Body");
 
-        _memoryStore.Setup(s => s.GetExistingWithEmbeddingsAsync(projectId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<ExistingMemoryWithEmbedding>)existingWithEmbeddings);
         _memoryConsolidator
-            .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), existingWithEmbeddings, true, It.IsAny<CancellationToken>()))
+            .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), true, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ConsolidationResult(consolidated, ConsolidationOutcome.Created));
 
         var result = await _sut.RememberExplicitlyAsync(projectId, "Always use tabs, not spaces.", type: null, CancellationToken.None);
@@ -707,57 +928,34 @@ public sealed class ContextEngineTests
                 projectId,
                 null,
                 It.Is<MemoryCandidate>(cand =>
-                    cand.Type == MemoryType.Instruction &&
+                    cand.Type == MemoryType.Fact &&
                     cand.Body == "Always use tabs, not spaces." &&
-                    cand.Confidence == 0.95 &&
+                    cand.Source == EvidenceSource.Explicit &&
                     cand.Facts.Count == 0 && cand.Concepts.Count == 0 &&
                     cand.FilesRead.Count == 0 && cand.FilesModified.Count == 0 &&
                     cand.Topic == null),
-                existingWithEmbeddings,
                 true,
                 It.IsAny<CancellationToken>()),
             Times.Once);
 
-        // RememberExplicitlyAsync is the interactive, latency-sensitive MCP path -- must flag its
-        // embedding call so it skips OllamaEmbeddingGeneratorDecorator's concurrency gate instead
-        // of queuing behind background EmbedChunk work.
-
-        // Bypasses the normal trigger/chunk pipeline entirely - no job enqueued, no session or
-        // memory-repository read, unlike the periodic SummarizeSession -> ExtractMemory path.
         _jobQueue.Verify(q => q.EnqueueAsync(It.IsAny<JobType>(), It.IsAny<object>(), It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
         _sessionRepository.Verify(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
         _memoryRepository.Verify(r => r.ListByProjectAsync(It.IsAny<Guid>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
-    [Fact]
-    public async Task RememberExplicitlyAsync_defaults_to_MemoryType_Instruction_when_no_type_is_given()
+    [Theory]
+    [InlineData(null, MemoryType.Fact)]
+    [InlineData(MemoryType.Decision, MemoryType.Decision)]
+    public async Task RememberExplicitlyAsync_uses_the_given_type_or_defaults_to_Fact(MemoryType? requested, MemoryType expected)
     {
         var projectId = Guid.NewGuid();
-        _memoryStore.Setup(s => s.GetExistingWithEmbeddingsAsync(projectId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<ExistingMemoryWithEmbedding>)[]);
         _memoryConsolidator
-            .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), true, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Guid _, Guid? _, MemoryCandidate cand, List<ExistingMemoryWithEmbedding> _, bool _, CancellationToken _) =>
+            .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid _, Guid? _, MemoryCandidate cand, bool _, CancellationToken _) =>
                 new ConsolidationResult(MakeMemory(projectId, cand.Type, cand.Title, cand.Body), ConsolidationOutcome.Created));
 
-        var result = await _sut.RememberExplicitlyAsync(projectId, "Remember this.", type: null, CancellationToken.None);
+        var result = await _sut.RememberExplicitlyAsync(projectId, "Use SQLite for the cache.", requested, CancellationToken.None);
 
-        result.Type.Should().Be(MemoryType.Instruction);
-    }
-
-    [Fact]
-    public async Task RememberExplicitlyAsync_honors_an_explicit_type_when_given()
-    {
-        var projectId = Guid.NewGuid();
-        _memoryStore.Setup(s => s.GetExistingWithEmbeddingsAsync(projectId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<ExistingMemoryWithEmbedding>)[]);
-        _memoryConsolidator
-            .Setup(c => c.ConsolidateAsync(projectId, null, It.IsAny<MemoryCandidate>(), It.IsAny<List<ExistingMemoryWithEmbedding>>(), true, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Guid _, Guid? _, MemoryCandidate cand, List<ExistingMemoryWithEmbedding> _, bool _, CancellationToken _) =>
-                new ConsolidationResult(MakeMemory(projectId, cand.Type, cand.Title, cand.Body), ConsolidationOutcome.Created));
-
-        var result = await _sut.RememberExplicitlyAsync(projectId, "Use SQLite for the cache.", MemoryType.Decision, CancellationToken.None);
-
-        result.Type.Should().Be(MemoryType.Decision);
+        result.Type.Should().Be(expected);
     }
 }

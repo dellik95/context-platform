@@ -13,8 +13,7 @@ using Moq;
 namespace Context.IntegrationTests;
 
 /// <summary>
-/// MEMORY_PIPELINE_PLAN.md §H case #11 ("hooks contain no memory business logic"), §C row 9: this
-/// is the standing architectural rule that <see cref="HookEndpoints"/> never does LLM extraction or
+/// Hooks contain no memory business logic: <see cref="HookEndpoints"/> never does LLM extraction or
 /// consolidation itself — it only forwards to <see cref="IContextEngine"/>. Verified here for
 /// <c>PostToolUseAsync</c> specifically with a <see cref="MockBehavior.Strict"/>
 /// <see cref="IContextEngine"/> mock: only <c>RecordEventAsync</c> is configured, so any other

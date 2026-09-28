@@ -67,16 +67,16 @@ public sealed class ProjectSettingsServiceTests
         Directory.CreateDirectory(Path.Combine(root, ".claude"));
 
         var reindexedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
-        var compactedAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        var reconsolidatedAt = DateTimeOffset.UtcNow.AddMinutes(-10);
         var databaseSettings = BuildSettings("embed-db", "llm-db", 5) with
         {
             LastReindexScheduledAt = reindexedAt,
-            LastMemoryCompactionScheduledAt = compactedAt,
+            LastMemoryReconsolidationScheduledAt = reconsolidatedAt,
         };
         var localSettings = BuildSettings("embed-local", "llm-local", 7) with
         {
             LastReindexScheduledAt = null,
-            LastMemoryCompactionScheduledAt = DateTimeOffset.UnixEpoch,
+            LastMemoryReconsolidationScheduledAt = DateTimeOffset.UnixEpoch,
         };
 
         var project = new Project
@@ -99,7 +99,7 @@ public sealed class ProjectSettingsServiceTests
 
         effective.EmbeddingProvider.Should().Be("embed-local");
         effective.LastReindexScheduledAt.Should().Be(reindexedAt);
-        effective.LastMemoryCompactionScheduledAt.Should().Be(compactedAt);
+        effective.LastMemoryReconsolidationScheduledAt.Should().Be(reconsolidatedAt);
     }
 
     [Fact]

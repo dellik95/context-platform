@@ -8,7 +8,7 @@ import { ProjectContextService } from '../projects/project-context.service';
 import { SettingsPanelComponent } from './settings-panel.component';
 
 /**
- * BACKLOG-09 / SEC-5 coverage: the cloud data-use disclosure must render when (and only when) a
+ * Coverage: the cloud data-use disclosure must render when (and only when) a
  * non-local provider (openai/anthropic) is selected in either provider dropdown, and stay hidden
  * for ollama/foundry/noop. `ApiService` and `ProjectContextService` are stubbed so this exercises only the
  * component's own rendering logic, not the real HTTP/SignalR wiring `ProjectContextService`
@@ -37,13 +37,8 @@ describe('SettingsPanelComponent cloud provider disclosure', () => {
     staleSessionTimeoutMinutes: 240,
     deleteSessionEventsAfterSummary: false,
     hookInvocationRetentionDays: 30,
-    memoryCompactionIntervalMinutes: 0,
-    lastMemoryCompactionScheduledAt: null,
-    memoryCompactionSimilarityThreshold: 0.9,
-    memoryConsolidationSimilarityThreshold: 0.92,
-    memoryConsolidationLowSimilarityThreshold: 0.8,
-    memoryConsolidationPromotionReinforcementThreshold: 2,
-    memoryConsolidationTopKForDedup: 3,
+    memoryReconsolidationIntervalMinutes: 0,
+    lastMemoryReconsolidationScheduledAt: null,
   };
 
   function fakeSettingsResource(settings: ProjectSettingsDto) {

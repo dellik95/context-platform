@@ -367,9 +367,6 @@ namespace Context.Infrastructure.Migrations
                     b.Property<string>("FilesReadJson")
                         .HasColumnType("TEXT");
 
-                    b.Property<bool>("IsCompacted")
-                        .HasColumnType("INTEGER");
-
                     b.Property<DateTimeOffset>("LastReinforcedAt")
                         .HasColumnType("TEXT");
 
@@ -384,6 +381,15 @@ namespace Context.Infrastructure.Migrations
 
                     b.Property<string>("ScopePath")
                         .HasMaxLength(400)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("SourceCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("SupersededAt")
                         .HasColumnType("TEXT");
 
                     b.Property<Guid?>("SupersededById")
@@ -401,6 +407,10 @@ namespace Context.Infrastructure.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("TopicKey")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("Type")
                         .HasColumnType("INTEGER");
 
@@ -412,11 +422,44 @@ namespace Context.Infrastructure.Migrations
 
                     b.HasIndex("ProjectId", "ScopePath");
 
+                    b.HasIndex("ProjectId", "Status");
+
                     b.HasIndex("ProjectId", "Topic");
+
+                    b.HasIndex("ProjectId", "TopicKey");
 
                     b.HasIndex("ProjectId", "Type");
 
                     b.ToTable("Memories", (string)null);
+                });
+
+            modelBuilder.Entity("Context.Domain.Entities.MemoryConsolidationReport", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("AppliedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReportJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId", "Status");
+
+                    b.ToTable("MemoryConsolidationReports", (string)null);
                 });
 
             modelBuilder.Entity("Context.Domain.Entities.MemoryEmbedding", b =>
@@ -427,6 +470,10 @@ namespace Context.Infrastructure.Migrations
                     b.Property<int>("Dim")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("ModelKey")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
                     b.Property<byte[]>("Vector")
                         .IsRequired()
                         .HasColumnType("BLOB");
@@ -434,6 +481,70 @@ namespace Context.Infrastructure.Migrations
                     b.HasKey("MemoryId");
 
                     b.ToTable("MemoryEmbeddings", (string)null);
+                });
+
+            modelBuilder.Entity("Context.Domain.Entities.MemoryEntity", b =>
+                {
+                    b.Property<Guid>("MemoryId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Key")
+                        .HasMaxLength(512)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Display")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("MemoryId", "Key");
+
+                    b.HasIndex("ProjectId", "Key");
+
+                    b.ToTable("MemoryEntities", (string)null);
+                });
+
+            modelBuilder.Entity("Context.Domain.Entities.MemoryEvidence", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("MemoryId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(2000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ObservedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Relation")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid?>("SessionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Source")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid?>("SourceMemoryId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MemoryId");
+
+                    b.HasIndex("ProjectId", "SourceMemoryId");
+
+                    b.ToTable("MemoryEvidence", (string)null);
                 });
 
             modelBuilder.Entity("Context.Domain.Entities.Project", b =>
@@ -934,11 +1045,38 @@ namespace Context.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict);
                 });
 
+            modelBuilder.Entity("Context.Domain.Entities.MemoryConsolidationReport", b =>
+                {
+                    b.HasOne("Context.Domain.Entities.Project", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Context.Domain.Entities.MemoryEmbedding", b =>
                 {
                     b.HasOne("Context.Domain.Entities.Memory", null)
                         .WithOne()
                         .HasForeignKey("Context.Domain.Entities.MemoryEmbedding", "MemoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Context.Domain.Entities.MemoryEntity", b =>
+                {
+                    b.HasOne("Context.Domain.Entities.Memory", null)
+                        .WithMany()
+                        .HasForeignKey("MemoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Context.Domain.Entities.MemoryEvidence", b =>
+                {
+                    b.HasOne("Context.Domain.Entities.Memory", null)
+                        .WithMany()
+                        .HasForeignKey("MemoryId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

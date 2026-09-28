@@ -21,7 +21,7 @@ public class HybridScorerTests
     [Fact]
     public void DefaultMemoryWeight_IsZero_BecauseNoPerCandidateSignalExistsForCodeSearch()
     {
-        // BACKLOG-13 (ARCHITECTURE_ASSESSMENT.md RAG-1): memory-adjacency has no per-candidate
+        // Memory-adjacency has no per-candidate
         // data source in the code-search path (Memory.FilesReadJson/FilesModifiedJson are
         // write-only path lists, never joined to Chunk/File). Rather than let a constant
         // placeholder silently normalize to a non-zero 0.5 contribution via NormalizeMinMax's
@@ -32,7 +32,7 @@ public class HybridScorerTests
     [Fact]
     public void DefaultRecencyWeight_IsZero_BecauseUpdatedAtMeansLastIndexedNotLastChanged()
     {
-        // BACKLOG-13 follow-up: File.UpdatedAt was tried as a per-candidate recency signal and
+        // File.UpdatedAt was tried as a per-candidate recency signal and
         // measured against RetrievalQualityHarnessTests (hit-rate@5 0.619 -> 0.524, MRR
         // 0.644 -> 0.551 -- a regression). Root cause: UpdatedAt is stamped at index-processing
         // time, not source-content-change time (it already means "last indexed" elsewhere -- see
@@ -217,80 +217,39 @@ public class HybridScorerTests
         result[1].Should().BeLessThan(result[0]);
     }
 
-    // ---- ApplyMemoryTypeBonus (codemem-inspired kind-based re-rank bonus) ------------------
-
-    [Fact]
-    public void ApplyMemoryTypeBonus_DecisionRanksAboveOtherwiseIdenticalChange()
-    {
-        const double baseScore = 0.5;
-
-        var decisionScore = HybridScorer.ApplyMemoryTypeBonus(baseScore, MemoryType.Decision);
-        var changeScore = HybridScorer.ApplyMemoryTypeBonus(baseScore, MemoryType.Change);
-
-        decisionScore.Should().BeGreaterThan(changeScore);
-        changeScore.Should().Be(baseScore); // Change carries no bonus.
-    }
+    // ---- NormalizedMemoryTypeBonus (kind-based re-rank bonus) -------------------------------
 
     [Theory]
     [InlineData(MemoryType.Decision, 0.15)]
+    [InlineData(MemoryType.Constraint, 0.15)]
     [InlineData(MemoryType.Architecture, 0.15)]
-    [InlineData(MemoryType.BugFix, 0.10)]
+    [InlineData(MemoryType.Behavior, 0.10)]
+    [InlineData(MemoryType.Discovery, 0.10)]
+    [InlineData(MemoryType.Configuration, 0.10)]
+    [InlineData(MemoryType.Procedure, 0.10)]
     [InlineData(MemoryType.Issue, 0.10)]
-    [InlineData(MemoryType.Feature, 0.05)]
-    [InlineData(MemoryType.Refactor, 0.05)]
-    [InlineData(MemoryType.Discovery, 0.05)]
-    [InlineData(MemoryType.Change, 0.0)]
-    [InlineData(MemoryType.Exploration, 0.0)]
-    public void ApplyMemoryTypeBonus_MatchesDocumentedConstantPerMemoryType(MemoryType type, double expectedBonus)
+    [InlineData(MemoryType.Fact, 0.05)]
+    [InlineData(MemoryType.Event, 0.0)]
+    public void MemoryTypeBonus_MatchesDocumentedConstantPerMemoryType(MemoryType type, double expectedBonus)
     {
-        const double baseScore = 0.4;
+        var bonus = HybridScorer.MemoryTypeBonus.TryGetValue(type, out var b) ? b : 0.0;
 
-        var result = HybridScorer.ApplyMemoryTypeBonus(baseScore, type);
-
-        result.Should().BeApproximately(baseScore + expectedBonus, 1e-9);
+        bonus.Should().BeApproximately(expectedBonus, 1e-9);
+        HybridScorer.NormalizedMemoryTypeBonus(type).Should().BeApproximately(expectedBonus / 0.15, 1e-9);
     }
 
     [Fact]
-    public void ApplyMemoryTypeBonus_NullMemoryType_AddsNoBonus()
+    public void NormalizedMemoryTypeBonus_OrdersDecisionAboveBehaviorAboveFactAboveEvent()
     {
-        const double baseScore = 0.42;
+        var decision = HybridScorer.NormalizedMemoryTypeBonus(MemoryType.Decision);
+        var behavior = HybridScorer.NormalizedMemoryTypeBonus(MemoryType.Behavior);
+        var fact = HybridScorer.NormalizedMemoryTypeBonus(MemoryType.Fact);
+        var evt = HybridScorer.NormalizedMemoryTypeBonus(MemoryType.Event);
 
-        var result = HybridScorer.ApplyMemoryTypeBonus(baseScore, null);
-
-        result.Should().Be(baseScore);
-    }
-
-    [Fact]
-    public void ApplyMemoryTypeBonus_ResultIsClampedTo01_EvenWhenBaseScoreIsAlreadyNearOne()
-    {
-        var result = HybridScorer.ApplyMemoryTypeBonus(0.95, MemoryType.Decision);
-
-        result.Should().Be(1.0);
-    }
-
-    [Fact]
-    public void ApplyMemoryTypeBonus_DecisionAndArchitecture_ShareTheHighestBonus()
-    {
-        const double baseScore = 0.3;
-
-        var decision = HybridScorer.ApplyMemoryTypeBonus(baseScore, MemoryType.Decision);
-        var architecture = HybridScorer.ApplyMemoryTypeBonus(baseScore, MemoryType.Architecture);
-
-        decision.Should().Be(architecture);
-    }
-
-    [Fact]
-    public void ApplyMemoryTypeBonus_BonusOrdering_DecisionAboveBugFixAboveFeatureAboveChange()
-    {
-        const double baseScore = 0.2;
-
-        var decision = HybridScorer.ApplyMemoryTypeBonus(baseScore, MemoryType.Decision);
-        var bugFix = HybridScorer.ApplyMemoryTypeBonus(baseScore, MemoryType.BugFix);
-        var feature = HybridScorer.ApplyMemoryTypeBonus(baseScore, MemoryType.Feature);
-        var change = HybridScorer.ApplyMemoryTypeBonus(baseScore, MemoryType.Change);
-
-        decision.Should().BeGreaterThan(bugFix);
-        bugFix.Should().BeGreaterThan(feature);
-        feature.Should().BeGreaterThan(change);
+        decision.Should().Be(1.0);
+        decision.Should().BeGreaterThan(behavior);
+        behavior.Should().BeGreaterThan(fact);
+        fact.Should().BeGreaterThan(evt);
+        evt.Should().Be(0.0);
     }
 }

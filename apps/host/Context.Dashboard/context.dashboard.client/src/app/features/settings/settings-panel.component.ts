@@ -1,5 +1,5 @@
 import { Component, computed, effect, inject, signal } from '@angular/core';
-import { FormField, form, max, min } from '@angular/forms/signals';
+import { FormField, form, min } from '@angular/forms/signals';
 import { Router } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
@@ -46,7 +46,7 @@ export class SettingsPanelComponent {
   protected readonly installing = signal(false);
   protected readonly deleting = signal(false);
   private lastReindexScheduledAt: string | null = null;
-  private lastMemoryCompactionScheduledAt: string | null = null;
+  private lastMemoryReconsolidationScheduledAt: string | null = null;
 
   protected readonly settingsModel = signal({
     embeddingProvider: 'noop',
@@ -70,13 +70,8 @@ export class SettingsPanelComponent {
     deleteSessionEventsAfterSummary: false,
     hookInvocationRetentionEnabled: true,
     hookInvocationRetentionDays: 30,
-    memoryCompactionEnabled: false,
-    memoryCompactionIntervalMinutes: 60,
-    memoryCompactionSimilarityThreshold: 0.9,
-    memoryConsolidationSimilarityThreshold: 0.92,
-    memoryConsolidationLowSimilarityThreshold: 0.8,
-    memoryConsolidationPromotionReinforcementThreshold: 2,
-    memoryConsolidationTopKForDedup: 3,
+    memoryReconsolidationEnabled: false,
+    memoryReconsolidationIntervalMinutes: 60,
   });
 
   protected readonly settingsForm = form(this.settingsModel, (path) => {
@@ -87,15 +82,7 @@ export class SettingsPanelComponent {
     min(path.minEventsForMemoryExtraction, 1);
     min(path.staleSessionTimeoutMinutes, 1);
     min(path.hookInvocationRetentionDays, 1);
-    min(path.memoryCompactionIntervalMinutes, 1);
-    min(path.memoryCompactionSimilarityThreshold, 0.01);
-    max(path.memoryCompactionSimilarityThreshold, 1);
-    min(path.memoryConsolidationSimilarityThreshold, 0.01);
-    max(path.memoryConsolidationSimilarityThreshold, 1);
-    min(path.memoryConsolidationLowSimilarityThreshold, 0.01);
-    max(path.memoryConsolidationLowSimilarityThreshold, 1);
-    min(path.memoryConsolidationPromotionReinforcementThreshold, 1);
-    min(path.memoryConsolidationTopKForDedup, 1);
+    min(path.memoryReconsolidationIntervalMinutes, 1);
   });
 
   protected readonly showOllamaBaseUrl = computed(() => {
@@ -120,7 +107,7 @@ export class SettingsPanelComponent {
   );
 
   /**
-   * BACKLOG-09 / SEC-5: a user picking `openai`/`anthropic` gets no explanation of what leaves
+   * A user picking `openai`/`anthropic` gets no explanation of what leaves
    * the machine when that provider is selected. `noop`, `ollama` and `foundry` never send indexed content
    * off-box, so the disclosure is scoped to exactly the two external providers this Settings tab
    * can select.
@@ -156,10 +143,9 @@ export class SettingsPanelComponent {
 
   protected readonly memoryMergingSummary = computed(() => {
     const m = this.settingsModel();
-    const compaction = m.memoryCompactionEnabled
-      ? `compaction every ${m.memoryCompactionIntervalMinutes} min`
-      : 'compaction off';
-    return `Dedup at ${m.memoryConsolidationSimilarityThreshold} · ${compaction}`;
+    return m.memoryReconsolidationEnabled
+      ? `Reconsolidation every ${m.memoryReconsolidationIntervalMinutes} min`
+      : 'Reconsolidation off';
   });
 
   protected readonly retentionSummary = computed(() => {
@@ -184,7 +170,7 @@ export class SettingsPanelComponent {
       }
       const settings = this.resource.value();
       this.lastReindexScheduledAt = settings.lastReindexScheduledAt;
-      this.lastMemoryCompactionScheduledAt = settings.lastMemoryCompactionScheduledAt;
+      this.lastMemoryReconsolidationScheduledAt = settings.lastMemoryReconsolidationScheduledAt;
       this.settingsModel.set({
         embeddingProvider: settings.embeddingProvider,
         llmProvider: settings.llmProvider,
@@ -211,18 +197,11 @@ export class SettingsPanelComponent {
         hookInvocationRetentionEnabled: settings.hookInvocationRetentionDays > 0,
         hookInvocationRetentionDays:
           settings.hookInvocationRetentionDays > 0 ? settings.hookInvocationRetentionDays : 30,
-        memoryCompactionEnabled: settings.memoryCompactionIntervalMinutes > 0,
-        memoryCompactionIntervalMinutes:
-          settings.memoryCompactionIntervalMinutes > 0
-            ? settings.memoryCompactionIntervalMinutes
+        memoryReconsolidationEnabled: settings.memoryReconsolidationIntervalMinutes > 0,
+        memoryReconsolidationIntervalMinutes:
+          settings.memoryReconsolidationIntervalMinutes > 0
+            ? settings.memoryReconsolidationIntervalMinutes
             : 60,
-        memoryCompactionSimilarityThreshold: settings.memoryCompactionSimilarityThreshold,
-        memoryConsolidationSimilarityThreshold: settings.memoryConsolidationSimilarityThreshold,
-        memoryConsolidationLowSimilarityThreshold:
-          settings.memoryConsolidationLowSimilarityThreshold,
-        memoryConsolidationPromotionReinforcementThreshold:
-          settings.memoryConsolidationPromotionReinforcementThreshold,
-        memoryConsolidationTopKForDedup: settings.memoryConsolidationTopKForDedup,
       });
     });
 
@@ -277,10 +256,10 @@ export class SettingsPanelComponent {
     }));
   }
 
-  protected setMemoryCompactionEnabled(event: MatSlideToggleChange): void {
+  protected setMemoryReconsolidationEnabled(event: MatSlideToggleChange): void {
     this.settingsModel.update((current) => ({
       ...current,
-      memoryCompactionEnabled: event.checked,
+      memoryReconsolidationEnabled: event.checked,
     }));
   }
 
@@ -316,16 +295,10 @@ export class SettingsPanelComponent {
       hookInvocationRetentionDays: raw.hookInvocationRetentionEnabled
         ? raw.hookInvocationRetentionDays
         : 0,
-      memoryCompactionIntervalMinutes: raw.memoryCompactionEnabled
-        ? raw.memoryCompactionIntervalMinutes
+      memoryReconsolidationIntervalMinutes: raw.memoryReconsolidationEnabled
+        ? raw.memoryReconsolidationIntervalMinutes
         : 0,
-      lastMemoryCompactionScheduledAt: this.lastMemoryCompactionScheduledAt,
-      memoryCompactionSimilarityThreshold: raw.memoryCompactionSimilarityThreshold,
-      memoryConsolidationSimilarityThreshold: raw.memoryConsolidationSimilarityThreshold,
-      memoryConsolidationLowSimilarityThreshold: raw.memoryConsolidationLowSimilarityThreshold,
-      memoryConsolidationPromotionReinforcementThreshold:
-        raw.memoryConsolidationPromotionReinforcementThreshold,
-      memoryConsolidationTopKForDedup: raw.memoryConsolidationTopKForDedup,
+      lastMemoryReconsolidationScheduledAt: this.lastMemoryReconsolidationScheduledAt,
     };
 
     this.saving.set(true);

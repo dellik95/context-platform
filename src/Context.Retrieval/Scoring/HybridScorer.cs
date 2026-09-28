@@ -10,7 +10,7 @@ namespace Context.Retrieval.Scoring;
 /// </summary>
 public sealed class HybridScorer : IHybridScorer
 {
-    // BACKLOG-13 (see ARCHITECTURE_ASSESSMENT.md RAG-1): the original weights below (lex 0.20,
+    // The original weights below (lex 0.20,
     // vec 0.45, graph 0.20, rec 0.10, mem 0.05) were set when both recency and memory were
     // constant placeholder signals -- NormalizeMinMax's all-equal fallback turned each into a
     // silent, inert 0.5 contribution.
@@ -44,25 +44,26 @@ public sealed class HybridScorer : IHybridScorer
     public const double DefaultMemoryWeight = 0.0;
 
     /// <summary>
-    /// Codemem-inspired kind-based re-rank bonus (ROADMAP.md's "hybrid pack re-ranking
-    /// refinements"): a small additive nudge favoring memory kinds worth surfacing over generic
-    /// ones. Decision/Architecture (locked-in project knowledge) rank highest, BugFix/Issue
-    /// (concrete, actionable) next, Feature/Refactor/Discovery a little, and anything else
-    /// (Change/Exploration/...) gets none. Deliberately NOT folded into <see cref="Combine"/>'s
-    /// base 5-signal formula -- see <see cref="ApplyMemoryTypeBonus"/>, which layers it on top of
-    /// an already-normalized [0, 1] score instead.
+    /// Small additive kind-based re-rank nudge favoring durable knowledge over activity records:
+    /// decisions, constraints and architecture highest, other knowledge kinds next, generic facts a
+    /// little, events none. Used by memory ranking through <see cref="NormalizedMemoryTypeBonus"/>,
+    /// not folded into <see cref="Combine"/>.
     /// </summary>
     public static readonly IReadOnlyDictionary<MemoryType, double> MemoryTypeBonus = new Dictionary<MemoryType, double>
     {
         [MemoryType.Decision] = 0.15,
+        [MemoryType.Constraint] = 0.15,
         [MemoryType.Architecture] = 0.15,
-        [MemoryType.BugFix] = 0.10,
+        [MemoryType.Behavior] = 0.10,
+        [MemoryType.Discovery] = 0.10,
+        [MemoryType.Configuration] = 0.10,
+        [MemoryType.Procedure] = 0.10,
         [MemoryType.Issue] = 0.10,
-        [MemoryType.Feature] = 0.05,
-        [MemoryType.Refactor] = 0.05,
-        [MemoryType.Discovery] = 0.05,
-        // MemoryType.Change and MemoryType.Exploration are intentionally absent -> 0.0 bonus.
+        [MemoryType.Fact] = 0.05,
+        // MemoryType.Event is intentionally absent -> 0.0 bonus.
     };
+
+    private static readonly double MaxMemoryTypeBonus = MemoryTypeBonus.Values.Max();
 
     private readonly HybridScoringOptions _options;
     private readonly IOptionsMonitor<HybridScoringOptions>? _optionsMonitor;
@@ -92,18 +93,9 @@ public sealed class HybridScorer : IHybridScorer
         return Clamp01(score);
     }
 
-    /// <summary>
-    /// Applies <see cref="MemoryTypeBonus"/> on top of an already-normalized [0, 1] relevance
-    /// score (e.g. <see cref="Combine"/>'s output, or <c>DecayCalculator.ComputeRelevanceMultiplier</c>
-    /// for a memory-derived score), then re-clamps to [0, 1] -- same pattern as <see cref="Clamp01"/>
-    /// guards every signal going into <see cref="Combine"/>. This is an additive refinement layered
-    /// on top of the base formula, not a change to it.
-    /// </summary>
-    public static double ApplyMemoryTypeBonus(double normalizedScore, MemoryType? memoryType)
-    {
-        var bonus = memoryType is { } type && MemoryTypeBonus.TryGetValue(type, out var b) ? b : 0.0;
-        return Clamp01(normalizedScore + bonus);
-    }
+    /// <summary><see cref="MemoryTypeBonus"/> scaled to [0, 1] against the largest bonus.</summary>
+    public static double NormalizedMemoryTypeBonus(MemoryType type) =>
+        MemoryTypeBonus.TryGetValue(type, out var bonus) ? bonus / MaxMemoryTypeBonus : 0.0;
 
     /// <summary>
     /// Min-max normalizes a batch of raw signal values (BM25 scores, cosine similarities, etc.)

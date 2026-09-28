@@ -26,8 +26,7 @@ public class SymbolRepository(ContextDbContext db) : ISymbolRepository
         ).ToListAsync(ct);
 
         // Ordered by match quality, not alphabetically (SQLite's EF Core provider can't translate
-        // this ranking, same as MemoryRepository.SearchAsync's own client-side ORDER BY -- see its
-        // remarks): an exact/prefix/substring hit on the symbol's own short Name ranks above one
+        // this ranking, so it runs client-side): an exact/prefix/substring hit on the symbol's own short Name ranks above one
         // that only matched somewhere in QualifiedName's namespace/parent prefix, so searching
         // "AuthMiddleware" surfaces the class itself before an unrelated symbol that merely lives in
         // a namespace containing "Auth".

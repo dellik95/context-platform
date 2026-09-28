@@ -7,39 +7,30 @@ public class Memory
     public Guid Id { get; set; }
     public Guid ProjectId { get; set; }
     public MemoryType Type { get; set; }
+    public MemoryStatus Status { get; set; } = MemoryStatus.Active;
     public required string Title { get; set; }
     public required string Body { get; set; }
-    // Short (2-5 word), reusable phrase naming the feature/subsystem/component this memory is
-    // about (e.g. "Auth middleware", "Embedding pipeline concurrency") — distinct from Title
-    // (which is specific to this one memory) so that memories about the same subject, extracted
-    // across different sessions, share the same Topic and can be found/grouped together.
+    // Short reusable subsystem phrase shared by memories about the same subject across sessions.
     public string? Topic { get; set; }
-    // Repo-relative directory/module path this memory is scoped to (e.g.
-    // "src/Context.Application/Indexing") — structured and hierarchical, unlike Topic (a short
-    // human-readable phrase) or FilesReadJson/FilesModifiedJson (exact file lists), so memories can
-    // be filtered by "everything under this component" without needing an LLM-authored Topic match
-    // or scanning every file list.
+    // Normalized Topic used for exact-match grouping; Topic keeps the display form.
+    public string? TopicKey { get; set; }
+    // Repo-relative directory the memory is scoped to, for "everything under this component".
     public string? ScopePath { get; set; }
     public string? FactsJson { get; set; }
-    // JSON array drawn from a fixed taxonomy: how-it-works, why-it-exists, what-changed,
-    // problem-solution, gotcha, pattern, trade-off — lets a future agent filter memories by kind
-    // of insight (e.g. "show me the gotchas") rather than only full-text search.
     public string? ConceptsJson { get; set; }
-    // Per-memory file provenance (as opposed to SessionSummary.ChangedFilesJson, which is
-    // session-wide) — which specific files this particular memory is actually about, so a future
-    // agent working on file X can find memories scoped to it without reading the whole session.
     public string? FilesReadJson { get; set; }
     public string? FilesModifiedJson { get; set; }
     public double Confidence { get; set; } = 0.7;
     public MemoryTier Tier { get; set; } = MemoryTier.Working;
     public bool Pinned { get; set; }
     public int ReinforcementCount { get; set; }
+    // Number of independent evidence sources backing this memory.
+    public int SourceCount { get; set; } = 1;
     public Guid? SupersededById { get; set; }
-    // Set on the merged memory a compaction pass produces (never on its sources, which are
-    // superseded instead) — stops it being picked as a merge source again in a future pass, since
-    // it's already a dense merge and re-merging it would be lossy.
-    public bool IsCompacted { get; set; }
+    public DateTimeOffset? SupersededAt { get; set; }
     public Guid? CreatedFromSessionId { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset LastReinforcedAt { get; set; }
+
+    public bool IsLive => Status is MemoryStatus.Active or MemoryStatus.Contested;
 }

@@ -5,6 +5,7 @@ using Context.Domain.Entities;
 using Context.Domain.Enums;
 using Context.Infrastructure.Abstractions;
 using Context.Memory.Abstractions;
+using Context.Memory.Consolidation;
 using Context.Providers;
 using Context.Providers.Abstractions;
 using Microsoft.Extensions.AI;
@@ -62,13 +63,14 @@ public sealed class RecreateEmbeddingsJobHandler(
             }
         }
 
-        var activeMemories = await memories.ListByProjectAsync(payload.ProjectId, includeSuperseded: false, ct).ConfigureAwait(false);
-        foreach (var memory in activeMemories)
+        // Events are never embedded: consolidation compares only knowledge by similarity.
+        var liveKnowledge = await memories.ListByProjectAsync(payload.ProjectId, includeSuperseded: false, ct).ConfigureAwait(false);
+        foreach (var memory in liveKnowledge.Where(m => m.Type.IsKnowledge()))
         {
             ct.ThrowIfCancellationRequested();
 
-            var result = await embeddingGenerator.GenerateAsync($"{memory.Title}\n{memory.Body}", cancellationToken: ct).ConfigureAwait(false);
-            await memoryStore.SaveAsync(memory, result.Vector.ToArray(), ct).ConfigureAwait(false);
+            var result = await embeddingGenerator.GenerateAsync(MemoryEmbeddingText.For(memory), cancellationToken: ct).ConfigureAwait(false);
+            await memoryStore.UpsertEmbeddingAsync(memory, new MemoryVector(providerKey, result.Vector.ToArray()), ct).ConfigureAwait(false);
         }
     }
 }

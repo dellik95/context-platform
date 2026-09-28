@@ -56,32 +56,10 @@ public sealed record ProjectSettingsDto(
     // disables cleanup (today's only behavior). Default 30d - long enough to cover the dashboard's
     // recent-activity views, short enough that the table doesn't grow unbounded.
     int HookInvocationRetentionDays = 30,
-    // MemoryCompactionScheduler periodically clusters and merges near-duplicate memories via
-    // JobType.CompactMemory. <= 0 disables periodic compaction (today's only behavior) - same
-    // shape as SessionSummaryIntervalMinutes above, one on/off+period knob rather than a separate
-    // enable flag.
-    int MemoryCompactionIntervalMinutes = 0,
-    DateTimeOffset? LastMemoryCompactionScheduledAt = null,
-    // Cosine similarity (embedding of "{Title}\n{Body}") above which two memories are clustered
-    // together for a single compaction merge.
-    double MemoryCompactionSimilarityThreshold = 0.90,
-    // The four MemoryConsolidator knobs below govern real-time dedup on extraction (every
-    // memory_remember call and every ExtractMemory job), separate from the periodic
-    // MemoryCompaction* pass above. Defaults match MemoryConsolidator's former hardcoded consts,
-    // so an unconfigured project behaves exactly as before this became configurable.
-    //
-    // Best-match cosine similarity strictly above this reinforces the existing memory (or, if the
-    // LLM judges it contradictory, supersedes it) instead of inserting a near-duplicate.
-    double MemoryConsolidationSimilarityThreshold = 0.92,
-    // Best-match similarity at or above this (but at/below MemoryConsolidationSimilarityThreshold)
-    // triggers a restatement check against the nearest neighbors before inserting as new.
-    double MemoryConsolidationLowSimilarityThreshold = 0.80,
-    // Reinforcements a memory needs (via the paths above) before being promoted from Working to
-    // LongTerm tier.
-    int MemoryConsolidationPromotionReinforcementThreshold = 2,
-    // How many nearest existing memories are considered as merge/restatement candidates for one
-    // new candidate.
-    int MemoryConsolidationTopKForDedup = 3,
+    // Cadence of the periodic memory reconsolidation pass (JobType.ReconsolidateMemory). <= 0
+    // disables it. LastMemoryReconsolidationScheduledAt is scheduler state, stamped before enqueueing.
+    int MemoryReconsolidationIntervalMinutes = 0,
+    DateTimeOffset? LastMemoryReconsolidationScheduledAt = null,
     // Foundry Local endpoint/models, used when EmbeddingProvider/LlmProvider is "foundry". Null
     // falls back to CONTEXT_FOUNDRY_* / FoundryLocalOptions' defaults.
     string? FoundryBaseUrl = null,

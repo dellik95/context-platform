@@ -6,8 +6,8 @@ namespace Context.Memory.Extraction;
 
 /// <summary>
 /// Offline candidate generation used when no real LLM is configured: turns each non-empty
-/// section of a <see cref="SessionSummaryChunk"/> into at most one candidate memory. Lower
-/// confidence than an LLM-derived candidate since no judgment was applied.
+/// section of a <see cref="SessionSummaryChunk"/> into at most one candidate memory, sourced as
+/// <see cref="EvidenceSource.Heuristic"/> since no judgment was applied.
 /// </summary>
 internal static class MemoryCandidateHeuristics
 {
@@ -22,15 +22,15 @@ internal static class MemoryCandidateHeuristics
         // No LLM judgment is available offline to say WHICH files a Decision/Discovery/Issue
         // candidate is specifically about, so those three don't get FilesModified populated here
         // (an empty list is honest; guessing "all session files" for each would be misleading).
-        TryAdd(candidates, MemoryType.Decision, chunk.Decisions, 0.6);
-        TryAdd(candidates, MemoryType.Discovery, chunk.Discovered, 0.55);
-        TryAdd(candidates, MemoryType.Issue, chunk.OpenIssues, 0.5);
+        TryAdd(candidates, MemoryType.Decision, chunk.Decisions);
+        TryAdd(candidates, MemoryType.Discovery, chunk.Discovered);
+        TryAdd(candidates, MemoryType.Issue, chunk.OpenIssues);
         TryAddChangedFiles(candidates, changedFiles);
 
         return candidates;
     }
 
-    private static void TryAdd(List<MemoryCandidate> candidates, MemoryType type, string? section, double confidence)
+    private static void TryAdd(List<MemoryCandidate> candidates, MemoryType type, string? section)
     {
         if (string.IsNullOrWhiteSpace(section))
         {
@@ -48,7 +48,7 @@ internal static class MemoryCandidateHeuristics
         }
 
         var title = Truncate(firstLine, MaxTitleLength);
-        candidates.Add(new MemoryCandidate(type, title, section.Trim(), confidence, ExtractFacts(section), [], [], []));
+        candidates.Add(new MemoryCandidate(type, title, section.Trim(), EvidenceSource.Heuristic, ExtractFacts(section), [], [], []));
     }
 
     private static void TryAddChangedFiles(List<MemoryCandidate> candidates, IReadOnlyList<string> files)
@@ -61,9 +61,8 @@ internal static class MemoryCandidateHeuristics
         var title = Truncate($"Changed {files.Count} file(s): {string.Join(", ", files.Take(3))}", MaxTitleLength);
         var body = "Files touched this session:\n" + string.Join('\n', files.Select(f => $"- {f}"));
         var facts = files.Take(MaxFacts).Select(f => $"Changed {f}").ToList();
-        // This candidate IS specifically about these files (that's its whole content), unlike the
-        // Decision/Discovery/Issue candidates above — FilesModified is accurate here, not a guess.
-        candidates.Add(new MemoryCandidate(MemoryType.Change, title, body, 0.5, facts, [], [], files,
+        // An activity record, not knowledge: FilesModified is accurate here, not a guess.
+        candidates.Add(new MemoryCandidate(MemoryType.Event, title, body, EvidenceSource.Heuristic, facts, [], [], files,
             ScopePath: ScopePathHeuristics.DeriveFromFiles(files, [])));
     }
 

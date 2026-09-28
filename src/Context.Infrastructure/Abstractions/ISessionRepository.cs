@@ -73,8 +73,8 @@ public interface ISessionRepository
     /// <summary>
     /// Lexical substring match (Title/Completed/Discovered/Decisions/OpenIssues/NextSteps) over
     /// <paramref name="projectId"/>'s session-summary chunks, newest first — the lexical half of
-    /// <see cref="Context.Application.ContextEngine.SearchSessionSummariesAsync"/>'s hybrid search,
-    /// mirroring <see cref="IMemoryRepository.SearchAsync"/>. <paramref name="sessionId"/> (optional)
+    /// <see cref="Context.Application.ContextEngine.SearchSessionSummariesAsync"/>'s hybrid search.
+    /// <paramref name="sessionId"/> (optional)
     /// restricts the match to one session's own chunks.
     /// </summary>
     Task<IReadOnlyList<SessionSummaryChunk>> SearchSummaryChunksAsync(
