@@ -113,6 +113,20 @@ public class FoundryLocalProviderTests
     }
 
     [Fact]
+    public async Task A_prompt_over_the_context_window_fails_with_a_hint_to_pick_a_larger_model()
+    {
+        using var client = new FoundryLocalChatClientDecorator(
+            new ThrowingChatClient("input_ids size (4652) + current sequence length (0) exceeds max length (4224)"),
+            new Uri("http://127.0.0.1:5273/v1"),
+            "qwen2.5-coder-7b");
+
+        var act = () => client.GetResponseAsync("hi");
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .Which.Message.Should().Contain("context window").And.Contain("exceeds max length (4224)").And.NotContain("foundry model load");
+    }
+
+    [Fact]
     public void AddContextProviders_registers_foundry_for_both_embeddings_and_chat_without_secret_redaction()
     {
         var services = new ServiceCollection();
@@ -141,10 +155,10 @@ public class FoundryLocalProviderTests
         }
     }
 
-    private sealed class ThrowingChatClient : IChatClient
+    private sealed class ThrowingChatClient(string message = "connection refused") : IChatClient
     {
         public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
-            throw new HttpRequestException("connection refused");
+            throw new HttpRequestException(message);
 
         public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
