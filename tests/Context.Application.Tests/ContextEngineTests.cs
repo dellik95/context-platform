@@ -520,7 +520,10 @@ public sealed class ContextEngineTests
 
         _sessionRepository.Verify(r => r.ClaimEventsForExtractionAsync(sessionId, 1, It.IsAny<CancellationToken>()), Times.Once);
         _jobQueue.Verify(
-            q => q.EnqueueAsync(JobType.ExtractMemory, It.IsAny<object>(), session.ProjectId, It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            q => q.EnqueueAsync(JobType.ExtractMemory, It.IsAny<object>(), session.ProjectId, JobPriority.Session, It.IsAny<CancellationToken>()),
+            Times.Once);
+        _jobQueue.Verify(
+            q => q.EnqueueAsync(JobType.SummarizeSession, It.IsAny<object>(), session.ProjectId, JobPriority.Session, It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -538,7 +541,7 @@ public sealed class ContextEngineTests
                 JobType.ExtractMemory,
                 It.Is<object>(p => p is ExtractMemoryPayload && ((ExtractMemoryPayload)p).CompactSummary == "Switched auth to PKCE."),
                 projectId,
-                It.IsAny<int>(),
+                JobPriority.Session,
                 It.IsAny<CancellationToken>()),
             Times.Once);
         _jobQueue.VerifyNoOtherCalls();

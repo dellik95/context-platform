@@ -72,6 +72,23 @@ public class MemoryExtractionPromptBuilderTests
     }
 
     [Fact]
+    public void BuildUserPromptFromEvents_includes_the_assistant_reply_text()
+    {
+        var sessionId = Guid.NewGuid();
+        var at = new DateTimeOffset(2026, 9, 25, 10, 15, 30, TimeSpan.Zero);
+        SessionEvent[] events =
+        [
+            new() { SessionId = sessionId, Type = SessionEventType.AssistantMessage, Timestamp = at, PayloadJson = """{"message":"Root cause: the retry policy swallowed 429s."}""" },
+        ];
+
+        var prompt = MemoryExtractionPromptBuilder.BuildUserPromptFromEvents(sessionId, events);
+
+        prompt.Should().Contain("[10:15:30] AssistantMessage")
+            .And.Contain("  Root cause: the retry policy swallowed 429s.")
+            .And.NotContain("message:");
+    }
+
+    [Fact]
     public void BuildUserPromptFromCompactSummary_includes_the_summary_text()
     {
         var prompt = MemoryExtractionPromptBuilder.BuildUserPromptFromCompactSummary(Guid.NewGuid(), "  Chose Polly over hand-rolled retries.  ");

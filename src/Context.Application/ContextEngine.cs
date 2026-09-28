@@ -354,7 +354,7 @@ public sealed class ContextEngine(
         }
 
         await jobQueue.EnqueueAsync(
-            JobType.ExtractMemory, new ExtractMemoryPayload(sessionId, EventBatchId: batchId), projectId, ct: ct).ConfigureAwait(false);
+            JobType.ExtractMemory, new ExtractMemoryPayload(sessionId, EventBatchId: batchId), projectId, JobPriority.Session, ct).ConfigureAwait(false);
     }
 
     public async Task ExtractMemoryFromCompactSummaryAsync(Guid projectId, Guid sessionId, string compactSummary, CancellationToken ct)
@@ -365,7 +365,7 @@ public sealed class ContextEngine(
         }
 
         await jobQueue.EnqueueAsync(
-            JobType.ExtractMemory, new ExtractMemoryPayload(sessionId, CompactSummary: compactSummary), projectId, ct: ct).ConfigureAwait(false);
+            JobType.ExtractMemory, new ExtractMemoryPayload(sessionId, CompactSummary: compactSummary), projectId, JobPriority.Session, ct).ConfigureAwait(false);
     }
 
     public async Task EndSessionAsync(Guid projectId, Guid sessionId, CancellationToken ct, string? reason = null)
@@ -380,7 +380,7 @@ public sealed class ContextEngine(
 
         // No later event will push the remainder over the batch threshold, so flush it now.
         await EnqueueExtractionBatchAsync(session.ProjectId, sessionId, minEvents: 1, ct).ConfigureAwait(false);
-        await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(sessionId, IsSessionEnd: true), session.ProjectId, ct: ct).ConfigureAwait(false);
+        await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(sessionId, IsSessionEnd: true), session.ProjectId, JobPriority.Session, ct).ConfigureAwait(false);
     }
 
     public async Task RequestSessionSummaryAsync(Guid projectId, Guid sessionId, CancellationToken ct)
@@ -388,7 +388,7 @@ public sealed class ContextEngine(
         var session = await sessionRepository.GetByIdAsync(projectId, sessionId, ct).ConfigureAwait(false)
             ?? throw new KeyNotFoundException($"Session {sessionId} was not found.");
 
-        await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(sessionId, IsSessionEnd: false), session.ProjectId, ct: ct).ConfigureAwait(false);
+        await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(sessionId, IsSessionEnd: false), session.ProjectId, JobPriority.Session, ct).ConfigureAwait(false);
     }
 
     public async Task<object> ProjectInfoAsync(Guid projectId, CancellationToken ct)

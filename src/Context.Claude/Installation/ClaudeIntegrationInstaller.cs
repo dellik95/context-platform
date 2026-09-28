@@ -15,7 +15,7 @@ namespace Context.Claude.Installation;
 /// talk to Context.Dashboard.Server from inside Claude Code:
 /// <list type="bullet">
 /// <item><c>.claude/hooks/*.sh</c> and <c>.claude/hooks/*.ps1</c> — thin, fail-open hook scripts.</item>
-/// <item><c>.claude/settings.json</c> — merged, not overwritten, to wire the four hooks.</item>
+/// <item><c>.claude/settings.json</c> — merged, not overwritten, to wire the lifecycle hooks.</item>
 /// <item><c>.mcp.json</c> — merged, not overwritten, to register the Context.Dashboard.Server MCP server.</item>
 /// <item><c>.claude-plugin/plugin.json</c> — the Context Platform plugin manifest.</item>
 /// <item><c>.claude/context-platform.local.json</c> — a per-project bearer token + port, gitignored.</item>

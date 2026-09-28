@@ -117,7 +117,7 @@ public sealed class SessionSummaryScheduler(
                 }
 
                 _lastEnqueuedAt[session.Id] = TimeProvider.GetUtcNow();
-                await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(session.Id, IsSessionEnd: false), session.ProjectId, ct: ct)
+                await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(session.Id, IsSessionEnd: false), session.ProjectId, JobPriority.Session, ct)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)

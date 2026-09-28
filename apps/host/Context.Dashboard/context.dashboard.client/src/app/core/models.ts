@@ -375,7 +375,7 @@ export interface JobCountsChangedEvent {
 }
 
 // Mirrors src/Context.Domain/Enums/HookType.cs.
-export type HookType = 'SessionStart' | 'UserPromptSubmit' | 'PostToolUse' | 'SessionEnd';
+export type HookType = 'SessionStart' | 'UserPromptSubmit' | 'PostToolUse' | 'SessionEnd' | 'PostCompact' | 'Stop';
 
 // Mirrors Context.Dashboard.Server.Api.HooksStatusEndpoints's HookInvocationDto record.
 export interface HookInvocationDto {

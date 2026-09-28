@@ -13,7 +13,7 @@ internal static class SessionSummaryPromptBuilder
         """
         You are a senior engineer writing a concise end-of-session handoff note for a coding
         assistant's memory system. You will be given a chronological list of session events
-        (prompts, tool calls, file reads/edits, shell commands, errors). Summarize them into
+        (prompts, assistant replies, tool calls, file reads/edits, shell commands, errors). Summarize them into
         EXACTLY the following sections, using this exact format (a section may be empty but
         must still be present with its header):
 

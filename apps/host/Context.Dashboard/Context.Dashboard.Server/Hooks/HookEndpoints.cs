@@ -58,6 +58,7 @@ public static class HookEndpoints
         hooks.MapPost("/post-tool-use", PostToolUseAsync);
         hooks.MapPost("/session-end", SessionEndAsync);
         hooks.MapPost("/post-compact", PostCompactAsync);
+        hooks.MapPost("/stop", StopAsync);
     }
 
     private static async Task<IResult> SessionStartAsync(
@@ -154,6 +155,30 @@ public static class HookEndpoints
         return Results.Ok(new HookOutput(AdditionalContext: null));
     }
 
+    /// <summary>Records the assistant's reply for the turn so extraction batches see both sides of
+    /// the conversation. Must never return context: on Stop, additionalContext keeps Claude
+    /// running instead of letting the turn end.</summary>
+    internal static async Task<IResult> StopAsync(
+        StopInput input,
+        IContextEngine engine,
+        CurrentProjectAccessor project,
+        ClaudeSessionMap sessionMap,
+        IHookInvocationRepository hookInvocations,
+        IHookInvocationNotifier hookNotifier,
+        CancellationToken ct)
+    {
+        await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.Stop, input, ct).ConfigureAwait(false);
+
+        if (!string.IsNullOrWhiteSpace(input.LastAssistantMessage))
+        {
+            var sessionId = await GetOrStartSessionAsync(engine, project, sessionMap, input.SessionId, ct).ConfigureAwait(false);
+            await engine.RecordEventAsync(
+                project.ProjectId, sessionId, SessionEventType.AssistantMessage, new { message = input.LastAssistantMessage }, ct).ConfigureAwait(false);
+        }
+
+        return Results.Ok(new HookOutput(AdditionalContext: null));
+    }
+
     /// <summary>
     /// A <c>/compact</c> (manual or auto) is a natural mid-session checkpoint, same idea as
     /// <see cref="Context.Application.Scheduling.SessionSummaryScheduler"/>'s periodic pass but
@@ -161,7 +186,7 @@ public static class HookEndpoints
     /// via <see cref="IContextEngine.RequestSessionSummaryAsync"/> without ending the session, and
     /// memory extraction over Claude Code's own compaction summary.
     /// </summary>
-    private static async Task<IResult> PostCompactAsync(
+    internal static async Task<IResult> PostCompactAsync(
         PostCompactInput input,
         IContextEngine engine,
         CurrentProjectAccessor project,
@@ -170,10 +195,10 @@ public static class HookEndpoints
         IHookInvocationNotifier hookNotifier,
         CancellationToken ct)
     {
-        // input alone only ever carries session_id/trigger/cwd -- the real compaction summary
-        // text lives in the transcript file at input.TranscriptPath, so this reads that file to
-        // surface it in the recorded invocation instead of persisting input verbatim.
-        var compactSummary = await TryExtractCompactSummaryAsync(input.TranscriptPath, ct).ConfigureAwait(false);
+        // Older Claude Code builds don't send compact_summary; the same text is in the transcript.
+        var compactSummary = string.IsNullOrWhiteSpace(input.CompactSummary)
+            ? await TryExtractCompactSummaryAsync(input.TranscriptPath, ct).ConfigureAwait(false)
+            : input.CompactSummary;
         var recordedPayload = new PostCompactRecordedPayload(input.SessionId, input.Trigger, input.Cwd, input.TranscriptPath, compactSummary);
         await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.PostCompact, recordedPayload, ct).ConfigureAwait(false);
 
@@ -189,8 +214,8 @@ public static class HookEndpoints
 
     /// <summary>What actually gets persisted/broadcast for a PostCompact invocation -- same
     /// snake_case wire naming as <see cref="PostCompactInput"/> (and every other hook DTO) so the
-    /// dashboard's raw-payload viewer stays consistent across hook types, plus the transcript-derived
-    /// summary <see cref="PostCompactInput"/> itself never carries.</summary>
+    /// dashboard's raw-payload viewer stays consistent across hook types, with the summary resolved
+    /// from either stdin or the transcript.</summary>
     private sealed record PostCompactRecordedPayload(
         [property: JsonPropertyName("session_id")] string SessionId,
         [property: JsonPropertyName("trigger")] string Trigger,

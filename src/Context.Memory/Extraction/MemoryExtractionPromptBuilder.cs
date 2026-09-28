@@ -11,6 +11,7 @@ namespace Context.Memory.Extraction;
 internal static class MemoryExtractionPromptBuilder
 {
     private const int MaxPromptChars = 2000;
+    private const int MaxAssistantMessageChars = 3000;
     private const int MaxToolInputChars = 1000;
     private const int MaxToolResponseChars = 600;
     private const int MaxOtherPayloadChars = 600;
@@ -20,8 +21,8 @@ internal static class MemoryExtractionPromptBuilder
     public const string SystemPrompt =
         """
         You extract durable, reusable ENGINEERING KNOWLEDGE about this repository from coding-session
-        material — a batch of raw session events (prompts, tool calls with their inputs and outputs,
-        file reads/edits, shell commands, errors), a conversation summary written when the session
+        material — a batch of raw session events (user prompts, the assistant's replies, tool calls
+        with their inputs and outputs, file reads/edits, shell commands, errors), a conversation summary written when the session
         was compacted, or a session summary — so it can be remembered across future sessions. Memory is a long-term
         engineering knowledge base for this codebase — not a transcript of what happened in this
         session. Propose between 0 and 5 candidate memories.
@@ -247,6 +248,7 @@ internal static class MemoryExtractionPromptBuilder
         sb.AppendLine();
         var known = new HashSet<string>(StringComparer.Ordinal) { "toolName", "path" };
         AppendField(sb, root, known, "prompt", null, MaxPromptChars);
+        AppendField(sb, root, known, "message", null, MaxAssistantMessageChars);
         AppendField(sb, root, known, "toolInput", "input", MaxToolInputChars);
         AppendField(sb, root, known, "toolResponse", "output", MaxToolResponseChars);
 
