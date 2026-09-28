@@ -6,6 +6,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using OllamaSharp;
 using OpenAI;
+using OpenAI.Chat;
 using OpenAI.Embeddings;
 
 namespace Context.Providers;
@@ -67,6 +68,22 @@ public static class ProviderFactory
         // secret-shaped substrings and redacted before it leaves this machine.
         return new SecretRedactingEmbeddingGeneratorDecorator(
             openAiGenerator, loggerFactory.CreateLogger<SecretRedactingEmbeddingGeneratorDecorator>());
+    }
+
+    public static IEmbeddingGenerator<string, Embedding<float>> CreateFoundryLocalEmbeddingGenerator(
+        string baseUrl, string model, TimeSpan timeout) =>
+        new FoundryLocalEmbeddingGenerator(
+            new HttpClient { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/"), Timeout = timeout },
+            model);
+
+    public static IChatClient CreateFoundryLocalChatClient(string baseUrl, string model, TimeSpan timeout)
+    {
+        var endpoint = new Uri(baseUrl.TrimEnd('/'));
+        var chatClient = new ChatClient(
+            model,
+            new ApiKeyCredential(FoundryLocalOptions.PlaceholderApiKey),
+            new OpenAIClientOptions { Endpoint = endpoint, NetworkTimeout = timeout });
+        return new FoundryLocalChatClientDecorator(chatClient.AsIChatClient(), endpoint, model);
     }
 
     public static IChatClient CreateOllamaChatClient(string baseUrl, string model, TimeSpan timeout, ILoggerFactory loggerFactory)

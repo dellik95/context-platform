@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.IO.Enumeration;
 using Context.Application.Abstractions;
 using Context.Application.Jobs;
 using Context.Domain.Entities;
@@ -8,11 +10,12 @@ using Context.Indexing.Abstractions;
 namespace Context.Dashboard.Server.BackgroundServices;
 
 /// <summary>
-/// Watches one <see cref="Project"/>'s <see cref="Project.RootPath"/> with a
-/// <see cref="FileSystemWatcher"/> and enqueues a <see cref="JobType.IndexFile"/> job for every
-/// changed/created/deleted/renamed file, debounced per path (400ms) so a burst of writes to the
-/// same file — an editor's atomic save, or several tool calls in a row — triggers one reindex,
-/// not several.
+/// Watches one <see cref="Project"/>'s <see cref="Project.RootPath"/> — with a
+/// <see cref="FileSystemWatcher"/>, or by polling a snapshot of the non-ignored tree where
+/// file-system events are slow or unreliable (see <see cref="MountFileSystem"/>) — and enqueues a
+/// <see cref="JobType.IndexFile"/> job for every changed/created/deleted/renamed file, debounced per
+/// path (400ms) so a burst of writes to the same file — an editor's atomic save, or several tool
+/// calls in a row — triggers one reindex, not several.
 /// <para/>
 /// Extracted from the old single-project <c>FileWatcherHostedService</c> (see git history) once a
 /// shared host could no longer assume exactly one bound project. One instance per project;
@@ -37,27 +40,44 @@ public sealed class ProjectFileWatcher : IDisposable
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger _logger;
     private readonly IIgnoreMatcher _ignore;
-    private readonly FileSystemWatcher _watcher;
+    private readonly FileSystemWatcher? _watcher;
+    private readonly CancellationTokenSource? _pollCts;
 
     private readonly ConcurrentDictionary<string, Timer> _debounceTimers = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Starts watching immediately. Callers (<see cref="ProjectFileWatcherManager"/>) are expected
-    /// to have already verified <paramref name="project"/>.<see cref="Project.RootPath"/> exists on
-    /// disk — <see cref="FileSystemWatcher"/>'s own constructor throws otherwise, and this type does
-    /// not repeat that check so the caller's warning/skip decision has exactly one place to live.
+    /// Starts watching immediately; a non-null <paramref name="pollingInterval"/> polls instead of
+    /// using file-system events, taking its baseline snapshot before returning. Callers
+    /// (<see cref="ProjectFileWatcherManager"/>) are expected to have already verified
+    /// <paramref name="project"/>.<see cref="Project.RootPath"/> exists on disk — both modes throw
+    /// otherwise, and this type does not repeat that check so the caller's warning/skip decision has
+    /// exactly one place to live.
     /// </summary>
     public ProjectFileWatcher(
         Project project,
         IServiceScopeFactory scopeFactory,
         Func<string, IIgnoreMatcher> ignoreMatcherFactory,
-        ILogger logger)
+        ILogger logger,
+        TimeSpan? pollingInterval = null)
     {
         _projectId = project.Id;
         _root = project.RootPath;
         _scopeFactory = scopeFactory;
         _logger = logger;
         _ignore = ignoreMatcherFactory(_root);
+
+        if (pollingInterval is { } interval)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            var baseline = TakeSnapshot();
+            _logger.LogInformation(
+                "Polling '{Root}' for project {ProjectId} file changes every {IntervalSeconds}s ({FileCount} files, first scan took {ElapsedMs}ms).",
+                _root, _projectId, interval.TotalSeconds, baseline.Count, stopwatch.ElapsedMilliseconds);
+
+            _pollCts = new CancellationTokenSource();
+            _ = Task.Run(() => PollAsync(baseline, interval, _pollCts.Token));
+            return;
+        }
 
         _watcher = new FileSystemWatcher(_root)
         {
@@ -107,8 +127,7 @@ public sealed class ProjectFileWatcher : IDisposable
         // forever. GitignoreStyleMatcher's built-in denylist doesn't know about ".context/" — that's
         // a Context.Dashboard.Server concern, not a generic ignore rule — so this check runs independently of,
         // and in addition to, `_ignore` below.
-        if (normalized.Equals(".context", StringComparison.OrdinalIgnoreCase) ||
-            normalized.StartsWith(".context/", StringComparison.OrdinalIgnoreCase))
+        if (IsContextDataPath(normalized))
         {
             return;
         }
@@ -127,6 +146,103 @@ public sealed class ProjectFileWatcher : IDisposable
             normalized, _ => new Timer(OnDebounceElapsed, normalized, Timeout.Infinite, Timeout.Infinite));
         timer.Change(DebounceDelay, Timeout.InfiniteTimeSpan);
     }
+
+    private static bool IsContextDataPath(string normalized) =>
+        normalized.Equals(".context", StringComparison.OrdinalIgnoreCase) ||
+        normalized.StartsWith(".context/", StringComparison.OrdinalIgnoreCase);
+
+    private async Task PollAsync(Dictionary<string, (DateTimeOffset Modified, long Length)> snapshot, TimeSpan interval, CancellationToken ct)
+    {
+        while (true)
+        {
+            try
+            {
+                await Task.Delay(interval, ct).ConfigureAwait(false);
+                var current = TakeSnapshot();
+                if (ct.IsCancellationRequested)
+                {
+                    return; // Disposed mid-scan; don't start debounce timers Dispose already swept.
+                }
+
+                foreach (var (path, stamp) in current)
+                {
+                    if (!snapshot.TryGetValue(path, out var previous) || previous != stamp)
+                    {
+                        ScheduleIndex(Path.Combine(_root, path));
+                    }
+                }
+
+                foreach (var path in snapshot.Keys)
+                {
+                    if (!current.ContainsKey(path))
+                    {
+                        ScheduleIndex(Path.Combine(_root, path));
+                    }
+                }
+
+                snapshot = current;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                // Keep the old snapshot: a root that's briefly unreachable must not read as every file deleted.
+                _logger.LogWarning(ex, "Polling scan of '{Root}' for project {ProjectId} failed; retrying next interval.", _root, _projectId);
+            }
+        }
+    }
+
+    // Prunes ignored directories before descending, like FileSystemScanner, so node_modules/bin/obj
+    // cost nothing per scan. Symlinked directories aren't followed, to rule out cycles.
+    private Dictionary<string, (DateTimeOffset Modified, long Length)> TakeSnapshot()
+    {
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true,
+            AttributesToSkip = 0,
+        };
+
+        var entries = new FileSystemEnumerable<(string Path, DateTimeOffset Modified, long Length)>(
+            _root,
+            (ref FileSystemEntry entry) => (RelativePath(ref entry), entry.LastWriteTimeUtc, entry.Length),
+            options)
+        {
+            ShouldRecursePredicate = (ref FileSystemEntry entry) =>
+            {
+                if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    return false;
+                }
+
+                var relative = RelativePath(ref entry);
+                return !IsContextDataPath(relative) && !_ignore.IsIgnored(relative + "/") && !_ignore.IsIgnored(relative);
+            },
+            ShouldIncludePredicate = (ref FileSystemEntry entry) =>
+            {
+                if (entry.IsDirectory)
+                {
+                    return false;
+                }
+
+                var relative = RelativePath(ref entry);
+                return !IsContextDataPath(relative) && !_ignore.IsIgnored(relative);
+            },
+        };
+
+        var snapshot = new Dictionary<string, (DateTimeOffset, long)>(StringComparer.Ordinal);
+        foreach (var (path, modified, length) in entries)
+        {
+            snapshot[path] = (modified, length);
+        }
+
+        return snapshot;
+    }
+
+    private string RelativePath(ref FileSystemEntry entry) =>
+        Path.GetRelativePath(_root, entry.ToFullPath()).Replace('\\', '/');
 
     private void OnDebounceElapsed(object? state)
     {
@@ -161,8 +277,14 @@ public sealed class ProjectFileWatcher : IDisposable
 
     public void Dispose()
     {
-        _watcher.EnableRaisingEvents = false;
-        _watcher.Dispose();
+        _pollCts?.Cancel();
+        _pollCts?.Dispose();
+
+        if (_watcher is not null)
+        {
+            _watcher.EnableRaisingEvents = false;
+            _watcher.Dispose();
+        }
 
         foreach (var timer in _debounceTimers.Values)
         {

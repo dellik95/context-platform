@@ -54,6 +54,9 @@ export class SettingsPanelComponent {
     ollamaBaseUrl: '',
     ollamaEmbeddingModel: '',
     ollamaChatModel: '',
+    foundryBaseUrl: '',
+    foundryEmbeddingModel: '',
+    foundryChatModel: '',
     reindexEnabled: false,
     reindexIntervalMinutes: 60,
     sessionSummaryEnabled: false,
@@ -105,10 +108,20 @@ export class SettingsPanelComponent {
   protected readonly showOllamaChatModel = computed(
     () => this.settingsModel().llmProvider === 'ollama',
   );
+  protected readonly showFoundryBaseUrl = computed(() => {
+    const m = this.settingsModel();
+    return m.embeddingProvider === 'foundry' || m.llmProvider === 'foundry';
+  });
+  protected readonly showFoundryEmbeddingModel = computed(
+    () => this.settingsModel().embeddingProvider === 'foundry',
+  );
+  protected readonly showFoundryChatModel = computed(
+    () => this.settingsModel().llmProvider === 'foundry',
+  );
 
   /**
    * BACKLOG-09 / SEC-5: a user picking `openai`/`anthropic` gets no explanation of what leaves
-   * the machine when that provider is selected. `noop` and `ollama` never send indexed content
+   * the machine when that provider is selected. `noop`, `ollama` and `foundry` never send indexed content
    * off-box, so the disclosure is scoped to exactly the two external providers this Settings tab
    * can select.
    */
@@ -178,6 +191,10 @@ export class SettingsPanelComponent {
         ollamaBaseUrl: settings.ollamaBaseUrl ?? 'http://localhost:11434',
         ollamaEmbeddingModel: settings.ollamaEmbeddingModel ?? 'embeddinggemma',
         ollamaChatModel: settings.ollamaChatModel ?? 'qwen2.5-coder:1.5b',
+        // Left blank rather than pre-filled: blank defers to CONTEXT_FOUNDRY_*, whose port is machine-specific.
+        foundryBaseUrl: settings.foundryBaseUrl ?? '',
+        foundryEmbeddingModel: settings.foundryEmbeddingModel ?? '',
+        foundryChatModel: settings.foundryChatModel ?? '',
         reindexEnabled: settings.reindexEnabled,
         reindexIntervalMinutes: settings.reindexIntervalMinutes,
         sessionSummaryEnabled: settings.sessionSummaryIntervalMinutes > 0,
@@ -279,6 +296,9 @@ export class SettingsPanelComponent {
       ollamaBaseUrl: raw.ollamaBaseUrl || null,
       ollamaEmbeddingModel: raw.ollamaEmbeddingModel || null,
       ollamaChatModel: raw.ollamaChatModel || null,
+      foundryBaseUrl: raw.foundryBaseUrl || null,
+      foundryEmbeddingModel: raw.foundryEmbeddingModel || null,
+      foundryChatModel: raw.foundryChatModel || null,
       reindexEnabled: raw.reindexEnabled,
       reindexIntervalMinutes: raw.reindexIntervalMinutes,
       lastReindexScheduledAt: this.lastReindexScheduledAt,

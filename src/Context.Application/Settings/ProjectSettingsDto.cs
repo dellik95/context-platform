@@ -1,7 +1,7 @@
 namespace Context.Application.Settings;
 
 // Persisted verbatim (as JSON) into Project.ConfigJson - the whole field is this DTO's
-// serialization, nothing else uses ConfigJson today. EmbeddingProvider/LlmProvider/Ollama* DO
+// serialization, nothing else uses ConfigJson today. EmbeddingProvider/LlmProvider/Ollama*/Foundry* DO
 // take effect live, no restart needed: Context.Application.Providers.ProjectProviderResolver
 // (IProviderResolver) re-reads this DTO fresh on every embedding/chat call, resolving each
 // project's own provider independently -- OpenAI/Anthropic's API key/model/base-URL stay
@@ -81,4 +81,9 @@ public sealed record ProjectSettingsDto(
     int MemoryConsolidationPromotionReinforcementThreshold = 2,
     // How many nearest existing memories are considered as merge/restatement candidates for one
     // new candidate.
-    int MemoryConsolidationTopKForDedup = 3);
+    int MemoryConsolidationTopKForDedup = 3,
+    // Foundry Local endpoint/models, used when EmbeddingProvider/LlmProvider is "foundry". Null
+    // falls back to CONTEXT_FOUNDRY_* / FoundryLocalOptions' defaults.
+    string? FoundryBaseUrl = null,
+    string? FoundryEmbeddingModel = null,
+    string? FoundryChatModel = null);

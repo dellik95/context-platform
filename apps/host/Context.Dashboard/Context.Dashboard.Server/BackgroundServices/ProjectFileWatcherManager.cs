@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Context.Domain.Entities;
 using Context.Indexing.Abstractions;
 using Context.Infrastructure.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Context.Dashboard.Server.BackgroundServices;
 
@@ -21,8 +22,10 @@ namespace Context.Dashboard.Server.BackgroundServices;
 public sealed class ProjectFileWatcherManager(
     IServiceScopeFactory scopeFactory,
     Func<string, IIgnoreMatcher> ignoreMatcherFactory,
-    ILoggerFactory loggerFactory) : IHostedService
+    ILoggerFactory loggerFactory,
+    IOptions<FileWatchingOptions>? options = null) : IHostedService
 {
+    private readonly FileWatchingOptions _options = options?.Value ?? new FileWatchingOptions();
     private readonly ILogger _managerLogger = loggerFactory.CreateLogger<ProjectFileWatcherManager>();
     private readonly ILogger _watcherLogger = loggerFactory.CreateLogger<ProjectFileWatcher>();
     private readonly ConcurrentDictionary<Guid, ProjectFileWatcher> _watchers = new();
@@ -85,8 +88,19 @@ public sealed class ProjectFileWatcherManager(
         }
 
         StopWatching(project.Id);
-        _watchers[project.Id] = new ProjectFileWatcher(project, scopeFactory, ignoreMatcherFactory, _watcherLogger);
+        TimeSpan? pollingInterval = ShouldPoll(project.RootPath)
+            ? TimeSpan.FromSeconds(Math.Max(0.5, _options.PollingIntervalSeconds))
+            : null;
+        _watchers[project.Id] = new ProjectFileWatcher(project, scopeFactory, ignoreMatcherFactory, _watcherLogger, pollingInterval);
     }
+
+    private bool ShouldPoll(string rootPath) => _options.Mode switch
+    {
+        FileWatchMode.Polling => true,
+        FileWatchMode.Events => false,
+        _ => Environment.GetEnvironmentVariable("DOTNET_USE_POLLING_FILE_WATCHER") is "1" or "true" or "True"
+             || MountFileSystem.LacksReliableChangeEvents(rootPath),
+    };
 
     /// <summary>
     /// <see cref="StartWatching"/> off the caller's thread, for request paths: registering the

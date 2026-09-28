@@ -130,7 +130,10 @@ public sealed class ProjectSettingsService(
                 : 20,
             StaleSessionTimeoutMinutes: int.TryParse(section?["StaleSessionTimeoutMinutes"], out var staleSessionTimeoutMinutes)
                 ? staleSessionTimeoutMinutes
-                : 240);
+                : 240,
+            FoundryBaseUrl: section?["FoundryBaseUrl"],
+            FoundryEmbeddingModel: section?["FoundryEmbeddingModel"],
+            FoundryChatModel: section?["FoundryChatModel"]);
     }
 
     // A malformed/legacy ConfigJson must fall back to defaults rather than fail GetAsync outright.

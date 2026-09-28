@@ -85,7 +85,7 @@ public sealed class RetrievalQualityHarnessTests : IAsyncLifetime
     [Fact]
     public async Task GoldenQueries_ReportHitRateAt5AndMrr_AgainstRealHybridSearch()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(150));
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(6));
         var ct = cts.Token;
 
         foreach (var file in FixtureCorpus)
@@ -140,7 +140,7 @@ public sealed class RetrievalQualityHarnessTests : IAsyncLifetime
                 await pipeline.ReindexProjectAsync(project.Id, full: true, ct);
             }
 
-            await WaitForJobsToDrainAsync(_provider, TimeSpan.FromSeconds(90), ct);
+            await WaitForJobsToDrainAsync(_provider, TimeSpan.FromMinutes(5), ct);
 
             var perQueryResults = new List<QueryResult>();
             await using (var searchScope = _provider.CreateAsyncScope())

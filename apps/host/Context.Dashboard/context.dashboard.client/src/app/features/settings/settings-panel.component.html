@@ -13,8 +13,8 @@
           <mat-icon>info</mat-icon>
           <span>
             OpenAI/Anthropic keys and models are shared across all projects (set via environment
-            variables); the provider choice and Ollama's own endpoint/models below are specific to
-            this project and take effect immediately, no restart needed.
+            variables); the provider choice and Ollama's/Foundry Local's own endpoint/models below are
+            specific to this project and take effect immediately, no restart needed.
           </span>
         </p>
 
@@ -28,6 +28,7 @@
               <mat-option value="noop">noop</mat-option>
               <mat-option value="openai">openai</mat-option>
               <mat-option value="ollama">ollama</mat-option>
+              <mat-option value="foundry">foundry (Foundry Local)</mat-option>
             </mat-select>
           </mat-form-field>
 
@@ -40,6 +41,7 @@
               <mat-option value="noop">noop</mat-option>
               <mat-option value="anthropic">anthropic</mat-option>
               <mat-option value="ollama">ollama</mat-option>
+              <mat-option value="foundry">foundry (Foundry Local)</mat-option>
             </mat-select>
           </mat-form-field>
         </div>
@@ -49,8 +51,8 @@
             <mat-icon>cloud_upload</mat-icon>
             <span>
               Indexed code and content will be sent to the selected external provider
-              (OpenAI/Anthropic) for processing. Choose <strong>ollama</strong> or
-              <strong>noop</strong> instead to keep everything on this machine.
+              (OpenAI/Anthropic) for processing. Choose <strong>ollama</strong>,
+              <strong>foundry</strong> or <strong>noop</strong> instead to keep everything on this machine.
             </span>
           </p>
         }
@@ -84,6 +86,47 @@
                   matInput
                   [formField]="settingsForm.ollamaChatModel"
                   placeholder="e.g. qwen2.5-coder:1.5b"
+                />
+              </mat-form-field>
+            }
+          </div>
+        }
+
+        @if (showFoundryBaseUrl()) {
+          <p class="note">
+            <mat-icon>info</mat-icon>
+            <span>
+              Foundry Local only serves models that are loaded (<code>foundry model load &lt;alias&gt;</code>)
+              and picks a new port on every start unless one is pinned
+              (<code>foundry config set port 5273</code>).
+            </span>
+          </p>
+          <div class="field-grid">
+            <mat-form-field appearance="outline" subscriptSizing="dynamic">
+              <mat-label>Foundry Local base URL</mat-label>
+              <input
+                matInput
+                [formField]="settingsForm.foundryBaseUrl"
+                placeholder="http://127.0.0.1:5273/v1"
+              />
+            </mat-form-field>
+            @if (showFoundryEmbeddingModel()) {
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Foundry embedding model</mat-label>
+                <input
+                  matInput
+                  [formField]="settingsForm.foundryEmbeddingModel"
+                  placeholder="e.g. qwen3-embedding-0.6b"
+                />
+              </mat-form-field>
+            }
+            @if (showFoundryChatModel()) {
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Foundry chat model</mat-label>
+                <input
+                  matInput
+                  [formField]="settingsForm.foundryChatModel"
+                  placeholder="e.g. phi-3.5-mini"
                 />
               </mat-form-field>
             }

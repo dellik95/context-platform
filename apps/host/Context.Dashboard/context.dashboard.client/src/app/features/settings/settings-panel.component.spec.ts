@@ -10,7 +10,7 @@ import { SettingsPanelComponent } from './settings-panel.component';
 /**
  * BACKLOG-09 / SEC-5 coverage: the cloud data-use disclosure must render when (and only when) a
  * non-local provider (openai/anthropic) is selected in either provider dropdown, and stay hidden
- * for ollama/noop. `ApiService` and `ProjectContextService` are stubbed so this exercises only the
+ * for ollama/foundry/noop. `ApiService` and `ProjectContextService` are stubbed so this exercises only the
  * component's own rendering logic, not the real HTTP/SignalR wiring `ProjectContextService`
  * normally brings with it.
  */
@@ -23,6 +23,9 @@ describe('SettingsPanelComponent cloud provider disclosure', () => {
     ollamaBaseUrl: null,
     ollamaEmbeddingModel: null,
     ollamaChatModel: null,
+    foundryBaseUrl: null,
+    foundryEmbeddingModel: null,
+    foundryChatModel: null,
     reindexEnabled: false,
     reindexIntervalMinutes: 60,
     lastReindexScheduledAt: null,
@@ -99,6 +102,12 @@ describe('SettingsPanelComponent cloud provider disclosure', () => {
 
   it('does not show the disclosure when both providers are ollama', async () => {
     await createWith({ ...baseSettings, embeddingProvider: 'ollama', llmProvider: 'ollama' });
+
+    expect(disclosureElement()).toBeNull();
+  });
+
+  it('does not show the disclosure when both providers are foundry', async () => {
+    await createWith({ ...baseSettings, embeddingProvider: 'foundry', llmProvider: 'foundry' });
 
     expect(disclosureElement()).toBeNull();
   });

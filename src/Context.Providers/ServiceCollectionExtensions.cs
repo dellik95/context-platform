@@ -78,6 +78,17 @@ public static class ServiceCollectionExtensions
                     return new OllamaEmbeddingGeneratorDecorator(inner, o.Model);
                 });
                 break;
+            case "foundry":
+                ConfigureLlmRetry(services.AddHttpClient("foundry-embeddings"), timeout);
+                services.AddEmbeddingGenerator(sp =>
+                {
+                    var o = sp.GetRequiredService<IOptions<FoundryLocalOptions>>().Value;
+                    var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("foundry-embeddings");
+                    http.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
+                    http.BaseAddress = new Uri(o.BaseUrl.TrimEnd('/') + "/");
+                    return new FoundryLocalEmbeddingGenerator(http, o.EmbeddingModel);
+                });
+                break;
             default:
                 services.AddEmbeddingGenerator(_ => new NoOpEmbeddingGenerator());
                 break;
@@ -140,6 +151,13 @@ public static class ServiceCollectionExtensions
                     // actionable hint ("have you pulled this model?"), not a retry decision.
                     IChatClient inner = new OllamaApiClient(http, o.Model);
                     return new OllamaChatClientDecorator(inner, o.Model);
+                });
+                break;
+            case "foundry":
+                services.AddChatClient(sp =>
+                {
+                    var o = sp.GetRequiredService<IOptions<FoundryLocalOptions>>().Value;
+                    return ProviderFactory.CreateFoundryLocalChatClient(o.BaseUrl, o.ChatModel, timeout);
                 });
                 break;
             default:

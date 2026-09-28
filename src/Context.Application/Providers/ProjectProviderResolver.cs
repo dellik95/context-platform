@@ -32,19 +32,22 @@ namespace Context.Application.Providers;
 /// OpenAI/Anthropic stay global, not per-project: <see cref="ProjectSettingsDto"/> carries no
 /// API-key/model/base-URL fields for them, only Ollama's. A project that picks "openai"/"anthropic"
 /// always uses the one process-wide key/model configured via <c>CONTEXT_OPENAI_API_KEY</c>/
-/// <c>CONTEXT_ANTHROPIC_API_KEY</c> — only the provider *choice* and Ollama's own base URL/models
-/// are genuinely per-project.
+/// <c>CONTEXT_ANTHROPIC_API_KEY</c> — only the provider *choice* and Ollama's/Foundry Local's own
+/// base URL/models are genuinely per-project. An unset Foundry field falls back to the process-wide
+/// <see cref="FoundryLocalOptions"/> (CONTEXT_FOUNDRY_*), since its port is machine-specific.
 /// </summary>
 public sealed class ProjectProviderResolver(
     IServiceScopeFactory scopeFactory,
     IOptions<AnthropicOptions> anthropicOptions,
     IOptions<OpenAiOptions> openAiOptions,
     IOptions<ContextProvidersOptions> defaultOptions,
+    IOptions<FoundryLocalOptions>? foundryOptions = null,
     ILoggerFactory? loggerFactory = null) : IProviderResolver
 {
     private const string DefaultOllamaBaseUrl = "http://localhost:11434";
 
     private readonly ILoggerFactory _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+    private readonly FoundryLocalOptions _foundryDefaults = foundryOptions?.Value ?? new FoundryLocalOptions();
     private readonly ConcurrentDictionary<string, Lazy<IEmbeddingGenerator<string, Embedding<float>>>> _embeddingCache = new();
     private readonly ConcurrentDictionary<string, Lazy<IChatClient>> _chatCache = new();
     private readonly TimeSpan _timeout = TimeSpan.FromSeconds(defaultOptions.Value.LlmTimeoutSeconds);
@@ -55,10 +58,13 @@ public sealed class ProjectProviderResolver(
         var provider = settings.EmbeddingProvider.Trim().ToLowerInvariant();
         var baseUrl = settings.OllamaBaseUrl is { Length: > 0 } configuredBaseUrl ? configuredBaseUrl : DefaultOllamaBaseUrl;
         var model = settings.OllamaEmbeddingModel is { Length: > 0 } configuredModel ? configuredModel : OllamaOptions.DefaultEmbeddingModel;
+        var foundryBaseUrl = settings.FoundryBaseUrl is { Length: > 0 } configuredFoundryUrl ? configuredFoundryUrl : _foundryDefaults.BaseUrl;
+        var foundryModel = settings.FoundryEmbeddingModel is { Length: > 0 } configuredFoundryModel ? configuredFoundryModel : _foundryDefaults.EmbeddingModel;
 
         var key = provider switch
         {
             "ollama" => $"emb|ollama|{baseUrl}|{model}",
+            "foundry" => $"emb|foundry|{foundryBaseUrl}|{foundryModel}",
             "openai" => $"emb|openai|{openAiOptions.Value.BaseUrl}|{openAiOptions.Value.Model}",
             _ => "emb|noop",
         };
@@ -66,6 +72,7 @@ public sealed class ProjectProviderResolver(
         return _embeddingCache.GetOrAdd(key, _ => new Lazy<IEmbeddingGenerator<string, Embedding<float>>>(() => provider switch
         {
             "ollama" => ProviderFactory.CreateOllamaEmbeddingGenerator(baseUrl, model, _timeout, _loggerFactory),
+            "foundry" => ProviderFactory.CreateFoundryLocalEmbeddingGenerator(foundryBaseUrl, foundryModel, _timeout),
             "openai" => ProviderFactory.CreateOpenAiEmbeddingGenerator(openAiOptions.Value, _timeout, _loggerFactory),
             _ => new NoOpEmbeddingGenerator(),
         })).Value;
@@ -77,10 +84,13 @@ public sealed class ProjectProviderResolver(
         var provider = settings.LlmProvider.Trim().ToLowerInvariant();
         var baseUrl = settings.OllamaBaseUrl is { Length: > 0 } configuredBaseUrl ? configuredBaseUrl : DefaultOllamaBaseUrl;
         var model = settings.OllamaChatModel is { Length: > 0 } configuredModel ? configuredModel : OllamaOptions.DefaultChatModel;
+        var foundryBaseUrl = settings.FoundryBaseUrl is { Length: > 0 } configuredFoundryUrl ? configuredFoundryUrl : _foundryDefaults.BaseUrl;
+        var foundryModel = settings.FoundryChatModel is { Length: > 0 } configuredFoundryModel ? configuredFoundryModel : _foundryDefaults.ChatModel;
 
         var key = provider switch
         {
             "ollama" => $"chat|ollama|{baseUrl}|{model}",
+            "foundry" => $"chat|foundry|{foundryBaseUrl}|{foundryModel}",
             "anthropic" => $"chat|anthropic|{anthropicOptions.Value.BaseUrl}|{anthropicOptions.Value.Model}",
             _ => "chat|noop",
         };
@@ -88,6 +98,7 @@ public sealed class ProjectProviderResolver(
         return _chatCache.GetOrAdd(key, _ => new Lazy<IChatClient>(() => provider switch
         {
             "ollama" => ProviderFactory.CreateOllamaChatClient(baseUrl, model, _timeout, _loggerFactory),
+            "foundry" => ProviderFactory.CreateFoundryLocalChatClient(foundryBaseUrl, foundryModel, _timeout),
             "anthropic" => ProviderFactory.CreateAnthropicChatClient(anthropicOptions.Value, _timeout, _loggerFactory),
             _ => new NoOpChatClient(),
         })).Value;

@@ -135,6 +135,7 @@ try
     // watches every already-registered project from host startup and disposes them all on
     // shutdown. Same dual-role pattern JobDispatcher uses for itself
     // (Context.Application.ServiceCollectionExtensions.AddJobDispatcher).
+    builder.Services.Configure<FileWatchingOptions>(builder.Configuration.GetSection("ContextPlatform:FileWatching"));
     builder.Services.AddSingleton<ProjectFileWatcherManager>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<ProjectFileWatcherManager>());
 

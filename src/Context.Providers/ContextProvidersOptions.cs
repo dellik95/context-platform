@@ -4,7 +4,7 @@ namespace Context.Providers;
 /// Provider-<em>selection</em> surface consumed by <see cref="ServiceCollectionExtensions.AddContextProviders"/>.
 /// String selector properties pick which implementation of each provider category to register;
 /// everything defaults to the offline/local variants so the platform runs with zero external
-/// dependencies out of the box. Per-provider settings (<see cref="OllamaOptions"/>,
+/// dependencies out of the box. Per-provider settings (<see cref="OllamaOptions"/>, <see cref="FoundryLocalOptions"/>,
 /// <see cref="Embeddings.OpenAiOptions"/>, <see cref="Llm.AnthropicOptions"/>) are configured
 /// independently via the standard Options pattern, not nested here -- see
 /// <c>Context.Application.Providers</c> for the setup classes that layer env vars/local overrides
@@ -15,13 +15,13 @@ public sealed record ContextProvidersOptions
 {
     public const int DefaultLlmTimeoutSeconds = 600;
 
-    /// <summary>"noop" (default), "openai", or "ollama".</summary>
+    /// <summary>"noop" (default), "openai", "ollama", or "foundry" (Foundry Local).</summary>
     public string EmbeddingProvider { get; init; } = "noop";
 
     /// <summary>"lexical-overlap" (default, lexical token-overlap heuristic -- not ML-based) or "noop".</summary>
     public string RerankerProvider { get; init; } = "lexical-overlap";
 
-    /// <summary>"noop" (default), "anthropic", or "ollama".</summary>
+    /// <summary>"noop" (default), "anthropic", "ollama", or "foundry" (Foundry Local).</summary>
     public string LlmProvider { get; init; } = "noop";
 
     public string? OpenAiApiKey { get; init; }

@@ -13,7 +13,10 @@ using Context.Infrastructure;
 using Context.Retrieval.Abstractions;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
 
@@ -66,6 +69,7 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         var project = await AssertProjectCreateAndRoundTripAsync(client);
         await AssertProtectedEndpointRequiresBearerTokenAsync(client);
         await AssertCrossProjectAccessIsRejectedAsync(client, project);
+        await AssertHubJoinIsScopedToTheTokensProjectAsync(project);
         await AssertHookAuthAsync(client);
         await AssertSearchSmokeAsync(client, project);
     }
@@ -288,6 +292,36 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
             var response = await client.SendAsync(request);
             response.IsSuccessStatusCode.Should().BeTrue(
                 "{0} names the caller's own project (or no project at all, which defaults to it)", url);
+        }
+    }
+
+    // Both transports: long polling hands the hub a cloned HttpContext, not the authenticated request's own.
+    private async Task AssertHubJoinIsScopedToTheTokensProjectAsync(ProjectDto project)
+    {
+        foreach (var transport in new[] { HttpTransportType.LongPolling, HttpTransportType.WebSockets })
+        {
+            await using var connection = new HubConnectionBuilder()
+                .WithUrl(new Uri(_factory.Server.BaseAddress, "/hubs/indexing"), options =>
+                {
+                    options.Transports = transport;
+                    options.AccessTokenProvider = () => Task.FromResult<string?>(project.Token);
+                    options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
+                    options.WebSocketFactory = async (context, ct) =>
+                    {
+                        var wsClient = _factory.Server.CreateWebSocketClient();
+                        wsClient.ConfigureRequest = request => request.Headers.Authorization = $"Bearer {project.Token}";
+                        return await wsClient.ConnectAsync(context.Uri, ct);
+                    };
+                })
+                .Build();
+
+            await connection.StartAsync();
+
+            await connection.InvokeAsync("JoinProject", project.Id);
+
+            var joinForeign = () => connection.InvokeAsync("JoinProject", _factory.ProjectId);
+            await joinForeign.Should().ThrowAsync<HubException>(
+                "a {0} connection authenticated with one project's token must not join another project's group", transport);
         }
     }
 

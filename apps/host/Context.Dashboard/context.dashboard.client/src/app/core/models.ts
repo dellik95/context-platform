@@ -320,11 +320,14 @@ export interface ReindexProgressEvent {
 // override-on-next-restart only -- changing them does NOT hot-swap the running provider.
 // ReindexEnabled/ReindexIntervalMinutes DO take effect live.
 export interface ProjectSettingsDto {
-  embeddingProvider: string; // "noop" | "openai" | "ollama"
-  llmProvider: string; // "noop" | "anthropic" | "ollama"
+  embeddingProvider: string; // "noop" | "openai" | "ollama" | "foundry"
+  llmProvider: string; // "noop" | "anthropic" | "ollama" | "foundry"
   ollamaBaseUrl: string | null;
   ollamaEmbeddingModel: string | null;
   ollamaChatModel: string | null;
+  foundryBaseUrl: string | null; // Foundry Local; null falls back to CONTEXT_FOUNDRY_* / built-in defaults
+  foundryEmbeddingModel: string | null;
+  foundryChatModel: string | null;
   reindexEnabled: boolean;
   reindexIntervalMinutes: number; // ignored (treated as disabled) if <= 0
   lastReindexScheduledAt: string | null; // ISO-8601

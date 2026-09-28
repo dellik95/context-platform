@@ -49,6 +49,7 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton(new ContextApplicationOptions { ProjectRoot = projectRoot, ProjectDataDir = projectDataDir });
         services.ConfigureOptions<Providers.OllamaOptionsSetup>();
+        services.ConfigureOptions<Providers.FoundryLocalOptionsSetup>();
 
         // A handful of Context.Application adapters are consumed by singletons registered in
         // Context.Graph / Context.Retrieval (the warm graph cache and the hybrid search engine

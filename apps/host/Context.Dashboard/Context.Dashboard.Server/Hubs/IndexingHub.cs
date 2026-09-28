@@ -1,3 +1,5 @@
+using Context.Dashboard.Server.Security;
+using Context.Domain.Entities;
 using Microsoft.AspNetCore.SignalR;
 
 namespace Context.Dashboard.Server.Hubs;
@@ -9,8 +11,19 @@ namespace Context.Dashboard.Server.Hubs;
 /// </summary>
 public sealed class IndexingHub : Hub
 {
-    public Task JoinProject(Guid projectId) =>
-        Groups.AddToGroupAsync(Context.ConnectionId, GroupName(projectId));
+    public Task JoinProject(Guid projectId)
+    {
+        // HubBearerTokenAuthMiddleware stashed the project this connection's token resolved to.
+        // SignalR keeps that HttpContext's Items for the connection's lifetime on every transport
+        // (long polling copies them into its per-connection clone).
+        if (Context.GetHttpContext()?.Items[CurrentProjectAccessor.HttpContextItemKey] is not Project project
+            || project.Id != projectId)
+        {
+            throw new HubException("This connection's bearer token does not authorize access to the requested project.");
+        }
+
+        return Groups.AddToGroupAsync(Context.ConnectionId, GroupName(projectId));
+    }
 
     public Task LeaveProject(Guid projectId) =>
         Groups.RemoveFromGroupAsync(Context.ConnectionId, GroupName(projectId));

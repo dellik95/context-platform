@@ -547,11 +547,14 @@ namespace Context.Application.Settings;
 // ReindexEnabled/ReindexIntervalMinutes DO take effect live (ReindexSchedulerService polls
 // this DTO), no restart needed.
 public sealed record ProjectSettingsDto(
-    string EmbeddingProvider,          // "noop" | "openai" | "ollama"
-    string LlmProvider,                // "noop" | "anthropic" | "ollama"
+    string EmbeddingProvider,          // "noop" | "openai" | "ollama" | "foundry"
+    string LlmProvider,                // "noop" | "anthropic" | "ollama" | "foundry"
     string? OllamaBaseUrl,
     string? OllamaEmbeddingModel,
     string? OllamaChatModel,
+    string? FoundryBaseUrl,            // Foundry Local; null falls back to CONTEXT_FOUNDRY_*
+    string? FoundryEmbeddingModel,
+    string? FoundryChatModel,
     bool ReindexEnabled,
     int ReindexIntervalMinutes,        // ignored (treated as disabled) if <= 0
     DateTimeOffset? LastReindexScheduledAt);
