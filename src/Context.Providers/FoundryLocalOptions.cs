@@ -23,6 +23,13 @@ public sealed class FoundryLocalOptions
 
     public string ChatModel { get; set; } = DefaultChatModel;
 
+    // Foundry serves the OpenAI API under /v1, so a bare host:port (as 'foundry status' prints it) 404s on every call.
+    internal static string ApiBaseUrl(string baseUrl)
+    {
+        var trimmed = baseUrl.Trim().TrimEnd('/');
+        return new Uri(trimmed).AbsolutePath == "/" ? trimmed + "/v1" : trimmed;
+    }
+
     internal static string Hint(Uri? endpoint, string model) =>
         $"Is Foundry Local running at {endpoint}, and has '{model}' been downloaded and loaded ('foundry model load {model}')?";
 }

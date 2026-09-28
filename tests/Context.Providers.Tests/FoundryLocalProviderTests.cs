@@ -82,6 +82,25 @@ public class FoundryLocalProviderTests
         metadata.ProviderUri.Should().Be(new Uri("http://127.0.0.1:5273/v1"));
     }
 
+    [Theory]
+    [InlineData("http://127.0.0.1:5273")]
+    [InlineData("http://127.0.0.1:5273/")]
+    [InlineData("http://127.0.0.1:5273/v1")]
+    public void Chat_client_targets_the_v1_api_even_when_the_base_url_omits_it(string baseUrl)
+    {
+        using var client = ProviderFactory.CreateFoundryLocalChatClient(baseUrl, "phi-3.5-mini", TimeSpan.FromSeconds(30));
+
+        client.GetService<ChatClientMetadata>()!.ProviderUri.Should().Be(new Uri("http://127.0.0.1:5273/v1"));
+    }
+
+    [Fact]
+    public void Embedding_generator_targets_the_v1_api_even_when_the_base_url_omits_it()
+    {
+        using var generator = ProviderFactory.CreateFoundryLocalEmbeddingGenerator("http://127.0.0.1:5273", "qwen3-embedding-0.6b", TimeSpan.FromSeconds(30));
+
+        generator.GetService<EmbeddingGeneratorMetadata>()!.ProviderUri.Should().Be(new Uri("http://127.0.0.1:5273/v1/"));
+    }
+
     [Fact]
     public async Task Chat_failures_carry_the_foundry_hint()
     {

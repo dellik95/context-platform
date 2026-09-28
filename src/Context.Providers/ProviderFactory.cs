@@ -73,12 +73,12 @@ public static class ProviderFactory
     public static IEmbeddingGenerator<string, Embedding<float>> CreateFoundryLocalEmbeddingGenerator(
         string baseUrl, string model, TimeSpan timeout) =>
         new FoundryLocalEmbeddingGenerator(
-            new HttpClient { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/"), Timeout = timeout },
+            new HttpClient { BaseAddress = new Uri(FoundryLocalOptions.ApiBaseUrl(baseUrl) + "/"), Timeout = timeout },
             model);
 
     public static IChatClient CreateFoundryLocalChatClient(string baseUrl, string model, TimeSpan timeout)
     {
-        var endpoint = new Uri(baseUrl.TrimEnd('/'));
+        var endpoint = new Uri(FoundryLocalOptions.ApiBaseUrl(baseUrl));
         var chatClient = new ChatClient(
             model,
             new ApiKeyCredential(FoundryLocalOptions.PlaceholderApiKey),

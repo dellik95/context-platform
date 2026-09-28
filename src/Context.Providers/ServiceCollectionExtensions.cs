@@ -85,7 +85,7 @@ public static class ServiceCollectionExtensions
                     var o = sp.GetRequiredService<IOptions<FoundryLocalOptions>>().Value;
                     var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("foundry-embeddings");
                     http.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
-                    http.BaseAddress = new Uri(o.BaseUrl.TrimEnd('/') + "/");
+                    http.BaseAddress = new Uri(FoundryLocalOptions.ApiBaseUrl(o.BaseUrl) + "/");
                     return new FoundryLocalEmbeddingGenerator(http, o.EmbeddingModel);
                 });
                 break;
