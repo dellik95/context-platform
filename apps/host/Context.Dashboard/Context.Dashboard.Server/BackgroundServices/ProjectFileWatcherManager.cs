@@ -88,6 +88,23 @@ public sealed class ProjectFileWatcherManager(
         _watchers[project.Id] = new ProjectFileWatcher(project, scopeFactory, ignoreMatcherFactory, _watcherLogger);
     }
 
+    /// <summary>
+    /// <see cref="StartWatching"/> off the caller's thread, for request paths: registering the
+    /// watches for a large root on DrvFS can take many minutes (see <see cref="StartAsync"/>).
+    /// </summary>
+    public void StartWatchingInBackground(Project project) =>
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                StartWatching(project);
+            }
+            catch (Exception ex)
+            {
+                _managerLogger.LogError(ex, "Could not start watching project {ProjectId} at '{Root}'.", project.Id, project.RootPath);
+            }
+        });
+
     public void StopWatching(Guid projectId)
     {
         if (_watchers.TryRemove(projectId, out var watcher))

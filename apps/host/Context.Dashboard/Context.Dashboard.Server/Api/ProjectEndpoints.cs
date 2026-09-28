@@ -88,11 +88,6 @@ public static class ProjectEndpoints
         };
         project = await projects.AddAsync(project, ct).ConfigureAwait(false);
 
-        // Starts indexing/watching this project immediately rather than only from the next host
-        // restart — ProjectFileWatcherManager.StartAsync only sweeps projects that already existed
-        // when the host itself started.
-        fileWatcherManager.StartWatching(project);
-
         // Registers this project's MCP server (.mcp.json + context-platform.local.json) right away
         // so its MCP tools work the moment the project exists, without the separate manual "Install
         // Claude integration" step -- that full six-artifact install (hooks, settings.json,
@@ -113,6 +108,13 @@ public static class ProjectEndpoints
                 project.Id, project.RootPath);
         }
 
+        // Starts indexing/watching this project immediately rather than only from the next host
+        // restart — ProjectFileWatcherManager.StartAsync only sweeps projects that already existed
+        // when the host itself started. In the background and after the MCP install: watching a
+        // large /mnt/c root took over half an hour, holding the request open and leaving the
+        // project's hooks on a stale token the whole time.
+        fileWatcherManager.StartWatchingInBackground(project);
+
         return Results.Created($"/api/projects/{project.Id}", ProjectDto.FromEntity(project) with { Token = rawToken });
     }
 
@@ -128,10 +130,18 @@ public static class ProjectEndpoints
     /// more (a browser tab that never captured it, or lost localStorage — see
     /// ProjectTokenService.ts's remarks) — only the admin token can authorize minting a
     /// replacement. Rotates <see cref="Project.BearerTokenHash"/>, which invalidates the old raw
-    /// token everywhere it's in use (other browser tabs, an installed CLI/hook config, MCP) — an
-    /// accepted tradeoff for a deliberate, authenticated "I lost access, give me a new one" action.
+    /// token everywhere it's in use (other browser tabs, a running MCP connection) — an accepted
+    /// tradeoff for a deliberate, authenticated "I lost access, give me a new one" action. The
+    /// project's own <c>.mcp.json</c> and <c>context-platform.local.json</c> are rewritten with the
+    /// new token: the Dashboard reissues silently whenever a browser has no stored token, and
+    /// leaving those files on the old one made every hook in the project 401 from then on.
     /// </summary>
-    private static async Task<IResult> ReissueTokenAsync(Guid id, IProjectRepository projects, CancellationToken ct)
+    internal static async Task<IResult> ReissueTokenAsync(
+        Guid id,
+        IProjectRepository projects,
+        IClaudeIntegrationInstaller claudeInstaller,
+        ILoggerFactory loggerFactory,
+        CancellationToken ct)
     {
         var project = await projects.GetByIdAsync(id, ct).ConfigureAwait(false);
         if (project is null)
@@ -143,6 +153,18 @@ public static class ProjectEndpoints
         project.BearerTokenHash = Hashing.HashToken(rawToken);
         project.BearerTokenIssuedAt = DateTimeOffset.UtcNow;
         await projects.UpdateAsync(project, ct).ConfigureAwait(false);
+
+        try
+        {
+            await claudeInstaller.InstallMcpOnlyAsync(project.Id, project.RootPath, ct, bearerToken: rawToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            loggerFactory.CreateLogger("Context.Dashboard.Server.ReissueToken").LogWarning(
+                ex,
+                "Reissued the token for project {ProjectId} but could not write it to {RootPath}; its hooks and MCP keep the old token until the Claude integration is reinstalled.",
+                project.Id, project.RootPath);
+        }
 
         return Results.Ok(ProjectDto.FromEntity(project) with { Token = rawToken });
     }
