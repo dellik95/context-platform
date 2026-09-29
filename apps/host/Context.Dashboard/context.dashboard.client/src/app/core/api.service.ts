@@ -8,6 +8,7 @@ import {
   ClaudeInstallResponse,
   ContextPack,
   CreateProjectRequest,
+  ForceRunningJobsResponse,
   GraphNeighborhoodDto,
   HealthResponse,
   HookStatusDto,
@@ -228,12 +229,11 @@ export class ApiService {
     });
   }
 
-  failedJobsResource(projectId: Signal<string>): HttpResourceRef<JobDto[]> {
+  /** Pass `enabled` to hold the fetch until it turns true. */
+  jobsResource(projectId: Signal<string>, status: JobStatus, enabled?: Signal<boolean>): HttpResourceRef<JobDto[]> {
     return httpResource<JobDto[]>(() => {
       const id = projectId();
-      return id
-        ? { url: `${this.base}/api/jobs`, params: { status: 'Failed' satisfies JobStatus, projectId: id } }
-        : undefined;
+      return id && (enabled?.() ?? true) ? { url: `${this.base}/api/jobs`, params: { status, projectId: id } } : undefined;
     }, { defaultValue: [] });
   }
 
@@ -243,6 +243,14 @@ export class ApiService {
 
   retryAllFailedJobs(projectId: string): Observable<RetryAllJobsResponse> {
     return this.http.post<RetryAllJobsResponse>(`${this.base}/api/jobs/retry-all?projectId=${projectId}`, {});
+  }
+
+  forceJob(id: string): Observable<void> {
+    return this.http.post<void>(`${this.base}/api/jobs/${id}/force`, {});
+  }
+
+  forceRunningJobs(projectId: string): Observable<ForceRunningJobsResponse> {
+    return this.http.post<ForceRunningJobsResponse>(`${this.base}/api/jobs/force-running?projectId=${projectId}`, {});
   }
 
   cleanupJobs(projectId: string, status: 'Done' | 'Pending'): Observable<CleanupJobsResponse> {

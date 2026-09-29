@@ -114,6 +114,18 @@
       <mat-card class="stat-card">
         <span class="stat-value">{{ hostStatus.jobsRunning }}</span>
         <span class="stat-label">Running</span>
+        @if (hostStatus.jobsRunning > 0) {
+          <button
+            mat-icon-button
+            type="button"
+            class="stat-card-action"
+            (click)="forceAllRunning()"
+            [disabled]="forcingAll()"
+            matTooltip="Cancel and restart every Running job now, outside the per-project worker limit"
+          >
+            <mat-icon>bolt</mat-icon>
+          </button>
+        }
       </mat-card>
       <mat-card class="stat-card" [class.stat-card--alert]="hostStatus.jobsFailed > 0">
         <span class="stat-value">{{ hostStatus.jobsFailed }}</span>
@@ -209,6 +221,82 @@
                     [disabled]="retryingJobId() === job.id"
                   >
                     Retry
+                  </button>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </mat-expansion-panel>
+
+  <mat-expansion-panel class="running-jobs-panel" (opened)="loadRunningJobs()">
+    <mat-expansion-panel-header>
+      <mat-panel-title>
+        <mat-icon>pending_actions</mat-icon>
+        Running jobs
+        @if (runningJobs().length > 0) {
+          <span class="panel-count panel-count--neutral">{{ runningJobs().length }}</span>
+        }
+      </mat-panel-title>
+    </mat-expansion-panel-header>
+
+    <div class="panel-toolbar">
+      <button mat-stroked-button type="button" (click)="loadRunningJobs()" [disabled]="runningJobsLoading()">
+        <mat-icon>refresh</mat-icon>
+        Refresh
+      </button>
+      @if (runningJobs().length > 0) {
+        <button mat-stroked-button type="button" color="warn" (click)="forceAllRunning()" [disabled]="forcingAll()">
+          <mat-icon>bolt</mat-icon>
+          Force all
+        </button>
+      }
+      @if (runningJobsLoading()) {
+        <mat-progress-bar mode="indeterminate" class="inline-progress" />
+      }
+    </div>
+
+    @if (runningJobsError()) {
+      <div class="empty-state">
+        <mat-icon>cloud_off</mat-icon>
+        <p>Could not load running jobs — is Context.Host running?</p>
+      </div>
+    } @else if (runningJobs().length === 0 && !runningJobsLoading()) {
+      <div class="empty-state">
+        <mat-icon>check_circle</mat-icon>
+        <p>No running jobs.</p>
+      </div>
+    } @else if (runningJobs().length > 0) {
+      <div class="jobs-table-wrap">
+        <table class="jobs-table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Attempts</th>
+              <th>Started</th>
+              <th>Last error</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (job of runningJobs(); track job.id) {
+              <tr>
+                <td>{{ job.type }}</td>
+                <td>{{ job.attempts }}</td>
+                <td>{{ job.startedAt ? (job.startedAt | date: 'mediumTime') : '—' }}</td>
+                <td class="error-cell">{{ job.lastError || '—' }}</td>
+                <td class="retry-cell">
+                  <button
+                    mat-button
+                    type="button"
+                    color="warn"
+                    (click)="forceJob(job)"
+                    [disabled]="forcingJobId() === job.id"
+                    matTooltip="Cancel this attempt and restart it now as a fresh attempt"
+                  >
+                    Force
                   </button>
                 </td>
               </tr>

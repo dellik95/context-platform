@@ -28,6 +28,9 @@ const UPTIME_TICK_MS = 1000;
 const PROGRESS_HIDE_DELAY_MS = 2000;
 const PROGRESS_IDLE_TIMEOUT_MS = 15000;
 
+// The Running count moves on every job transition, so an open Running panel refetches at most this often.
+const RUNNING_JOBS_RELOAD_MIN_MS = 3000;
+
 /**
  * Per-project Dashboard tab (CONTRACTS.md §12; merged with the former Overview tab): project-level
  * stats and reindex trigger buttons (GET /api/projects/{id}/status plus triggerIndex/cancelIndex,
@@ -93,7 +96,7 @@ export class DashboardPanelComponent {
   // Failed-jobs table: loaded on tab load + manual refresh, and kept live thereafter -- the
   // constructor's jobCountsChanged$ subscription reloads it whenever the pushed Failed count
   // actually moves, so it doesn't refetch on every unrelated pending/running transition.
-  private readonly failedJobsResource = this.api.failedJobsResource(this.ctx.projectId);
+  private readonly failedJobsResource = this.api.jobsResource(this.ctx.projectId, 'Failed');
   protected readonly failedJobs = computed(() => (this.failedJobsResource.hasValue() ? this.failedJobsResource.value() : []));
   protected readonly jobsLoading = this.failedJobsResource.isLoading;
   // Gates the *whole table* being replaced by a spinner -- true only on the very first load, when
@@ -105,6 +108,16 @@ export class DashboardPanelComponent {
   protected readonly retryingJobId = signal<string | null>(null);
   protected readonly retryingAll = signal(false);
   protected readonly cleaningUpDone = signal(false);
+
+  // Running-jobs table: fetched once its panel is first opened, then refreshed on Running count pushes.
+  private readonly runningJobsRequested = signal(false);
+  private readonly runningJobsResource = this.api.jobsResource(this.ctx.projectId, 'Running', this.runningJobsRequested);
+  protected readonly runningJobs = computed(() => (this.runningJobsResource.hasValue() ? this.runningJobsResource.value() : []));
+  protected readonly runningJobsLoading = this.runningJobsResource.isLoading;
+  protected readonly runningJobsError = computed(() => Boolean(this.runningJobsResource.error()));
+  protected readonly forcingJobId = signal<string | null>(null);
+  protected readonly forcingAll = signal(false);
+  private lastRunningReloadMs = 0;
   protected readonly cleaningUpPending = signal(false);
 
   // Hook invocations: loaded once on tab mount, then kept live by the "HookInvoked" SignalR push
@@ -144,6 +157,7 @@ export class DashboardPanelComponent {
     // the counts themselves being host-wide.
     this.signalr.jobCountsChanged$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((counts) => {
       const failedCountChanged = this.status()?.jobsFailed !== counts.failed;
+      const runningCountChanged = this.status()?.jobsRunning !== counts.running;
 
       this.statusResource.update((current) =>
         current
@@ -162,6 +176,10 @@ export class DashboardPanelComponent {
       // lazy-load gate as everywhere else on this page.
       if (failedCountChanged && this.failedJobsResource.hasValue()) {
         this.failedJobsResource.reload();
+      }
+
+      if (runningCountChanged && this.runningJobsRequested() && Date.now() - this.lastRunningReloadMs >= RUNNING_JOBS_RELOAD_MIN_MS) {
+        this.loadRunningJobs();
       }
     });
 
@@ -277,6 +295,50 @@ export class DashboardPanelComponent {
       error: () => {
         this.retryingAll.set(false);
         this.snackBar.open('Failed to retry jobs.', 'Dismiss');
+      },
+    });
+  }
+
+  protected loadRunningJobs(): void {
+    this.lastRunningReloadMs = Date.now();
+    if (this.runningJobsRequested()) {
+      this.runningJobsResource.reload();
+    } else {
+      this.runningJobsRequested.set(true);
+    }
+  }
+
+  protected forceJob(job: JobDto): void {
+    this.forcingJobId.set(job.id);
+    this.api.forceJob(job.id).subscribe({
+      next: () => {
+        this.forcingJobId.set(null);
+        this.loadRunningJobs();
+        this.snackBar.open(`Force-started ${job.type} job.`, 'Dismiss');
+      },
+      error: (err) => {
+        this.forcingJobId.set(null);
+        this.snackBar.open(err?.error?.message ?? `Failed to force ${job.type} job.`, 'Dismiss');
+      },
+    });
+  }
+
+  /** Cancels every in-flight Running job of the project and restarts each outside the lane limit. */
+  protected forceAllRunning(): void {
+    if (!confirm('Cancel and restart every Running job now? Their current attempts are abandoned.')) {
+      return;
+    }
+
+    this.forcingAll.set(true);
+    this.api.forceRunningJobs(this.ctx.projectId()).subscribe({
+      next: (result) => {
+        this.forcingAll.set(false);
+        this.loadRunningJobs();
+        this.snackBar.open(`Force-started ${result.forced}/${result.total} running job(s).`, 'Dismiss');
+      },
+      error: () => {
+        this.forcingAll.set(false);
+        this.snackBar.open('Failed to force running jobs.', 'Dismiss');
       },
     });
   }

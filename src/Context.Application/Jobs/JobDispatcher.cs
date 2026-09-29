@@ -73,6 +73,10 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     /// this is a different process, etc.) -- see this type's own remarks on retry scheduling.</summary>
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
 
+    /// <summary>How long <see cref="ForceRunAsync"/> waits for a cancelled execution to unwind. A handler
+    /// blocked in non-cancellable I/O may never get there; it is superseded either way.</summary>
+    private static readonly TimeSpan SupersedeGrace = TimeSpan.FromSeconds(10);
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<JobDispatcher> _logger;
     private readonly IJobCountsNotifier _jobCountsNotifier;
@@ -82,6 +86,8 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     /// <summary>Keyed by project id, <see cref="Guid.Empty"/> for the host-wide lane
     /// (<see cref="ConcurrentDictionary{TKey,TValue}"/> rejects a null key).</summary>
     private readonly ConcurrentDictionary<Guid, JobLane> _lanes = new();
+
+    private readonly ConcurrentDictionary<Guid, JobExecution> _executions = new();
 
     private CancellationTokenSource? _lifetimeCts;
     private Task? _processingTask;
@@ -183,7 +189,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 
         if (job.Status != JobStatus.Failed)
         {
-            throw new JobNotRetryableException(jobId, job.Status);
+            throw new JobStatusConflictException(jobId, job.Status, "retried");
         }
 
         job.Status = JobStatus.Pending;
@@ -198,6 +204,50 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         KickLane(job.ProjectId);
         await _jobSignal.PublishAsync(ct).ConfigureAwait(false);
         await PublishJobCountsAsync(job.ProjectId, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>See <see cref="IJobQueue.ForceRunAsync"/>. A Running job owned by another host process
+    /// is taken over too: with no heartbeat, this process can't tell it apart from an orphaned row.</summary>
+    public async Task ForceRunAsync(Guid jobId, CancellationToken ct = default)
+    {
+        if (_lifetimeCts is not { } cts || Volatile.Read(ref _stopped) != 0)
+        {
+            throw new InvalidOperationException("The job dispatcher is not running.");
+        }
+
+        if (_executions.TryGetValue(jobId, out var inFlight))
+        {
+            inFlight.Supersede();
+            try
+            {
+                await inFlight.Completion.WaitAsync(SupersedeGrace, ct).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                _logger.LogWarning("Job {JobId} did not stop within {Grace} of being cancelled; abandoning it.", jobId, SupersedeGrace);
+            }
+        }
+
+        using var scope = _scopeFactory.CreateScope();
+        var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
+
+        var job = await jobRepository.GetByIdAsync(jobId, ct).ConfigureAwait(false) ?? throw new JobNotFoundException(jobId);
+        if (job.Status == JobStatus.Done)
+        {
+            throw new JobStatusConflictException(jobId, job.Status, "force-run");
+        }
+
+        var claimed = await jobRepository.ForceClaimAsync(jobId, job.Status, ct).ConfigureAwait(false);
+        if (claimed is null)
+        {
+            var current = await jobRepository.GetByIdAsync(jobId, ct).ConfigureAwait(false) ?? throw new JobNotFoundException(jobId);
+            throw new JobStatusConflictException(jobId, current.Status, "force-run");
+        }
+
+        _logger.LogWarning("Job {JobId} ({JobType}) force-run from {Status}.", claimed.Id, claimed.Type, job.Status);
+
+        _ = ProcessClaimedJobAsync(claimed, cts.Token);
+        await PublishJobCountsAsync(claimed.ProjectId, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -416,11 +466,26 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 
     /// <summary>
     /// Runs one job already claimed (marked <see cref="JobStatus.Running"/>) by
-    /// <see cref="IJobRepository.DequeueNextForProjectAsync"/>. Never lets an exception escape -- this is
-    /// invoked fire-and-forget from <see cref="JobLane"/>, so an unhandled exception here would
+    /// <see cref="IJobRepository.DequeueNextForProjectAsync"/> or <see cref="ForceRunAsync"/>. Never lets
+    /// an exception escape -- this is invoked fire-and-forget, so an unhandled exception here would
     /// otherwise become an unobserved task exception instead of a logged, recoverable failure.
     /// </summary>
     private async Task ProcessClaimedJobAsync(Job job, CancellationToken ct)
+    {
+        using var execution = new JobExecution(ct);
+        _executions[job.Id] = execution;
+        try
+        {
+            await RunClaimedJobAsync(job, execution, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            // A forced run may already have registered its own execution under this id.
+            _executions.TryRemove(KeyValuePair.Create(job.Id, execution));
+        }
+    }
+
+    private async Task RunClaimedJobAsync(Job job, JobExecution execution, CancellationToken ct)
     {
         try
         {
@@ -441,7 +506,11 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 
             try
             {
-                await handler.HandleAsync(job, ct).ConfigureAwait(false);
+                await handler.HandleAsync(job, execution.Token).ConfigureAwait(false);
+                if (execution.Superseded)
+                {
+                    return;
+                }
 
                 job.Status = JobStatus.Done;
                 job.FinishedAt = DateTimeOffset.UtcNow;
@@ -449,6 +518,11 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
                 job.NextRetryAt = null;
                 await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
                 await PublishJobCountsAsync(job.ProjectId, ct).ConfigureAwait(false);
+            }
+            catch (Exception) when (execution.Superseded)
+            {
+                // The forced run owns the row now; any write from here would clobber it.
+                _logger.LogInformation("Job {JobId} ({JobType}) execution abandoned in favour of a forced run.", job.Id, job.Type);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -477,6 +551,38 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Unhandled error processing job {JobId} ({JobType}).", job.Id, job.Type);
+        }
+    }
+
+    /// <summary>One in-process run of a claimed job; <see cref="Supersede"/> is how
+    /// <see cref="ForceRunAsync"/> cancels it and stops it writing the job row.</summary>
+    private sealed class JobExecution(CancellationToken lifetime) : IDisposable
+    {
+        private readonly CancellationTokenSource _cts = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
+        private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private volatile bool _superseded;
+
+        public CancellationToken Token => _cts.Token;
+        public bool Superseded => _superseded;
+        public Task Completion => _completion.Task;
+
+        public void Supersede()
+        {
+            _superseded = true;
+            try
+            {
+                _cts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Finished between being looked up and being cancelled.
+            }
+        }
+
+        public void Dispose()
+        {
+            _completion.TrySetResult();
+            _cts.Dispose();
         }
     }
 

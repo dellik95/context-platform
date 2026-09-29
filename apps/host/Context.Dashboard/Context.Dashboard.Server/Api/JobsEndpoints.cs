@@ -33,6 +33,8 @@ public static class JobsEndpoints
         group.MapGet("/api/jobs", ListAsync);
         group.MapPost("/api/jobs/{id:guid}/retry", RetryAsync);
         group.MapPost("/api/jobs/retry-all", RetryAllAsync);
+        group.MapPost("/api/jobs/{id:guid}/force", ForceAsync);
+        group.MapPost("/api/jobs/force-running", ForceRunningAsync);
         group.MapPost("/api/jobs/cleanup", CleanupAsync);
         group.MapGet("/api/logs/tail", TailLogAsync);
     }
@@ -71,9 +73,9 @@ public static class JobsEndpoints
         {
             return Results.NotFound(new { message = $"No job with id '{id}' exists." });
         }
-        catch (JobNotRetryableException ex)
+        catch (JobStatusConflictException ex)
         {
-            return Results.Conflict(new { message = $"Job '{id}' is not retryable: it is currently {ex.ActualStatus}, not {JobStatus.Failed}." });
+            return Results.Conflict(new { message = ex.Message });
         }
     }
 
@@ -100,7 +102,7 @@ public static class JobsEndpoints
                 await jobQueue.RequeueAsync(job.Id, ct).ConfigureAwait(false);
                 retried++;
             }
-            catch (JobNotRetryableException)
+            catch (JobStatusConflictException)
             {
                 // Raced with something else already advancing this job's status -- skip it, don't
                 // fail the whole batch over one job.
@@ -108,6 +110,59 @@ public static class JobsEndpoints
         }
 
         return Results.Ok(new { retried, total = failed.Count });
+    }
+
+    /// <summary>
+    /// Runs one job right now, outside its project lane (see <see cref="IJobQueue.ForceRunAsync"/>) —
+    /// for a job stuck Running behind a hung handler, or Pending behind a lane full of them.
+    /// </summary>
+    private static async Task<IResult> ForceAsync(
+        Guid id, IJobRepository jobs, IJobQueue jobQueue, CurrentProjectAccessor currentProject, CancellationToken ct)
+    {
+        if (await jobs.GetByIdAsync(id, ct, currentProject.ProjectId).ConfigureAwait(false) is null)
+        {
+            return Results.NotFound(new { message = $"No job with id '{id}' exists." });
+        }
+
+        try
+        {
+            await jobQueue.ForceRunAsync(id, ct).ConfigureAwait(false);
+            return Results.Accepted();
+        }
+        catch (JobNotFoundException)
+        {
+            return Results.NotFound(new { message = $"No job with id '{id}' exists." });
+        }
+        catch (JobStatusConflictException ex)
+        {
+            return Results.Conflict(new { message = ex.Message });
+        }
+    }
+
+    /// <summary>Force-runs every job of the project currently marked Running, concurrently so
+    /// handlers that ignore cancellation don't serialize their supersede waits.</summary>
+    private static async Task<IResult> ForceRunningAsync(
+        Guid? projectId, IJobRepository jobs, IJobQueue jobQueue,
+        CurrentProjectAccessor currentProject, CancellationToken ct)
+    {
+        var running = await jobs
+            .ListByStatusAsync(JobStatus.Running, projectId ?? currentProject.ProjectId, ct)
+            .ConfigureAwait(false);
+
+        var outcomes = await Task.WhenAll(running.Select(async job =>
+        {
+            try
+            {
+                await jobQueue.ForceRunAsync(job.Id, ct).ConfigureAwait(false);
+                return true;
+            }
+            catch (Exception ex) when (ex is JobStatusConflictException or JobNotFoundException)
+            {
+                return false;
+            }
+        })).ConfigureAwait(false);
+
+        return Results.Ok(new { forced = outcomes.Count(forced => forced), total = running.Count });
     }
 
     /// <summary>Statuses this endpoint is willing to bulk-delete. Running is excluded outright — a

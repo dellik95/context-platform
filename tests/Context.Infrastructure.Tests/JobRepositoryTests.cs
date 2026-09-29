@@ -102,6 +102,41 @@ public sealed class JobRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task ForceClaimAsync_claims_a_backing_off_job_as_a_fresh_attempt()
+    {
+        await MigrateAsync();
+        using var db = CreateContext();
+
+        var job = NewJob();
+        job.Attempts = 4;
+        job.NextRetryAt = DateTimeOffset.UtcNow.AddMinutes(5);
+        db.Jobs.Add(job);
+        await db.SaveChangesAsync();
+
+        var claimed = await new JobRepository(db).ForceClaimAsync(job.Id, JobStatus.Pending, CancellationToken.None);
+
+        claimed.Should().NotBeNull();
+        claimed!.Status.Should().Be(JobStatus.Running);
+        claimed.Attempts.Should().Be(1);
+        claimed.NextRetryAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ForceClaimAsync_returns_null_when_the_status_moved_on()
+    {
+        await MigrateAsync();
+        using var db = CreateContext();
+
+        var job = NewJob(status: JobStatus.Done);
+        db.Jobs.Add(job);
+        await db.SaveChangesAsync();
+
+        var claimed = await new JobRepository(db).ForceClaimAsync(job.Id, JobStatus.Running, CancellationToken.None);
+
+        claimed.Should().BeNull();
+    }
+
+    [Fact]
     public async Task DeleteFinishedOlderThanAsync_removes_only_terminal_jobs_past_the_cutoff()
     {
         await MigrateAsync();

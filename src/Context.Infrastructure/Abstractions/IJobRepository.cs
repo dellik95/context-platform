@@ -22,6 +22,10 @@ public interface IJobRepository
     /// Backs the dispatcher's per-project lanes.</summary>
     Task<Job?> DequeueNextForProjectAsync(Guid? projectId, CancellationToken ct);
 
+    /// <summary>Claims one job regardless of priority, retry backoff or lane capacity, as a fresh
+    /// first attempt — only if it is still in <paramref name="expectedStatus"/>, else null.</summary>
+    Task<Job?> ForceClaimAsync(Guid id, JobStatus expectedStatus, CancellationToken ct);
+
     /// <summary>Distinct <see cref="Job.ProjectId"/> values (null = host-wide) that have at least
     /// one Pending job, including ones still waiting out a retry backoff.</summary>
     Task<IReadOnlyList<Guid?>> ListProjectsWithPendingJobsAsync(CancellationToken ct);

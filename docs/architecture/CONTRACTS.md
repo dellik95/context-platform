@@ -505,8 +505,13 @@ public interface IJobQueue
     Task<Guid> EnqueueAsync(Context.Domain.Enums.JobType type, object payload, Guid? projectId = null, int priority = 0, CancellationToken ct = default);
 
     // Manually re-triggers a job that has exhausted its automatic retries and is permanently
-    // Failed (the System tab's "retry" button); throws JobNotFoundException / JobNotRetryableException.
+    // Failed (the System tab's "retry" button); throws JobNotFoundException / JobStatusConflictException.
     Task RequeueAsync(Guid jobId, CancellationToken ct = default);
+
+    // Runs a Pending/Running/Failed job right now as a fresh attempt, outside its project lane's
+    // slots, cancelling this process's in-flight execution of it first (the "force" button for jobs
+    // stuck behind a hung handler); throws JobNotFoundException / JobStatusConflictException.
+    Task ForceRunAsync(Guid jobId, CancellationToken ct = default);
 }
 
 namespace Context.Application;

@@ -19,6 +19,15 @@ public interface IJobQueue
     /// and leaving it stranded until the next process restart's hydration pass.
     /// </summary>
     /// <exception cref="JobNotFoundException">No job with <paramref name="jobId"/> exists.</exception>
-    /// <exception cref="JobNotRetryableException">The job exists but isn't currently Failed.</exception>
+    /// <exception cref="JobStatusConflictException">The job exists but isn't currently Failed.</exception>
     Task RequeueAsync(Guid jobId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Runs a Pending, Running or Failed job immediately as a fresh attempt, bypassing retry backoff
+    /// and its project lane's slot limit. If this process is executing it right now (e.g. stuck in a
+    /// hung LLM call), that execution is cancelled and abandoned first — it no longer writes to the row.
+    /// </summary>
+    /// <exception cref="JobNotFoundException">No job with <paramref name="jobId"/> exists.</exception>
+    /// <exception cref="JobStatusConflictException">The job is Done, or changed status mid-claim.</exception>
+    Task ForceRunAsync(Guid jobId, CancellationToken ct = default);
 }

@@ -406,6 +406,12 @@ export interface RetryAllJobsResponse {
   total: number;
 }
 
+// Response of POST /api/jobs/force-running.
+export interface ForceRunningJobsResponse {
+  forced: number;
+  total: number;
+}
+
 // Response of POST /api/jobs/cleanup.
 export interface CleanupJobsResponse {
   removed: number;

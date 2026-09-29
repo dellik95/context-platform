@@ -59,6 +59,23 @@ public class JobRepository(ContextDbContext db) : IJobRepository
         DequeueNextCoreAsync(
             db.Jobs.AsNoTracking().Where(j => j.Status == JobStatus.Pending && j.ProjectId == projectId), ct);
 
+    public async Task<Job?> ForceClaimAsync(Guid id, JobStatus expectedStatus, CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var claimed = await db.Jobs
+            .Where(j => j.Id == id && j.Status == expectedStatus)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(j => j.Status, JobStatus.Running)
+                    .SetProperty(j => j.StartedAt, now)
+                    .SetProperty(j => j.Attempts, 1)
+                    .SetProperty(j => j.NextRetryAt, (DateTimeOffset?)null)
+                    .SetProperty(j => j.FinishedAt, (DateTimeOffset?)null),
+                ct);
+
+        return claimed == 0 ? null : await db.Jobs.AsNoTracking().FirstOrDefaultAsync(j => j.Id == id, ct);
+    }
+
     public async Task<IReadOnlyList<Guid?>> ListProjectsWithPendingJobsAsync(CancellationToken ct) =>
         await db.Jobs.AsNoTracking()
             .Where(j => j.Status == JobStatus.Pending)
