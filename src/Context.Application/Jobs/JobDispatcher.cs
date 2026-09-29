@@ -38,12 +38,13 @@ namespace Context.Application.Jobs;
 /// <remarks>
 /// <b>One lane per project:</b> every project (plus one lane for host-wide jobs with no
 /// <see cref="Job.ProjectId"/>) gets its own <see cref="JobLane"/> — its own claim loop over
-/// <see cref="IJobRepository.DequeueNextForProjectAsync"/> and its own
-/// <see cref="JobDispatcherOptions.WorkersPerProject"/> slots. A single shared pool let one
-/// project's reindex or a hung LLM call occupy every slot and stall every other project's hooks,
-/// summaries and extraction behind it; now a project can only exhaust its own lane. Lanes are
-/// created lazily from <see cref="IJobRepository.ListProjectsWithPendingJobsAsync"/> (on every
-/// <see cref="IJobSignal"/> wake-up and poll tick) and kicked directly by <see cref="EnqueueAsync"/>.
+/// <see cref="IJobRepository.DequeueNextForProjectAsync"/> — and <see cref="JobWorkerPool"/> decides
+/// how many jobs each runs at once: reserved slots per lane, plus shared ones busy lanes borrow while
+/// others are idle. A single shared pool let one project's reindex or a hung LLM call occupy every
+/// slot and stall every other project's hooks, summaries and extraction behind it; the reserved slots
+/// keep that from happening. Lanes are created lazily from
+/// <see cref="IJobRepository.ListProjectsWithPendingJobsAsync"/> (on every <see cref="IJobSignal"/>
+/// wake-up and poll tick) and kicked directly by <see cref="EnqueueAsync"/>.
 /// <para>
 /// Per-lane slots stay small: handlers spend their time in blocking file and SQLite I/O rather than
 /// on the CPU, and Microsoft.Data.Sqlite has no true async path, so an in-flight job generally means
@@ -82,7 +83,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     private readonly ILogger<JobDispatcher> _logger;
     private readonly IJobCountsNotifier _jobCountsNotifier;
     private readonly IJobSignal _jobSignal;
-    private readonly int _workersPerProject;
+    private readonly JobWorkerPool _workerPool;
 
     /// <summary>Keyed by project id, <see cref="Guid.Empty"/> for the host-wide lane
     /// (<see cref="ConcurrentDictionary{TKey,TValue}"/> rejects a null key).</summary>
@@ -113,7 +114,8 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         _logger = logger ?? NullLogger<JobDispatcher>.Instance;
         _jobCountsNotifier = jobCountsNotifier ?? NullJobCountsNotifier.Instance;
         _jobSignal = jobSignal ?? new InMemoryJobSignal();
-        _workersPerProject = Math.Max(1, (options?.Value ?? new JobDispatcherOptions()).WorkersPerProject);
+        var dispatcherOptions = options?.Value ?? new JobDispatcherOptions();
+        _workerPool = new JobWorkerPool(Math.Max(1, dispatcherOptions.WorkersPerProject), Math.Max(0, dispatcherOptions.SharedWorkers));
     }
 
     /// <summary>
@@ -371,15 +373,32 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
             .Kick(cts.Token);
     }
 
+    private void KickWaitingLanes(IReadOnlyList<Guid> laneKeys, CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested)
+        {
+            return;
+        }
+
+        foreach (var key in laneKeys)
+        {
+            if (_lanes.TryGetValue(key, out var lane))
+            {
+                lane.Kick(ct);
+            }
+        }
+    }
+
     /// <summary>
     /// One project's queue (or the host-wide one). Claims are single-threaded per lane — at most one
     /// <see cref="IJobRepository.DequeueNextForProjectAsync"/> in flight for it — and dispatch is
-    /// bounded by the lane's own slots. A finishing job frees a slot and re-kicks its own lane, so a
-    /// backlog drains without waiting on a signal or poll tick.
+    /// bounded by <see cref="JobWorkerPool"/>. A finishing job frees its slot and re-kicks its own lane
+    /// (plus, for a shared slot, the lanes waiting on one), so a backlog drains without waiting on a
+    /// signal or poll tick.
     /// </summary>
     private sealed class JobLane(JobDispatcher owner, Guid? projectId)
     {
-        private readonly SemaphoreSlim _slots = new(owner._workersPerProject);
+        private readonly Guid _key = projectId ?? Guid.Empty;
         private int _draining;
         private int _kickPending;
 
@@ -417,7 +436,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         {
             while (!ct.IsCancellationRequested)
             {
-                if (!_slots.Wait(0))
+                if (!owner._workerPool.TryAcquire(_key, out var borrowed))
                 {
                     return;
                 }
@@ -431,12 +450,12 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
-                    _slots.Release();
+                    ReleaseSlot(borrowed, idle: false, ct);
                     return;
                 }
                 catch (Exception ex)
                 {
-                    _slots.Release();
+                    ReleaseSlot(borrowed, idle: false, ct);
                     owner._logger.LogError(ex,
                         "Unhandled error while claiming the next job for project {ProjectId}; the next signal or poll tick will try again.",
                         projectId);
@@ -445,14 +464,14 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 
                 if (job is null)
                 {
-                    _slots.Release();
+                    ReleaseSlot(borrowed, idle: true, ct);
                     return;
                 }
 
                 _ = owner.ProcessClaimedJobAsync(job, ct).ContinueWith(
                     _ =>
                     {
-                        _slots.Release();
+                        ReleaseSlot(borrowed, idle: false, ct);
                         if (!ct.IsCancellationRequested)
                         {
                             Kick(ct);
@@ -463,6 +482,9 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
                     TaskScheduler.Default);
             }
         }
+
+        private void ReleaseSlot(bool borrowed, bool idle, CancellationToken ct) =>
+            owner.KickWaitingLanes(owner._workerPool.Release(_key, borrowed, idle), ct);
     }
 
     /// <summary>

@@ -149,11 +149,20 @@ try
         .AddJsonProtocol(o => o.PayloadSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
     builder.Services.AddSingleton<IndexingHubNotifier>();
 
-    if (int.TryParse(builder.Configuration["CONTEXT_PLATFORM_JOB_WORKERS_PER_PROJECT"], out var jobWorkersPerProject)
-        && jobWorkersPerProject > 0)
+    builder.Services.Configure<Context.Application.Jobs.JobDispatcherOptions>(o =>
     {
-        builder.Services.Configure<Context.Application.Jobs.JobDispatcherOptions>(o => o.WorkersPerProject = jobWorkersPerProject);
-    }
+        if (int.TryParse(builder.Configuration["CONTEXT_PLATFORM_JOB_WORKERS_PER_PROJECT"], out var workersPerProject)
+            && workersPerProject > 0)
+        {
+            o.WorkersPerProject = workersPerProject;
+        }
+
+        if (int.TryParse(builder.Configuration["CONTEXT_PLATFORM_JOB_SHARED_WORKERS"], out var sharedWorkers)
+            && sharedWorkers >= 0)
+        {
+            o.SharedWorkers = sharedWorkers;
+        }
+    });
 
     builder.Services.AddSingleton<Context.Application.Indexing.IIndexingProgressReporter, Context.Dashboard.Server.Hubs.SignalRIndexingProgressReporter>();
     builder.Services.AddSingleton<Context.Application.Notifications.IProjectActivityNotifier, Context.Dashboard.Server.Hubs.SignalRProjectActivityNotifier>();

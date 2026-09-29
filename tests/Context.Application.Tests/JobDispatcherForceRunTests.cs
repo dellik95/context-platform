@@ -41,7 +41,7 @@ public sealed class JobDispatcherForceRunTests : IAsyncDisposable
 
         _dispatcher = new JobDispatcher(
             _provider.GetRequiredService<IServiceScopeFactory>(),
-            options: Options.Create(new JobDispatcherOptions { WorkersPerProject = 1 }));
+            options: Options.Create(new JobDispatcherOptions { WorkersPerProject = 1, SharedWorkers = 0 }));
     }
 
     [Fact]
