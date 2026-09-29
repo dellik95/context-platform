@@ -41,9 +41,15 @@ internal sealed class InMemoryStore : IMemoryStore
 
     public int TransactionCount { get; private set; }
 
+    /// <summary>Runs once as the next transaction opens, standing in for a concurrent writer that committed first.</summary>
+    public Action? BeforeNextTransaction { get; set; }
+
     public Task<T> InTransactionAsync<T>(Func<Task<T>> work, CancellationToken ct)
     {
         TransactionCount++;
+        var concurrent = BeforeNextTransaction;
+        BeforeNextTransaction = null;
+        concurrent?.Invoke();
         return work();
     }
 
@@ -88,6 +94,11 @@ internal sealed class InMemoryStore : IMemoryStore
     public Task<IReadOnlyList<DomainMemory>> ListLiveKnowledgeAsync(Guid projectId, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<DomainMemory>>([.. _memories.Values
             .Where(m => m.ProjectId == projectId && m.Type != MemoryType.Event && m.IsLive)
+            .Select(Clone)]);
+
+    public Task<IReadOnlyList<DomainMemory>> ListLiveKnowledgeCreatedSinceAsync(Guid projectId, DateTimeOffset since, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<DomainMemory>>([.. _memories.Values
+            .Where(m => m.ProjectId == projectId && m.Type != MemoryType.Event && m.IsLive && m.CreatedAt >= since)
             .Select(Clone)]);
 
     public Task InsertAsync(
@@ -152,6 +163,26 @@ internal sealed class InMemoryStore : IMemoryStore
         }
 
         memory.Status = MemoryStatus.Obsolete;
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> DeleteAsync(Guid id, CancellationToken ct)
+    {
+        if (!_memories.Remove(id))
+        {
+            return Task.FromResult(false);
+        }
+
+        foreach (var superseded in _memories.Values.Where(m => m.SupersededById == id))
+        {
+            superseded.SupersededById = null;
+            superseded.SupersededAt = null;
+            superseded.Status = MemoryStatus.Obsolete;
+        }
+
+        _vectors.Remove(id);
+        _entities.RemoveAll(e => e.MemoryId == id);
+        _evidence.RemoveAll(e => e.MemoryId == id);
         return Task.FromResult(true);
     }
 

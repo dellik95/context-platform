@@ -48,7 +48,7 @@ public sealed class ExtractMemoryJobHandlerTests : IDisposable
         db.ChangeTracker.Clear();
 
         using var vectorIndex = new SqliteMemoryVectorIndex(_dbPath, new FakeDbContextFactory(Options));
-        var memories = new VectorPruningMemoryRepository(new MemoryRepository(db), vectorIndex);
+        var memories = new MemoryRepository(db);
         var store = new MemoryStoreAdapter(memories, db, vectorIndex);
         var codeVerifier = new CodeVerifier(new FileRepository(db), new SymbolRepository(db), new ProjectRepository(db));
         var resolver = new FakeProviderResolver(CandidateResponse());

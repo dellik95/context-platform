@@ -16,8 +16,8 @@ namespace Context.Application.Adapters;
 /// <remarks>
 /// The first use of a collection in a process fills its gaps from <c>MemoryEmbeddings</c>: every live
 /// memory embedded by the same model and dimension that has no record yet, which covers both a new
-/// collection and a vector write lost after its database commit. Rows embedded by another model are
-/// never mixed in. It also drops the pre-knowledge-model <c>memory_vectors_*</c> collections, which
+/// collection and a vector write lost after its database commit. A failed upsert repeats that fill on
+/// the collection's next use. Rows embedded by another model are never mixed in. It also drops the pre-knowledge-model <c>memory_vectors_*</c> collections, which
 /// carried vectors of unknown provenance.
 /// </remarks>
 public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<ContextDbContext> dbContextFactory)
@@ -25,14 +25,23 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
 {
     private readonly string _connectionString = $"Data Source={dbPath};Default Timeout=10";
     private readonly ConcurrentDictionary<string, Lazy<Task<SqliteCollection<Guid, MemoryVectorRecord>>>> _collections = new();
+    private readonly ConcurrentDictionary<string, byte> _stale = new();
 
     public async Task UpsertAsync(Guid memoryId, Guid projectId, string? topic, string provider, float[] vector, CancellationToken ct)
     {
         var collection = await GetOrCreateCollectionAsync(provider, vector.Length, ct).ConfigureAwait(false);
-        await collection.UpsertAsync(
-            // Lower-cased: Topic is only a case-insensitive filter key, never read back for display.
-            new MemoryVectorRecord { MemoryId = memoryId, ProjectId = projectId, Topic = topic?.ToLowerInvariant(), Vector = vector },
-            ct).ConfigureAwait(false);
+        try
+        {
+            await collection.UpsertAsync(
+                // Lower-cased: Topic is only a case-insensitive filter key, never read back for display.
+                new MemoryVectorRecord { MemoryId = memoryId, ProjectId = projectId, Topic = topic?.ToLowerInvariant(), Vector = vector },
+                ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            _stale.TryAdd(provider, 0);
+            throw;
+        }
     }
 
     public async Task<IReadOnlyList<(Guid MemoryId, double Score)>> SearchAsync(
@@ -136,9 +145,10 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
         var lazy = _collections.GetOrAdd(
             provider,
             p => new Lazy<Task<SqliteCollection<Guid, MemoryVectorRecord>>>(() => CreateCollectionAsync(p, dimensions, ct)));
+        SqliteCollection<Guid, MemoryVectorRecord> collection;
         try
         {
-            return await lazy.Value.ConfigureAwait(false);
+            collection = await lazy.Value.ConfigureAwait(false);
         }
         catch
         {
@@ -146,6 +156,21 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
             _collections.TryRemove(new KeyValuePair<string, Lazy<Task<SqliteCollection<Guid, MemoryVectorRecord>>>>(provider, lazy));
             throw;
         }
+
+        if (_stale.TryRemove(provider, out _))
+        {
+            try
+            {
+                await BackfillMissingAsync(collection, provider, dimensions, ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                _stale.TryAdd(provider, 0);
+                throw;
+            }
+        }
+
+        return collection;
     }
 
     private async Task<SqliteCollection<Guid, MemoryVectorRecord>> CreateCollectionAsync(
@@ -191,8 +216,10 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
         var ids = await embedded.Select(r => r.MemoryId).ToListAsync(ct).ConfigureAwait(false);
         foreach (var batch in ids.Chunk(BackfillBatchSize))
         {
+            // With vectors: a failed upsert can leave the data row without its vector, which empties
+            // every KNN search of the collection until the record is written again.
             var present = new HashSet<Guid>();
-            await foreach (var record in collection.GetAsync(batch, options: null, ct).ConfigureAwait(false))
+            await foreach (var record in collection.GetAsync(batch, WithVectors, ct).ConfigureAwait(false))
             {
                 present.Add(record.MemoryId);
             }
@@ -235,6 +262,8 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
         return new SqliteCollection<Guid, MemoryVectorRecord>(
             _connectionString, CollectionNameFor(provider), new SqliteCollectionOptions { Definition = definition });
     }
+
+    private static readonly RecordRetrievalOptions WithVectors = new() { IncludeVectors = true };
 
     private const string TableNamePrefix = "memory_vec_";
     private const int BackfillBatchSize = 500;

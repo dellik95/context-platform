@@ -96,6 +96,42 @@ public sealed class SqliteMemoryVectorIndexTests : IDisposable
         byTopic.Select(h => h.MemoryId).Should().Equal([indexed], "a record already present is not overwritten from the embedding row");
     }
 
+    [Fact]
+    public async Task A_failed_upsert_refills_missing_vectors_on_the_next_use_in_the_same_process()
+    {
+        var projectId = Guid.NewGuid();
+        var indexed = Guid.NewGuid();
+        var lost = Guid.NewGuid();
+        float[] vector = [1f, 0f, 0f];
+
+        await using (var db = new ContextDbContext(Options))
+        {
+            await db.Database.MigrateAsync();
+            db.Projects.Add(new Project { Id = projectId, Name = "P", RootPath = "/repo", CreatedAt = DateTimeOffset.UtcNow });
+            db.Memories.Add(NewMemory(indexed, projectId, MemoryStatus.Active));
+            db.MemoryEmbeddings.Add(NewEmbedding(indexed, vector, ModelKey));
+            await db.SaveChangesAsync();
+        }
+
+        using var index = new SqliteMemoryVectorIndex(_dbPath, new FakeDbContextFactory(Options));
+        (await index.SearchAsync(projectId, ModelKey, vector, 10, CancellationToken.None)).Select(h => h.MemoryId).Should().Equal(indexed);
+
+        await using (var db = new ContextDbContext(Options))
+        {
+            db.Memories.Add(NewMemory(lost, projectId, MemoryStatus.Active));
+            db.MemoryEmbeddings.Add(NewEmbedding(lost, [0.9f, 0.1f, 0f], ModelKey));
+            await db.SaveChangesAsync();
+        }
+
+        // Leaves the data row of the lost memory without its vector.
+        var failedWrite = () => index.UpsertAsync(lost, projectId, null, ModelKey, [1f, 0f, 0f, 0f], CancellationToken.None);
+        await failedWrite.Should().ThrowAsync<Exception>("the collection holds three-dimensional vectors");
+
+        var hits = await index.SearchAsync(projectId, ModelKey, vector, 10, CancellationToken.None);
+
+        hits.Select(h => h.MemoryId).Should().Equal(indexed, lost);
+    }
+
     private static DomainMemory NewMemory(Guid id, Guid projectId, MemoryStatus status) => new()
     {
         Id = id,

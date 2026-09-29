@@ -4,14 +4,13 @@ using Context.Domain.Entities;
 using Context.Infrastructure.Abstractions;
 using FluentAssertions;
 using Moq;
-using DomainMemory = Context.Domain.Entities.Memory;
 
 namespace Context.Application.Tests;
 
 /// <summary>
-/// Covers the two decorators that keep the sqlite-vec store in step with row deletes. The vector
-/// tables have no foreign key back to <c>Chunks</c>/<c>Memories</c>, so these decorators are the
-/// only thing standing between a re-index and a permanently growing set of orphaned vectors.
+/// Covers the decorator that keeps the sqlite-vec store in step with chunk deletes. The vector table
+/// has no foreign key back to <c>Chunks</c>, so it is the only thing standing between a re-index and
+/// a permanently growing set of orphaned vectors.
 /// </summary>
 public sealed class VectorPruningRepositoryTests
 {
@@ -50,61 +49,5 @@ public sealed class VectorPruningRepositoryTests
         await sut.ReplaceForFileAsync(Guid.NewGuid(), [new Chunk { Id = Guid.NewGuid(), Text = "chunk", ContentHash = "hash" }], CancellationToken.None);
 
         vectorIndex.Verify(v => v.DeleteAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()), Times.Never);
-    }
-
-    [Fact]
-    public async Task DeleteAsync_prunes_the_memorys_vector_after_the_row_is_gone()
-    {
-        var memoryId = Guid.NewGuid();
-        var order = new List<string>();
-
-        var inner = new Mock<IMemoryRepository>();
-        inner.Setup(r => r.DeleteAsync(memoryId, It.IsAny<CancellationToken>()))
-            .Callback(() => order.Add("row"))
-            .Returns(Task.CompletedTask);
-
-        var vectorIndex = new Mock<IMemoryVectorIndex>();
-        vectorIndex.Setup(v => v.DeleteAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
-            .Callback(() => order.Add("vector"))
-            .Returns(Task.CompletedTask);
-
-        var sut = new VectorPruningMemoryRepository(inner.Object, vectorIndex.Object);
-
-        await sut.DeleteAsync(memoryId, CancellationToken.None);
-
-        // Row first: a failed row delete must leave the vector in place, not strand a searchable
-        // memory with no way back into the index.
-        order.Should().Equal("row", "vector");
-        vectorIndex.Verify(v => v.DeleteAsync(It.Is<IReadOnlyCollection<Guid>>(ids => ids.Single() == memoryId), It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [Fact]
-    public async Task DeleteAsync_leaves_the_vector_in_place_when_the_row_delete_throws()
-    {
-        var inner = new Mock<IMemoryRepository>();
-        inner.Setup(r => r.DeleteAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new InvalidOperationException("row delete failed"));
-
-        var vectorIndex = new Mock<IMemoryVectorIndex>();
-        var sut = new VectorPruningMemoryRepository(inner.Object, vectorIndex.Object);
-
-        await sut.Invoking(s => s.DeleteAsync(Guid.NewGuid(), CancellationToken.None))
-            .Should().ThrowAsync<InvalidOperationException>();
-
-        vectorIndex.Verify(v => v.DeleteAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()), Times.Never);
-    }
-
-    [Fact]
-    public async Task Memory_reads_and_writes_other_than_delete_pass_straight_through()
-    {
-        var memory = new DomainMemory { Id = Guid.NewGuid(), Title = "t", Body = "b" };
-        var inner = new Mock<IMemoryRepository>();
-        inner.Setup(r => r.AddAsync(memory, It.IsAny<CancellationToken>())).ReturnsAsync(memory);
-
-        var vectorIndex = new Mock<IMemoryVectorIndex>();
-        var sut = new VectorPruningMemoryRepository(inner.Object, vectorIndex.Object);
-
-        (await sut.AddAsync(memory, CancellationToken.None)).Should().BeSameAs(memory);
-        vectorIndex.VerifyNoOtherCalls();
     }
 }

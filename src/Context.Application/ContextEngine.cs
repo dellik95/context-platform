@@ -7,6 +7,7 @@ using Context.Domain.Enums;
 using Context.Graph.Abstractions;
 using Context.Infrastructure.Abstractions;
 using Context.Memory.Abstractions;
+using Context.Memory.Consolidation;
 using Context.Memory.Decay;
 using Context.Memory.Extraction;
 using Context.Memory.Search;
@@ -53,6 +54,7 @@ public sealed class ContextEngine(
     SessionDeliveryCache deliveryCache,
     IProjectSettingsService projectSettingsService,
     IMemoryConsolidator memoryConsolidator,
+    IMemoryStore memoryStore,
     IMemoryVectorIndex memoryVectorIndex,
     ISessionSummaryVectorIndex sessionSummaryVectorIndex,
     IProviderResolver providerResolver) : IContextEngine
@@ -264,8 +266,7 @@ public sealed class ContextEngine(
             return false;
         }
 
-        await memoryRepository.DeleteAsync(memoryId, ct).ConfigureAwait(false);
-        return true;
+        return await MemoryContests.ForgetAsync(memoryStore, memoryId, ct).ConfigureAwait(false);
     }
 
     /// <summary>

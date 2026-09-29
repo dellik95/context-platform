@@ -30,7 +30,8 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
 
     public async Task DeleteAsync(Guid id, CancellationToken ct)
     {
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        // Joins the caller's transaction when there is one.
+        await using var tx = db.Database.CurrentTransaction is null ? await db.Database.BeginTransactionAsync(ct) : null;
 
         // SupersededById is Restrict, so the pointers at this row must go first.
         await db.Memories.Where(m => m.SupersededById == id).ExecuteUpdateAsync(setters => setters
@@ -43,7 +44,10 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
         await db.MemoryEmbeddings.Where(e => e.MemoryId == id).ExecuteDeleteAsync(ct);
         await db.Memories.Where(m => m.Id == id).ExecuteDeleteAsync(ct);
 
-        await tx.CommitAsync(ct);
+        if (tx is not null)
+        {
+            await tx.CommitAsync(ct);
+        }
     }
 
     public async Task<IReadOnlyList<Memory>> ListByProjectAsync(Guid projectId, bool includeSuperseded, CancellationToken ct)
@@ -177,6 +181,9 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
         var rows = await db.MemoryConsolidationReports.AsNoTracking().Where(r => r.ProjectId == projectId).ToListAsync(ct);
         return [.. rows.OrderByDescending(r => r.CreatedAt)];
     }
+
+    public async Task<IReadOnlyList<MemoryConsolidationReport>> ListReportsByStatusAsync(ConsolidationReportStatus status, CancellationToken ct) =>
+        await db.MemoryConsolidationReports.AsNoTracking().Where(r => r.Status == status).ToListAsync(ct);
 
     public async Task<bool> SetReportStatusAsync(
         Guid id, ConsolidationReportStatus from, ConsolidationReportStatus to, DateTimeOffset? appliedAt, string? reportJson, CancellationToken ct)

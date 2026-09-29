@@ -261,6 +261,80 @@ public sealed class MemoryStoreAdapterTests : IDisposable
         _vectorIndex.Invocations.Should().ContainSingle("writes outside a transaction go straight to the index again");
     }
 
+    [Fact]
+    public async Task DeleteAsync_removes_the_memory_and_its_rows_obsoletes_what_it_superseded_and_drops_its_vector()
+    {
+        await using var db = await CreateDbAsync();
+        var sut = CreateSut(db);
+        var old = NewMemory("Retries three times");
+        var replacement = NewMemory("Retries five times");
+        await sut.InsertAsync(old, null, [], [], CancellationToken.None);
+        await sut.InsertAsync(
+            replacement,
+            new MemoryVector(ModelKey, [1f, 0f]),
+            [Entity("symbol:webhookclient", "WebhookClient")],
+            [Evidence(replacement.Id, EvidenceRelation.Created)],
+            CancellationToken.None);
+        await sut.SupersedeAsync(old.Id, replacement.Id, DateTimeOffset.UtcNow, CancellationToken.None);
+        _vectorIndex.Invocations.Clear();
+
+        (await sut.InTransactionAsync(() => sut.DeleteAsync(replacement.Id, CancellationToken.None), CancellationToken.None)).Should().BeTrue();
+        (await sut.DeleteAsync(replacement.Id, CancellationToken.None)).Should().BeFalse();
+
+        await using var verify = new ContextDbContext(Options);
+        var kept = await verify.Memories.SingleAsync();
+        kept.Id.Should().Be(old.Id);
+        kept.Status.Should().Be(MemoryStatus.Obsolete);
+        kept.SupersededById.Should().BeNull();
+        (await verify.MemoryEvidence.AnyAsync()).Should().BeFalse();
+        (await verify.MemoryEntities.AnyAsync()).Should().BeFalse();
+        (await verify.MemoryEmbeddings.AnyAsync()).Should().BeFalse();
+        _vectorIndex.Verify(v => v.DeleteAsync(It.Is<IReadOnlyCollection<Guid>>(ids => ids.Single() == replacement.Id), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ListLiveKnowledgeCreatedSinceAsync_returns_only_live_knowledge_created_at_or_after_the_cutoff()
+    {
+        await using var db = await CreateDbAsync();
+        var sut = CreateSut(db);
+        var since = DateTimeOffset.UtcNow.AddMinutes(-30);
+        var recent = NewMemory("Webhook retries");
+        var old = NewMemory("Deploys run nightly");
+        old.CreatedAt = since.AddMinutes(-1);
+        var retired = NewMemory("Retries three times", status: MemoryStatus.Obsolete);
+        var recentEvent = NewMemory("Fixed the retry loop", type: MemoryType.Event);
+        foreach (var memory in new[] { recent, old, retired, recentEvent })
+        {
+            await sut.InsertAsync(memory, null, [], [], CancellationToken.None);
+        }
+
+        var found = await sut.ListLiveKnowledgeCreatedSinceAsync(_projectId, since, CancellationToken.None);
+
+        found.Select(m => m.Id).Should().Equal(recent.Id);
+    }
+
+    [Fact]
+    public async Task A_failed_vector_write_keeps_the_saved_rows_and_does_not_throw()
+    {
+        await using var db = await CreateDbAsync();
+        var sut = CreateSut(db);
+        _vectorIndex
+            .Setup(v => v.UpsertAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("vector store unavailable"));
+        var inTransaction = NewMemory("Webhook retries");
+        var direct = NewMemory("Deploys run nightly");
+
+        await sut.InTransactionAsync(async () =>
+        {
+            await sut.InsertAsync(inTransaction, new MemoryVector(ModelKey, [1f, 0f]), [], [], CancellationToken.None);
+            return true;
+        }, CancellationToken.None);
+        await sut.InsertAsync(direct, new MemoryVector(ModelKey, [0f, 1f]), [], [], CancellationToken.None);
+
+        (await sut.GetByIdsAsync([inTransaction.Id, direct.Id], CancellationToken.None)).Should().HaveCount(2);
+        (await sut.GetEmbeddingsAsync([inTransaction.Id, direct.Id], CancellationToken.None)).Should().HaveCount(2);
+    }
+
     private MemoryStoreAdapter CreateSut(ContextDbContext db) => new(new MemoryRepository(db), db, _vectorIndex.Object);
 
     private async Task<ContextDbContext> CreateDbAsync()

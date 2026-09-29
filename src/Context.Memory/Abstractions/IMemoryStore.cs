@@ -38,6 +38,9 @@ public interface IMemoryStore
     /// <summary>Every live non-event memory of the project.</summary>
     Task<IReadOnlyList<Context.Domain.Entities.Memory>> ListLiveKnowledgeAsync(Guid projectId, CancellationToken ct);
 
+    /// <summary>Live non-event memories of the project created at or after <paramref name="since"/>.</summary>
+    Task<IReadOnlyList<Context.Domain.Entities.Memory>> ListLiveKnowledgeCreatedSinceAsync(Guid projectId, DateTimeOffset since, CancellationToken ct);
+
     /// <summary>Inserts the memory with its entities and evidence in one save. A Superseded memory may be
     /// inserted directly (with SupersededById set). The vector is indexed only for a live memory.</summary>
     Task InsertAsync(
@@ -65,6 +68,10 @@ public interface IMemoryStore
 
     /// <summary>Marks a live memory Obsolete and drops its vector. False when it is missing or no longer live.</summary>
     Task<bool> ObsoleteAsync(Guid id, CancellationToken ct);
+
+    /// <summary>Hard-deletes a memory with its evidence, entities and embedding and drops its vector; the
+    /// memories it had superseded become Obsolete. False when it is missing.</summary>
+    Task<bool> DeleteAsync(Guid id, CancellationToken ct);
 
     Task AddEvidenceAsync(IReadOnlyCollection<MemoryEvidence> evidence, CancellationToken ct);
 

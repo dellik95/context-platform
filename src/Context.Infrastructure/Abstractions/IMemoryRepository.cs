@@ -45,6 +45,9 @@ public interface IMemoryRepository
     /// <summary>Newest first.</summary>
     Task<IReadOnlyList<MemoryConsolidationReport>> ListReportsAsync(Guid projectId, CancellationToken ct);
 
+    /// <summary>Reports of every project in <paramref name="status"/>.</summary>
+    Task<IReadOnlyList<MemoryConsolidationReport>> ListReportsByStatusAsync(ConsolidationReportStatus status, CancellationToken ct);
+
     /// <summary>Atomically moves a report from <paramref name="from"/> to <paramref name="to"/>, replacing its
     /// JSON when <paramref name="reportJson"/> is non-null. False when the report is missing or not in
     /// <paramref name="from"/>, so two callers can never both claim the same transition.</summary>

@@ -11,7 +11,8 @@ namespace Context.Application.Jobs.Handlers;
 /// Runs batch reconsolidation for one project. A dry run stores the plan as a Pending report; a
 /// payload with a report id applies that reviewed report, which the apply endpoint has already claimed
 /// (Applying), resolving contradictions the code settles; a scheduled run plans and applies at once,
-/// only flagging contradictions. An apply ends Applied, or Failed when it throws.
+/// only flagging contradictions. An apply ends Applied, or Failed when it throws or, found at startup,
+/// when no queued job will resume it.
 /// </summary>
 public sealed class ReconsolidateMemoryJobHandler(
     MemoryReconsolidator reconsolidator,
@@ -19,6 +20,43 @@ public sealed class ReconsolidateMemoryJobHandler(
     ILogger<ReconsolidateMemoryJobHandler>? logger = null) : IJobHandler
 {
     public JobType Type => JobType.ReconsolidateMemory;
+
+    /// <summary>Marks Failed every Applying report no Pending or Running job carries: a scheduled run
+    /// re-plans after a crash instead of resuming, and a claimed report may never have got its job.
+    /// Runs before the dispatcher starts; returns how many reports it failed.</summary>
+    public static async Task<int> FailOrphanedAppliesAsync(IMemoryRepository memories, IJobRepository jobs, CancellationToken ct)
+    {
+        var applying = await memories.ListReportsByStatusAsync(ConsolidationReportStatus.Applying, ct).ConfigureAwait(false);
+        if (applying.Count == 0)
+        {
+            return 0;
+        }
+
+        var resumable = new HashSet<Guid>();
+        foreach (var status in (JobStatus[])[JobStatus.Pending, JobStatus.Running])
+        {
+            foreach (var job in await jobs.ListByStatusAsync(status, null, ct).ConfigureAwait(false))
+            {
+                if (job.Type == JobType.ReconsolidateMemory
+                    && JsonSerializer.Deserialize<ReconsolidateMemoryPayload>(job.PayloadJson)?.ReportId is { } reportId)
+                {
+                    resumable.Add(reportId);
+                }
+            }
+        }
+
+        var failed = 0;
+        foreach (var report in applying.Where(r => !resumable.Contains(r.Id)))
+        {
+            if (await memories.SetReportStatusAsync(
+                    report.Id, ConsolidationReportStatus.Applying, ConsolidationReportStatus.Failed, null, null, ct).ConfigureAwait(false))
+            {
+                failed++;
+            }
+        }
+
+        return failed;
+    }
 
     public async Task HandleAsync(Job job, CancellationToken ct)
     {

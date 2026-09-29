@@ -41,7 +41,7 @@ public static class MemoryContests
         }
 
         await store.AddEvidenceAsync([supersededEvidence], ct).ConfigureAwait(false);
-        await ReleasePartnersAsync(store, loser.Id, winnerId, ct).ConfigureAwait(false);
+        await ReleaseAsync(store, await PartnersAsync(store, loser.Id, ct).ConfigureAwait(false), winnerId, ct).ConfigureAwait(false);
     }
 
     /// <summary>Marks <paramref name="memoryId"/> Obsolete and releases its contest partners in one store
@@ -54,13 +54,29 @@ public static class MemoryContests
                 return false;
             }
 
-            await ReleasePartnersAsync(store, memoryId, null, ct).ConfigureAwait(false);
+            await ReleaseAsync(store, await PartnersAsync(store, memoryId, ct).ConfigureAwait(false), null, ct).ConfigureAwait(false);
             return true;
         }, ct);
 
-    private static async Task ReleasePartnersAsync(IMemoryStore store, Guid retiredId, Guid? winnerId, CancellationToken ct)
+    /// <summary>Hard-deletes <paramref name="memoryId"/> and releases its contest partners in one store
+    /// transaction; false when it was missing. Partners are read first: the delete takes the evidence
+    /// that names them.</summary>
+    public static Task<bool> ForgetAsync(IMemoryStore store, Guid memoryId, CancellationToken ct) =>
+        store.InTransactionAsync(async () =>
+        {
+            var partners = await PartnersAsync(store, memoryId, ct).ConfigureAwait(false);
+            if (!await store.DeleteAsync(memoryId, ct).ConfigureAwait(false))
+            {
+                return false;
+            }
+
+            await ReleaseAsync(store, partners, null, ct).ConfigureAwait(false);
+            return true;
+        }, ct);
+
+    private static async Task ReleaseAsync(IMemoryStore store, IReadOnlyList<Context.Domain.Entities.Memory> partners, Guid? winnerId, CancellationToken ct)
     {
-        foreach (var partner in await PartnersAsync(store, retiredId, ct).ConfigureAwait(false))
+        foreach (var partner in partners)
         {
             if (partner.Id == winnerId || (await PartnersAsync(store, partner.Id, ct).ConfigureAwait(false)).Count > 0)
             {

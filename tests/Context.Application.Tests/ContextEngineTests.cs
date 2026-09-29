@@ -38,6 +38,7 @@ public sealed class ContextEngineTests
     private readonly Mock<ISessionRepository> _sessionRepository = new();
     private readonly Mock<IProjectSettingsService> _projectSettingsService = new();
     private readonly Mock<IMemoryConsolidator> _memoryConsolidator = new();
+    private readonly Mock<IMemoryStore> _memoryStore = new();
     private readonly Mock<IMemoryVectorIndex> _memoryVectorIndex = new();
     private readonly Mock<ISessionSummaryVectorIndex> _sessionSummaryVectorIndex = new();
     private readonly Mock<IProviderResolver> _providerResolver = new();
@@ -63,6 +64,7 @@ public sealed class ContextEngineTests
             _deliveryCache,
             _projectSettingsService.Object,
             _memoryConsolidator.Object,
+            _memoryStore.Object,
             _memoryVectorIndex.Object,
             _sessionSummaryVectorIndex.Object,
             _providerResolver.Object);
@@ -829,9 +831,14 @@ public sealed class ContextEngineTests
         var projectId = Guid.NewGuid();
         var memory = MakeMemory(projectId, MemoryType.Decision, "JWT", "Short-lived tokens");
         _memoryRepository.Setup(r => r.GetByIdAsync(memory.Id, It.IsAny<CancellationToken>())).ReturnsAsync(memory);
+        _memoryStore.Setup(s => s.InTransactionAsync(It.IsAny<Func<Task<bool>>>(), It.IsAny<CancellationToken>()))
+            .Returns((Func<Task<bool>> work, CancellationToken _) => work());
+        _memoryStore.Setup(s => s.ListEvidenceAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _memoryStore.Setup(s => s.DeleteAsync(memory.Id, It.IsAny<CancellationToken>())).ReturnsAsync(true);
 
         var foreign = await _sut.ForgetMemoryAsync(Guid.NewGuid(), memory.Id, CancellationToken.None);
-        _memoryRepository.Verify(r => r.DeleteAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+        _memoryStore.Verify(s => s.DeleteAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
 
         var own = await _sut.ForgetMemoryAsync(projectId, memory.Id, CancellationToken.None);
         var missing = await _sut.ForgetMemoryAsync(projectId, Guid.NewGuid(), CancellationToken.None);
@@ -839,7 +846,7 @@ public sealed class ContextEngineTests
         foreign.Should().BeFalse();
         own.Should().BeTrue();
         missing.Should().BeFalse();
-        _memoryRepository.Verify(r => r.DeleteAsync(memory.Id, It.IsAny<CancellationToken>()), Times.Once);
+        _memoryStore.Verify(s => s.DeleteAsync(memory.Id, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ---- 6. ProjectInfoAsync uses ISymbolRepository.CountByProjectAsync instead of an O(files) ListByFileAsync loop ----

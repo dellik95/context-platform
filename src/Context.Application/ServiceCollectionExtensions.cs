@@ -129,17 +129,14 @@ public static class ServiceCollectionExtensions
         // Scoped ContextEngine on the read side, both fine to depend on a singleton).
         services.AddSingleton<ISessionSummaryVectorIndex>(_ => new SqliteSessionSummaryVectorIndex(dbPath));
 
-        // Chunk/Memory rows are deleted through the repositories in Context.Infrastructure, which
-        // cannot see the vector indexes above (they live here). These decorations re-register the
-        // interfaces over Context.Infrastructure's own registrations -- last registration wins for
-        // a single resolve -- so every delete prunes the vector store too, wherever it is issued from.
+        // Chunk rows are deleted through Context.Infrastructure's repository, which cannot see the
+        // vector indexes above (they live here). This decoration re-registers the interface over
+        // Context.Infrastructure's own registration -- last registration wins for a single resolve --
+        // so every delete prunes the vector store too, wherever it is issued from. Memory deletes go
+        // through MemoryStoreAdapter, which prunes its own vectors.
         services.AddScoped<ChunkRepository>();
         services.AddScoped<IChunkRepository>(sp => new VectorPruningChunkRepository(
             sp.GetRequiredService<ChunkRepository>(), sp.GetRequiredService<IChunkVectorIndex>()));
-
-        services.AddScoped<MemoryRepository>();
-        services.AddScoped<IMemoryRepository>(sp => new VectorPruningMemoryRepository(
-            sp.GetRequiredService<MemoryRepository>(), sp.GetRequiredService<IMemoryVectorIndex>()));
 
         // Consumed by Context.Retrieval's singleton HybridSearchEngine -> must itself be a
         // singleton (see IDbContextFactory remark above).

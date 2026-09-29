@@ -6,6 +6,7 @@ using Context.Infrastructure;
 using Context.Infrastructure.Abstractions;
 using Context.Memory.Abstractions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using DomainMemory = Context.Domain.Entities.Memory;
 
 namespace Context.Application.Adapters;
@@ -15,12 +16,15 @@ namespace Context.Application.Adapters;
 /// <see cref="ContextDbContext"/>. Each insert or update of a memory writes its entities, evidence and
 /// embedding row in one SaveChanges. The sqlite-vec store writes through its own connection, so its
 /// records are written after the EF write, and inside <see cref="InTransactionAsync{T}"/> only after
-/// the commit (they would otherwise wait on this transaction's write lock).
+/// the commit (they would otherwise wait on this transaction's write lock). A failed vector write is
+/// logged, not thrown: the committed rows stay authoritative, the index refills a missing record on its
+/// next use, and readers filter a leftover one out against the live set.
 /// </summary>
 public sealed class MemoryStoreAdapter(
     IMemoryRepository memoryRepository,
     ContextDbContext db,
-    IMemoryVectorIndex memoryVectorIndex) : IMemoryStore
+    IMemoryVectorIndex memoryVectorIndex,
+    ILogger<MemoryStoreAdapter>? logger = null) : IMemoryStore
 {
     private List<Func<CancellationToken, Task>>? _deferredVectorWrites;
 
@@ -49,7 +53,7 @@ public sealed class MemoryStoreAdapter(
         // Committed rows are authoritative; mirror them into the vector index even if the caller cancels now.
         foreach (var write in deferred)
         {
-            await write(CancellationToken.None).ConfigureAwait(false);
+            await TryWriteVectorAsync(write, CancellationToken.None).ConfigureAwait(false);
         }
 
         return result;
@@ -114,6 +118,19 @@ public sealed class MemoryStoreAdapter(
                 && m.Type != MemoryType.Event
                 && (m.Status == MemoryStatus.Active || m.Status == MemoryStatus.Contested))
             .ToListAsync(ct).ConfigureAwait(false);
+
+    public async Task<IReadOnlyList<DomainMemory>> ListLiveKnowledgeCreatedSinceAsync(Guid projectId, DateTimeOffset since, CancellationToken ct)
+    {
+        // SQLite cannot compare DateTimeOffset server-side, so only ids and timestamps are pulled to filter.
+        var stamps = await db.Memories.AsNoTracking()
+            .Where(m => m.ProjectId == projectId
+                && m.Type != MemoryType.Event
+                && (m.Status == MemoryStatus.Active || m.Status == MemoryStatus.Contested))
+            .Select(m => new { m.Id, m.CreatedAt })
+            .ToListAsync(ct).ConfigureAwait(false);
+        var ids = stamps.Where(s => s.CreatedAt >= since).Select(s => s.Id).ToArray();
+        return ids.Length == 0 ? [] : await db.Memories.AsNoTracking().Where(m => ids.Contains(m.Id)).ToListAsync(ct).ConfigureAwait(false);
+    }
 
     public async Task InsertAsync(
         DomainMemory memory,
@@ -240,6 +257,18 @@ public sealed class MemoryStoreAdapter(
         return changed;
     }
 
+    public async Task<bool> DeleteAsync(Guid id, CancellationToken ct)
+    {
+        if (!await db.Memories.AnyAsync(m => m.Id == id, ct).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        await memoryRepository.DeleteAsync(id, ct).ConfigureAwait(false);
+        await DeleteVectorAsync(id, ct).ConfigureAwait(false);
+        return true;
+    }
+
     public Task AddEvidenceAsync(IReadOnlyCollection<MemoryEvidence> evidence, CancellationToken ct) =>
         memoryRepository.AddEvidenceAsync(evidence, ct);
 
@@ -278,7 +307,19 @@ public sealed class MemoryStoreAdapter(
             return Task.CompletedTask;
         }
 
-        return write(ct);
+        return TryWriteVectorAsync(write, ct);
+    }
+
+    private async Task TryWriteVectorAsync(Func<CancellationToken, Task> write, CancellationToken ct)
+    {
+        try
+        {
+            await write(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogWarning(ex, "Memory vector index write failed after its rows were saved.");
+        }
     }
 
     private IQueryable<DomainMemory> LiveRow(Guid id) =>

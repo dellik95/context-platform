@@ -1,4 +1,5 @@
 using Context.Application;
+using Context.Application.Jobs.Handlers;
 using Context.Application.Providers;
 using Context.Claude;
 using Context.Graph;
@@ -226,6 +227,15 @@ try
         // why this runs once here rather than lazily inside BearerTokenAuth's lookup path.
         var projectsForBackfill = migrationScope.ServiceProvider.GetRequiredService<IProjectRepository>();
         await ProjectTokenBackfill.ReconcileAsync(projectsForBackfill, CancellationToken.None).ConfigureAwait(false);
+
+        var orphanedApplies = await ReconsolidateMemoryJobHandler.FailOrphanedAppliesAsync(
+            migrationScope.ServiceProvider.GetRequiredService<IMemoryRepository>(),
+            migrationScope.ServiceProvider.GetRequiredService<IJobRepository>(),
+            CancellationToken.None).ConfigureAwait(false);
+        if (orphanedApplies > 0)
+        {
+            Log.Warning("Marked {Count} reconsolidation report(s) Failed: left Applying with no job to resume them.", orphanedApplies);
+        }
     }
 
     // First in the pipeline, before anything can act on the request: rejects Host headers outside

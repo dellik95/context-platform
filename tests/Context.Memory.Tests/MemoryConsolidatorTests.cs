@@ -190,6 +190,25 @@ public sealed class MemoryConsolidatorTests
     }
 
     [Fact]
+    public async Task Forgetting_one_side_of_a_contest_hands_the_other_back_to_active()
+    {
+        _embeddings.Map("is 14 days", Near(0.93)).Map("refund window", Axis(0));
+        _chat.UseModel(judge: _ => "1|CONTRADICTS|30 days versus 14 days");
+        var original = await ConsolidateAsync(RefundWindow(30), _sessionA);
+        var contender = await ConsolidateAsync(RefundWindow(14), _sessionB);
+
+        var forgotten = await MemoryContests.ForgetAsync(_store, contender.Memory.Id, CancellationToken.None);
+        var again = await MemoryContests.ForgetAsync(_store, contender.Memory.Id, CancellationToken.None);
+
+        forgotten.Should().BeTrue();
+        again.Should().BeFalse();
+        var kept = _store.All.Should().ContainSingle().Subject;
+        kept.Id.Should().Be(original.Memory.Id);
+        kept.Status.Should().Be(MemoryStatus.Active);
+        kept.Confidence.Should().BeApproximately(0.70, 1e-9);
+    }
+
+    [Fact]
     public async Task Offline_negation_asymmetry_contests_even_a_near_identical_embedding()
     {
         _embeddings.Map("not supported", Near(0.98)).Map("partial refunds", Axis(0));
@@ -519,6 +538,50 @@ public sealed class MemoryConsolidatorTests
         result.Outcome.Should().Be(ConsolidationOutcome.Reinforced);
         result.Memory.Id.Should().Be(old.Id);
         _store.VectorOf(old.Id)!.ModelKey.Should().Be(ModelKey);
+    }
+
+    [Fact]
+    public async Task Claim_stored_concurrently_after_the_neighbour_search_is_reinforced_instead_of_inserted_twice()
+    {
+        _embeddings.Map("webhook retries", Axis(0));
+        DomainMemory? concurrent = null;
+        _store.BeforeNextTransaction = () => concurrent = Seed(WebhookRetries(), _sessionA, Axis(0), TimeSpan.Zero);
+
+        var result = await ConsolidateAsync(WebhookRetries(), _sessionB);
+
+        result.Outcome.Should().Be(ConsolidationOutcome.Reinforced);
+        result.Memory.Id.Should().Be(concurrent!.Id);
+        var memory = _store.Live.Should().ContainSingle().Subject;
+        memory.SourceCount.Should().Be(2);
+        _store.EvidenceFor(memory.Id).Should().ContainSingle(e => e.Relation == EvidenceRelation.Reinforced && e.Note == "same claim stored concurrently");
+    }
+
+    [Fact]
+    public async Task Concurrent_claim_with_the_same_text_under_another_model_is_still_a_duplicate()
+    {
+        _embeddings.Map("webhook retries", Axis(0));
+        _store.BeforeNextTransaction = () => Seed(WebhookRetries(), _sessionA, Axis(1), TimeSpan.Zero, modelKey: "other:embed");
+
+        var result = await ConsolidateAsync(WebhookRetries(), _sessionB);
+
+        result.Outcome.Should().Be(ConsolidationOutcome.Reinforced);
+        _store.Live.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Concurrent_claim_of_the_opposite_polarity_is_not_taken_for_a_duplicate()
+    {
+        _embeddings.Map("not supported", Near(0.98)).Map("partial refunds", Axis(0));
+        _store.BeforeNextTransaction = () => Seed(
+            Knowledge(MemoryType.Behavior, "Payments partial refunds", "RefundService supports partial refunds.", "Payments refunds"),
+            _sessionA, Axis(0), TimeSpan.Zero);
+
+        var result = await ConsolidateAsync(
+            Knowledge(MemoryType.Behavior, "Payments partial refunds are not supported", "RefundService only refunds the full amount.", "Payments refunds"),
+            _sessionB);
+
+        result.Outcome.Should().Be(ConsolidationOutcome.Created);
+        _store.Live.Should().HaveCount(2);
     }
 
     [Fact]

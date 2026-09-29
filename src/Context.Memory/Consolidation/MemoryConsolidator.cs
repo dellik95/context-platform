@@ -19,7 +19,8 @@ namespace Context.Memory.Consolidation;
 /// live neighbours found by shared strong entity, topic key or embedding similarity, and the strongest
 /// verdict (duplicate, supersedes, contradicts, complements) decides whether it reinforces, replaces,
 /// contests, merges into a neighbour or is inserted on its own. Each placement is written in one
-/// store transaction that re-reads its target; model and embedding calls stay outside it.
+/// store transaction that re-reads its target and reinforces the same claim instead if a concurrent
+/// consolidation stored it meanwhile; model and embedding calls stay outside it.
 /// </summary>
 public sealed class MemoryConsolidator(
     IMemoryStore store,
@@ -38,6 +39,10 @@ public sealed class MemoryConsolidator(
     private const int MaxTopicNeighbours = 10;
     private const int SimilaritySearchLimit = 16;
     private const int MaxSimilarNeighbours = 8;
+    private const string ConcurrentDuplicateNote = "same claim stored concurrently";
+
+    // How far back a concurrent consolidation's CreatedAt can lie: it is stamped before the model calls.
+    private static readonly TimeSpan ConcurrentWindow = TimeSpan.FromHours(1);
 
     private static readonly EmbeddingGenerationOptions InteractiveOptions = new()
     {
@@ -140,6 +145,12 @@ public sealed class MemoryConsolidator(
 
         return await store.InTransactionAsync(async () =>
         {
+            if (relation != MemoryRelation.Duplicate
+                && await FindConcurrentDuplicateAsync(incoming, ct).ConfigureAwait(false) is { } duplicate)
+            {
+                return await ReinforceAsync(incoming, duplicate, ConcurrentDuplicateNote, ct).ConfigureAwait(false);
+            }
+
             if (await ReloadLiveAsync(neighbour.Memory.Id, ct).ConfigureAwait(false) is not { } target)
             {
                 return await InsertNewAsync(incoming, ct).ConfigureAwait(false);
@@ -547,14 +558,49 @@ public sealed class MemoryConsolidator(
         return new ConsolidationResult(memory, ConsolidationOutcome.Superseded);
     }
 
-    private async Task<ConsolidationResult> InsertNewAsync(Incoming incoming, CancellationToken ct)
+    private Task<ConsolidationResult> InsertNewAsync(Incoming incoming, CancellationToken ct) =>
+        store.InTransactionAsync(async () =>
+        {
+            if (await FindConcurrentDuplicateAsync(incoming, ct).ConfigureAwait(false) is { } duplicate)
+            {
+                return await ReinforceAsync(incoming, duplicate, ConcurrentDuplicateNote, ct).ConfigureAwait(false);
+            }
+
+            var memory = NewMemory(incoming, MemoryStatus.Active);
+            List<MemoryEvidence> evidence = [NewEvidence(incoming, memory.Id, EvidenceRelation.Created)];
+            AddCodeEvidence(evidence, [], incoming, memory.Id, incoming.CodeCheck);
+            ConfidenceModel.Recompute(memory, evidence);
+            await store.InsertAsync(memory, incoming.Embedding, MemoryFields.EntityRows(memory, incoming.Entities), evidence, ct).ConfigureAwait(false);
+            return new ConsolidationResult(memory, ConsolidationOutcome.Created);
+        }, ct);
+
+    /// <summary>The same claim stored by another consolidation after this one searched for neighbours.
+    /// Read inside the write transaction, so two concurrent writers of one claim cannot both insert it.</summary>
+    private async Task<DomainMemory?> FindConcurrentDuplicateAsync(Incoming incoming, CancellationToken ct)
     {
-        var memory = NewMemory(incoming, MemoryStatus.Active);
-        List<MemoryEvidence> evidence = [NewEvidence(incoming, memory.Id, EvidenceRelation.Created)];
-        AddCodeEvidence(evidence, [], incoming, memory.Id, incoming.CodeCheck);
-        ConfidenceModel.Recompute(memory, evidence);
-        await store.InsertAsync(memory, incoming.Embedding, MemoryFields.EntityRows(memory, incoming.Entities), evidence, ct).ConfigureAwait(false);
-        return new ConsolidationResult(memory, ConsolidationOutcome.Created);
+        var recent = (await store.ListLiveKnowledgeCreatedSinceAsync(incoming.ProjectId, incoming.Now - ConcurrentWindow, ct).ConfigureAwait(false))
+            .Where(m => m.Type == incoming.Candidate.Type)
+            .ToList();
+        if (recent.Count == 0)
+        {
+            return null;
+        }
+
+        var vectors = await store.GetEmbeddingsAsync([.. recent.Select(m => m.Id)], ct).ConfigureAwait(false);
+        var candidate = RelationSubject.From(incoming.Candidate);
+        var title = TextTokens.Normalize(incoming.Candidate.Title);
+        var body = TextTokens.Normalize(incoming.Candidate.Body);
+
+        bool SameEmbedding(DomainMemory m) =>
+            incoming.Embedding is { } query
+            && vectors.TryGetValue(m.Id, out var stored)
+            && stored.ModelKey == query.ModelKey
+            && stored.Vector.Length == query.Vector.Length
+            && CosineSimilarity.Compute(query.Vector, stored.Vector) >= FastDuplicateCosine;
+
+        return recent.FirstOrDefault(m =>
+            !MemoryRelationJudge.HasNegationAsymmetry(candidate, RelationSubject.From(m))
+            && (SameEmbedding(m) || (TextTokens.Normalize(m.Title) == title && TextTokens.Normalize(m.Body) == body)));
     }
 
     private Task<ConsolidationResult> InsertSiblingAsync(Incoming incoming, DomainMemory target, CancellationToken ct) =>

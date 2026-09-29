@@ -139,6 +139,53 @@ public sealed class ReconsolidateMemoryJobHandlerTests : IDisposable
         await act.Should().ThrowAsync<InvalidOperationException>();
     }
 
+    [Fact]
+    public async Task Startup_sweep_fails_only_applying_reports_no_queued_job_will_resume()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var resumable = await AddReportAsync(fixture, ConsolidationReportStatus.Applying);
+        var queued = await AddReportAsync(fixture, ConsolidationReportStatus.Applying);
+        var orphaned = await AddReportAsync(fixture, ConsolidationReportStatus.Applying);
+        var finishedJob = await AddReportAsync(fixture, ConsolidationReportStatus.Applying);
+        var pending = await AddReportAsync(fixture, ConsolidationReportStatus.Pending);
+        fixture.Db.Jobs.AddRange(
+            Status(MakeJob(new ReconsolidateMemoryPayload(_projectId, DryRun: false, ReportId: resumable.Id)), JobStatus.Running),
+            MakeJob(new ReconsolidateMemoryPayload(_projectId, DryRun: false, ReportId: queued.Id)),
+            Status(MakeJob(new ReconsolidateMemoryPayload(_projectId, DryRun: false, ReportId: finishedJob.Id)), JobStatus.Done),
+            MakeJob(new ReconsolidateMemoryPayload(_projectId, DryRun: false)));
+        await fixture.Db.SaveChangesAsync();
+
+        var failed = await ReconsolidateMemoryJobHandler.FailOrphanedAppliesAsync(fixture.Memories, new JobRepository(fixture.Db), CancellationToken.None);
+
+        failed.Should().Be(2);
+        var statuses = (await fixture.Memories.ListReportsAsync(_projectId, CancellationToken.None)).ToDictionary(r => r.Id, r => r.Status);
+        statuses.Should().BeEquivalentTo(new Dictionary<Guid, ConsolidationReportStatus>
+        {
+            [resumable.Id] = ConsolidationReportStatus.Applying,
+            [queued.Id] = ConsolidationReportStatus.Applying,
+            [orphaned.Id] = ConsolidationReportStatus.Failed,
+            [finishedJob.Id] = ConsolidationReportStatus.Failed,
+            [pending.Id] = ConsolidationReportStatus.Pending,
+        });
+
+        static Job Status(Job job, JobStatus status)
+        {
+            job.Status = status;
+            return job;
+        }
+    }
+
+    private Task<MemoryConsolidationReport> AddReportAsync(Fixture fixture, ConsolidationReportStatus status) =>
+        fixture.Memories.AddReportAsync(
+            new MemoryConsolidationReport
+            {
+                ProjectId = _projectId,
+                CreatedAt = DateTimeOffset.UtcNow,
+                Status = status,
+                ReportJson = new ReconsolidationReport([], [], 0, new ReconsolidationStats(0, 0, 0, 0, 0, 0, 0, 0, false)).ToJson(),
+            },
+            CancellationToken.None);
+
     private async Task<MemoryConsolidationReport> ClaimPendingReportAsync(Fixture fixture)
     {
         var pending = (await fixture.Memories.ListReportsAsync(_projectId, CancellationToken.None)).Single();
@@ -214,7 +261,7 @@ public sealed class ReconsolidateMemoryJobHandlerTests : IDisposable
         db.ChangeTracker.Clear();
 
         var vectorIndex = new SqliteMemoryVectorIndex(_dbPath, new FakeDbContextFactory(Options));
-        var memories = new VectorPruningMemoryRepository(new MemoryRepository(db), vectorIndex);
+        var memories = new MemoryRepository(db);
         var store = new MemoryStoreAdapter(memories, db, vectorIndex);
         var codeVerifier = new CodeVerifier(new FileRepository(db), new SymbolRepository(db), new ProjectRepository(db));
         var embeddings = new FixedEmbeddingGenerator();
@@ -234,7 +281,7 @@ public sealed class ReconsolidateMemoryJobHandlerTests : IDisposable
     private sealed record Fixture(
         ContextDbContext Db,
         SqliteMemoryVectorIndex VectorIndex,
-        VectorPruningMemoryRepository Memories,
+        MemoryRepository Memories,
         MemoryStoreAdapter Store,
         FixedEmbeddingGenerator Embeddings,
         ReconsolidateMemoryJobHandler Sut) : IAsyncDisposable
