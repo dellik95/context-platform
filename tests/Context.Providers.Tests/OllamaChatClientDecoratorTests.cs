@@ -10,15 +10,15 @@ public class OllamaChatClientDecoratorTests
     private static readonly DateTimeOffset Start = new(2026, 9, 29, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public async Task A_429_surfaces_as_rate_limited_with_a_one_minute_cooldown_not_a_pull_hint()
+    public async Task A_429_surfaces_as_rate_limited_with_the_default_cooldown_not_a_pull_hint()
     {
         var inner = new ScriptedChatClient(RateLimit);
-        var client = new OllamaChatClientDecorator(inner, "gpt-oss:20b-cloud", new ManualTimeProvider(Start));
+        var client = new OllamaChatClientDecorator(inner, "gpt-oss:20b-cloud", timeProvider: new ManualTimeProvider(Start));
 
         var act = () => client.GetResponseAsync("hi");
 
         var ex = (await act.Should().ThrowAsync<ProviderRateLimitedException>()).Which;
-        ex.RetryAt.Should().Be(Start.AddMinutes(1));
+        ex.RetryAt.Should().Be(Start.AddMinutes(5));
         ex.Message.Should().Contain("429").And.NotContain("ollama pull");
     }
 
@@ -27,13 +27,13 @@ public class OllamaChatClientDecoratorTests
     {
         var time = new ManualTimeProvider(Start);
         var inner = new ScriptedChatClient(RateLimit);
-        var client = new OllamaChatClientDecorator(inner, "gpt-oss:20b-cloud", time);
+        var client = new OllamaChatClientDecorator(inner, "gpt-oss:20b-cloud", timeProvider: time);
         await Swallow(client.GetResponseAsync("hi"));
 
-        time.Advance(TimeSpan.FromSeconds(30));
+        time.Advance(TimeSpan.FromMinutes(2));
         var act = () => client.GetResponseAsync("hi");
 
-        (await act.Should().ThrowAsync<ProviderRateLimitedException>()).Which.RetryAt.Should().Be(Start.AddMinutes(1));
+        (await act.Should().ThrowAsync<ProviderRateLimitedException>()).Which.RetryAt.Should().Be(Start.AddMinutes(5));
         inner.Calls.Should().Be(1);
     }
 
@@ -42,24 +42,39 @@ public class OllamaChatClientDecoratorTests
     {
         var time = new ManualTimeProvider(Start);
         var inner = new ScriptedChatClient(RateLimit, RateLimit, Ok, RateLimit);
-        var client = new OllamaChatClientDecorator(inner, "gpt-oss:20b-cloud", time);
+        var client = new OllamaChatClientDecorator(inner, "gpt-oss:20b-cloud", timeProvider: time);
 
         await Swallow(client.GetResponseAsync("hi"));
-        time.Advance(TimeSpan.FromMinutes(1));
+        time.Advance(TimeSpan.FromMinutes(5));
         var second = await Record(client.GetResponseAsync("hi"));
-        time.Advance(TimeSpan.FromMinutes(2));
+        time.Advance(TimeSpan.FromMinutes(10));
         await client.GetResponseAsync("hi");
         var afterSuccess = await Record(client.GetResponseAsync("hi"));
 
-        second!.RetryAt.Should().Be(Start.AddMinutes(1 + 2));
-        afterSuccess!.RetryAt.Should().Be(Start.AddMinutes(3 + 1));
+        second!.RetryAt.Should().Be(Start.AddMinutes(5 + 10));
+        afterSuccess!.RetryAt.Should().Be(Start.AddMinutes(15 + 5));
+    }
+
+    [Fact]
+    public async Task The_configured_cooldown_doubles_up_to_its_cap()
+    {
+        var time = new ManualTimeProvider(Start);
+        var resilience = new ProviderResilienceOptions { RateLimitCooldown = TimeSpan.FromMinutes(2), RateLimitMaxCooldown = TimeSpan.FromMinutes(3) };
+        var client = new OllamaChatClientDecorator(new ScriptedChatClient(RateLimit), "gpt-oss:20b-cloud", resilience, time);
+
+        var first = await Record(client.GetResponseAsync("hi"));
+        time.Advance(TimeSpan.FromMinutes(2));
+        var capped = await Record(client.GetResponseAsync("hi"));
+
+        first!.RetryAt.Should().Be(Start.AddMinutes(2));
+        capped!.RetryAt.Should().Be(Start.AddMinutes(2 + 3));
     }
 
     [Fact]
     public async Task Other_failures_keep_the_is_Ollama_running_hint()
     {
         var inner = new ScriptedChatClient(() => throw new HttpRequestException("refused", null, HttpStatusCode.InternalServerError));
-        var client = new OllamaChatClientDecorator(inner, "llama3", new ManualTimeProvider(Start));
+        var client = new OllamaChatClientDecorator(inner, "llama3", timeProvider: new ManualTimeProvider(Start));
 
         var act = () => client.GetResponseAsync("hi");
 

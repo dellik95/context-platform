@@ -3,6 +3,7 @@ import { Component, DestroyRef, computed, effect, inject, signal } from '@angula
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCheckboxChange, MatCheckboxModule } from '@angular/material/checkbox';
+import { MatDialogModule } from '@angular/material/dialog';
 import { MatExpansionModule } from '@angular/material/expansion';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
@@ -16,15 +17,25 @@ import { ProjectContextService } from '../projects/project-context.service';
 /**
  * Batch memory reconsolidation: queue a dry run, review its report group by group, then apply it
  * with some groups excluded or discard it. Runs are background jobs, so after queueing one the
- * reports list refetches on every job-count push until it changes.
+ * reports list refetches on every job-count push until it changes. Opened from the Memories page
+ * with that page's injector, so it shares the page's ProjectContextService.
  */
 @Component({
-  selector: 'app-consolidation-panel',
-  imports: [CommonModule, MatButtonModule, MatCheckboxModule, MatExpansionModule, MatIconModule, MatProgressBarModule, MatTooltipModule],
-  templateUrl: './consolidation-panel.component.html',
-  styleUrl: './consolidation-panel.component.scss',
+  selector: 'app-consolidation-dialog',
+  imports: [
+    CommonModule,
+    MatButtonModule,
+    MatCheckboxModule,
+    MatDialogModule,
+    MatExpansionModule,
+    MatIconModule,
+    MatProgressBarModule,
+    MatTooltipModule,
+  ],
+  templateUrl: './consolidation-dialog.component.html',
+  styleUrl: './consolidation-dialog.component.scss',
 })
-export class ConsolidationPanelComponent {
+export class ConsolidationDialogComponent {
   private readonly api = inject(ApiService);
   private readonly snackBar = inject(MatSnackBar);
   private readonly signalr = inject(SignalrService);

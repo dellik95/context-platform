@@ -133,7 +133,18 @@ public sealed class ProjectSettingsService(
                 : 240,
             FoundryBaseUrl: section?["FoundryBaseUrl"],
             FoundryEmbeddingModel: section?["FoundryEmbeddingModel"],
-            FoundryChatModel: section?["FoundryChatModel"]);
+            FoundryChatModel: section?["FoundryChatModel"],
+            LlmTimeoutSeconds: int.TryParse(section?["LlmTimeoutSeconds"], out var llmTimeoutSeconds) ? llmTimeoutSeconds : options.LlmTimeoutSeconds,
+            LlmMaxRetries: int.TryParse(section?["LlmMaxRetries"], out var llmMaxRetries) ? llmMaxRetries : 0,
+            LlmRetryBaseDelaySeconds: int.TryParse(section?["LlmRetryBaseDelaySeconds"], out var llmRetryBaseDelaySeconds)
+                ? llmRetryBaseDelaySeconds
+                : ProviderResilienceOptions.DefaultRetryBaseDelaySeconds,
+            RateLimitCooldownMinutes: int.TryParse(section?["RateLimitCooldownMinutes"], out var rateLimitCooldownMinutes)
+                ? rateLimitCooldownMinutes
+                : ProviderResilienceOptions.DefaultRateLimitCooldownMinutes,
+            RateLimitMaxCooldownMinutes: int.TryParse(section?["RateLimitMaxCooldownMinutes"], out var rateLimitMaxCooldownMinutes)
+                ? rateLimitMaxCooldownMinutes
+                : ProviderResilienceOptions.DefaultRateLimitMaxCooldownMinutes);
     }
 
     // A malformed/legacy ConfigJson must fall back to defaults rather than fail GetAsync outright.

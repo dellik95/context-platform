@@ -39,6 +39,11 @@ describe('SettingsPanelComponent cloud provider disclosure', () => {
     hookInvocationRetentionDays: 30,
     memoryReconsolidationIntervalMinutes: 0,
     lastMemoryReconsolidationScheduledAt: null,
+    llmTimeoutSeconds: 1200,
+    llmMaxRetries: 0,
+    llmRetryBaseDelaySeconds: 30,
+    rateLimitCooldownMinutes: 5,
+    rateLimitMaxCooldownMinutes: 60,
   };
 
   function fakeSettingsResource(settings: ProjectSettingsDto) {

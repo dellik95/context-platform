@@ -1,0 +1,30 @@
+<h2 mat-dialog-title class="dialog-title">
+  <mat-icon>description</mat-icon>
+  Recent logs
+  @if (filePath()) {
+    <span class="log-path">{{ filePath() }}</span>
+  }
+</h2>
+
+<mat-dialog-content>
+  @if (initialLoading()) {
+    <mat-progress-bar mode="indeterminate" />
+  } @else if (lines(); as lines) {
+    @if (lines.length === 0) {
+      <p class="muted">No log lines available.</p>
+    } @else {
+      <pre class="log-tail">{{ lines.join('\n') }}</pre>
+    }
+  }
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  @if (loading() && !initialLoading()) {
+    <mat-progress-bar mode="indeterminate" class="inline-progress" />
+  }
+  <button mat-stroked-button type="button" (click)="refresh()" [disabled]="loading()">
+    <mat-icon>refresh</mat-icon>
+    Refresh
+  </button>
+  <button mat-button mat-dialog-close>Close</button>
+</mat-dialog-actions>

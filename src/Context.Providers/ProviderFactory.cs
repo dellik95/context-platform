@@ -30,24 +30,22 @@ namespace Context.Providers;
 /// same "few long-lived HttpClient instances" pattern <c>IHttpClientFactory</c> itself exists to
 /// avoid needing, for exactly this kind of small, known endpoint set.
 /// <para/>
-/// One accepted behavioral difference from the DI-registration path: no Polly retry pipeline here
-/// (that pipeline is built via <c>IHttpClientBuilder.AddResilienceHandler</c>, a DI-registration-time-
-/// only API) — just a plain per-call <see cref="HttpClient.Timeout"/>. Acceptable for a per-project
-/// resolver serving a local-first, mostly-local-Ollama use case; the shared default path keeps full
-/// retry/timeout resilience unchanged.
+/// Retry is built directly on each client (a <see cref="Microsoft.Extensions.Http.Resilience.ResilienceHandler"/>
+/// wrapping a hand-built pipeline, or the OpenAI SDK's own retry policy) from the project's
+/// <see cref="ProviderResilienceOptions"/>, since <c>AddResilienceHandler</c> is DI-registration-only.
 /// </summary>
 public static class ProviderFactory
 {
     public static IEmbeddingGenerator<string, Embedding<float>> CreateOllamaEmbeddingGenerator(
-        string baseUrl, string model, TimeSpan timeout, ILoggerFactory loggerFactory)
+        string baseUrl, string model, ProviderResilienceOptions resilience, ILoggerFactory loggerFactory)
     {
-        var http = CreateOllamaHttpClient(baseUrl, "Ollama embeddings", timeout, loggerFactory);
+        var http = CreateOllamaHttpClient(baseUrl, "Ollama embeddings", resilience, loggerFactory);
         IEmbeddingGenerator<string, Embedding<float>> inner = new OllamaApiClient(http, model);
         return new OllamaEmbeddingGeneratorDecorator(inner, model);
     }
 
     public static IEmbeddingGenerator<string, Embedding<float>> CreateOpenAiEmbeddingGenerator(
-        OpenAiOptions options, TimeSpan timeout, ILoggerFactory loggerFactory)
+        OpenAiOptions options, ProviderResilienceOptions resilience, ILoggerFactory loggerFactory)
     {
         if (string.IsNullOrWhiteSpace(options.ApiKey))
         {
@@ -56,7 +54,7 @@ public static class ProviderFactory
                 "(e.g. sourced from the OPENAI_API_KEY environment variable) before use.");
         }
 
-        var clientOptions = new OpenAIClientOptions { NetworkTimeout = timeout };
+        var clientOptions = new OpenAIClientOptions { NetworkTimeout = resilience.Timeout, RetryPolicy = resilience.ToClientRetryPolicy() };
         if (!string.IsNullOrWhiteSpace(options.BaseUrl))
         {
             clientOptions.Endpoint = new Uri(options.BaseUrl);
@@ -71,29 +69,33 @@ public static class ProviderFactory
     }
 
     public static IEmbeddingGenerator<string, Embedding<float>> CreateFoundryLocalEmbeddingGenerator(
-        string baseUrl, string model, TimeSpan timeout) =>
+        string baseUrl, string model, ProviderResilienceOptions resilience) =>
         new FoundryLocalEmbeddingGenerator(
-            new HttpClient { BaseAddress = new Uri(FoundryLocalOptions.ApiBaseUrl(baseUrl) + "/"), Timeout = timeout },
+            new HttpClient(resilience.WithRetry(new SocketsHttpHandler()))
+            {
+                BaseAddress = new Uri(FoundryLocalOptions.ApiBaseUrl(baseUrl) + "/"),
+                Timeout = resilience.Timeout,
+            },
             model);
 
-    public static IChatClient CreateFoundryLocalChatClient(string baseUrl, string model, TimeSpan timeout)
+    public static IChatClient CreateFoundryLocalChatClient(string baseUrl, string model, ProviderResilienceOptions resilience)
     {
         var endpoint = new Uri(FoundryLocalOptions.ApiBaseUrl(baseUrl));
         var chatClient = new ChatClient(
             model,
             new ApiKeyCredential(FoundryLocalOptions.PlaceholderApiKey),
-            new OpenAIClientOptions { Endpoint = endpoint, NetworkTimeout = timeout });
+            new OpenAIClientOptions { Endpoint = endpoint, NetworkTimeout = resilience.Timeout, RetryPolicy = resilience.ToClientRetryPolicy() });
         return new FoundryLocalChatClientDecorator(chatClient.AsIChatClient(), endpoint, model);
     }
 
-    public static IChatClient CreateOllamaChatClient(string baseUrl, string model, TimeSpan timeout, ILoggerFactory loggerFactory)
+    public static IChatClient CreateOllamaChatClient(string baseUrl, string model, ProviderResilienceOptions resilience, ILoggerFactory loggerFactory)
     {
-        var http = CreateOllamaHttpClient(baseUrl, "Ollama chat", timeout, loggerFactory);
+        var http = CreateOllamaHttpClient(baseUrl, "Ollama chat", resilience, loggerFactory);
         IChatClient inner = new OllamaApiClient(http, model);
-        return new OllamaChatClientDecorator(inner, model);
+        return new OllamaChatClientDecorator(inner, model, resilience);
     }
 
-    public static IChatClient CreateAnthropicChatClient(AnthropicOptions options, TimeSpan timeout, ILoggerFactory loggerFactory)
+    public static IChatClient CreateAnthropicChatClient(AnthropicOptions options, ProviderResilienceOptions resilience, ILoggerFactory loggerFactory)
     {
         if (string.IsNullOrWhiteSpace(options.ApiKey))
         {
@@ -102,7 +104,7 @@ public static class ProviderFactory
                 "(e.g. sourced from the ANTHROPIC_API_KEY environment variable) before use.");
         }
 
-        var http = new HttpClient { Timeout = timeout };
+        var http = new HttpClient(resilience.WithRetry(new SocketsHttpHandler())) { Timeout = resilience.Timeout };
         if (!string.IsNullOrWhiteSpace(options.BaseUrl))
         {
             http.BaseAddress = new Uri(options.BaseUrl.TrimEnd('/') + "/");
@@ -115,17 +117,17 @@ public static class ProviderFactory
             anthropicChatClient, loggerFactory.CreateLogger<SecretRedactingChatClientDecorator>());
     }
 
-    private static HttpClient CreateOllamaHttpClient(string baseUrl, string label, TimeSpan timeout, ILoggerFactory loggerFactory)
+    private static HttpClient CreateOllamaHttpClient(string baseUrl, string label, ProviderResilienceOptions resilience, ILoggerFactory loggerFactory)
     {
         var fallbackHandler = new OllamaHostFallbackHandler(baseUrl, label, loggerFactory.CreateLogger<OllamaHostFallbackHandler>())
         {
             InnerHandler = new SocketsHttpHandler(),
         };
 
-        return new HttpClient(fallbackHandler)
+        return new HttpClient(resilience.WithRetry(fallbackHandler))
         {
             BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/"),
-            Timeout = timeout,
+            Timeout = resilience.Timeout,
         };
     }
 }

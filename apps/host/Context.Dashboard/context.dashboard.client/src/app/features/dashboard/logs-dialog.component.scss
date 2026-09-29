@@ -1,0 +1,34 @@
+.dialog-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.log-path {
+  overflow: hidden;
+  color: var(--mat-sys-on-surface-variant);
+  font-family: ui-monospace, monospace;
+  font-size: 0.78rem;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.muted {
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.log-tail {
+  margin: 0;
+  padding: 8px;
+  background: var(--mat-sys-surface-variant);
+  border-radius: 4px;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.inline-progress {
+  flex: 1;
+  max-width: 120px;
+}

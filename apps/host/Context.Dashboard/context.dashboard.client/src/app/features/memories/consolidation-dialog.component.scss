@@ -1,9 +1,12 @@
-.consolidation-panel {
-  mat-panel-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
+.dialog-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dialog-subtitle {
+  font-size: 0.9rem;
+  font-weight: 400;
 }
 
 .toolbar {

@@ -499,6 +499,11 @@ export interface ProjectSettingsDto {
   hookInvocationRetentionDays: number; // <= 0 disables cleanup of HookInvocations rows
   memoryReconsolidationIntervalMinutes: number; // <= 0 disables periodic memory reconsolidation
   lastMemoryReconsolidationScheduledAt: string | null; // ISO-8601
+  llmTimeoutSeconds: number; // budget for one provider call, retries included
+  llmMaxRetries: number; // 0 = never retry a failed provider call
+  llmRetryBaseDelaySeconds: number; // first retry delay, doubled per retry
+  rateLimitCooldownMinutes: number; // pause after an Ollama 429, doubled per repeat
+  rateLimitMaxCooldownMinutes: number;
 }
 
 // Response of POST /api/projects/{id}/claude/install.

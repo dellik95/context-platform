@@ -3,6 +3,7 @@ import { Component, DestroyRef, computed, effect, inject, signal } from '@angula
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
+import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { MatExpansionModule } from '@angular/material/expansion';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
@@ -12,6 +13,7 @@ import { ApiService } from '../../core/api.service';
 import { HookInvocationDto, JobDto, ReindexProgressEvent } from '../../core/models';
 import { SignalrService } from '../../core/signalr.service';
 import { ProjectContextService } from '../projects/project-context.service';
+import { LogsDialogComponent } from './logs-dialog.component';
 
 // Job counts (pending/running/failed/done) update live over the "JobCountsChanged" SignalR push
 // (see the constructor) -- this interval is only a reconciliation fallback for the rest of the
@@ -40,8 +42,8 @@ const RUNNING_JOBS_RELOAD_MIN_MS = 3000;
  * existing statusResource value in place — no refetch, no loading flicker), and a live reindex
  * progress bar fed by the "ReindexProgress" SignalR event for the current project. Also hosts
  * operational drill-down that the live counts above don't provide: a Failed jobs table
- * (GET /api/jobs, scoped to the current project; POST /api/jobs/{id}/retry) and an on-demand host
- * log tail (GET /api/logs/tail, host-wide) — loaded independently of the status above.
+ * (GET /api/jobs, scoped to the current project; POST /api/jobs/{id}/retry), plus a Logs button opening
+ * the host-wide log tail dialog.
  *
  * The reindex progress card below is this component's own SignalR-driven tracker rather than
  * ctx.reindexing()/ctx.reindexProgress() -- ctx only flips reindexing=true when *this* browser
@@ -56,6 +58,7 @@ const RUNNING_JOBS_RELOAD_MIN_MS = 3000;
     CommonModule,
     MatButtonModule,
     MatCardModule,
+    MatDialogModule,
     MatExpansionModule,
     MatIconModule,
     MatProgressBarModule,
@@ -69,6 +72,7 @@ export class DashboardPanelComponent {
   private readonly signalr = inject(SignalrService);
   private readonly snackBar = inject(MatSnackBar);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly dialog = inject(MatDialog);
   protected readonly ctx = inject(ProjectContextService);
 
   // Fetched once at tick=0, then only reconciled on a slow fallback interval (see
@@ -129,17 +133,6 @@ export class DashboardPanelComponent {
   protected readonly hooksLoading = this.hooksStatusResource.isLoading;
   protected readonly initialHooksLoading = computed(() => this.hooksLoading() && !this.hooksStatusResource.hasValue());
   protected readonly hooksError = computed(() => Boolean(this.hooksStatusResource.error()));
-
-  // Log tail: fetched on demand (button click) rather than eagerly, since most visits to this tab
-  // don't need it and a 200-line tail on every load would be wasted work.
-  private readonly logsRequested = signal(false);
-  private readonly logResource = this.api.logTailResource(this.logsRequested);
-  protected readonly logLines = computed(() => (this.logResource.hasValue() ? this.logResource.value().lines : null));
-  protected readonly logFilePath = computed(() => (this.logResource.hasValue() ? this.logResource.value().filePath : null));
-  protected readonly logsLoading = this.logResource.isLoading;
-  // Same first-load-only gating as initialJobsLoading above -- a "Refresh" click keeps the
-  // previous tail visible instead of blanking it while the new one streams in.
-  protected readonly initialLogsLoading = computed(() => this.logsLoading() && !this.logResource.hasValue());
 
   private hideTimer?: ReturnType<typeof setTimeout>;
 
@@ -229,12 +222,6 @@ export class DashboardPanelComponent {
 
         return { count: evt.totalCount, recent: [invocation, ...current.recent].slice(0, 10) };
       });
-    });
-
-    effect(() => {
-      if (this.logResource.error()) {
-        this.snackBar.open('Failed to load log tail — is Context.Host running?', 'Dismiss');
-      }
     });
   }
 
@@ -381,11 +368,7 @@ export class DashboardPanelComponent {
     });
   }
 
-  protected loadLogTail(): void {
-    if (this.logsRequested()) {
-      this.logResource.reload();
-    } else {
-      this.logsRequested.set(true);
-    }
+  protected openLogs(): void {
+    this.dialog.open(LogsDialogComponent, { width: '1100px', maxWidth: '95vw', maxHeight: '90vh' });
   }
 }

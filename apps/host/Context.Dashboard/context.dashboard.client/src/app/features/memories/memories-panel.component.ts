@@ -1,11 +1,12 @@
 import { CommonModule } from '@angular/common';
-import { Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
+import { Component, DestroyRef, Injector, computed, effect, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormField, form } from '@angular/forms/signals';
 import { MatButtonModule } from '@angular/material/button';
 import { MatButtonToggleChange, MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatCardModule } from '@angular/material/card';
 import { MatCheckboxChange, MatCheckboxModule } from '@angular/material/checkbox';
+import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
@@ -17,7 +18,7 @@ import { ApiService } from '../../core/api.service';
 import { Memory, MemoryDetail, MemoryKind } from '../../core/models';
 import { SignalrService } from '../../core/signalr.service';
 import { ProjectContextService } from '../projects/project-context.service';
-import { ConsolidationPanelComponent } from './consolidation-panel.component';
+import { ConsolidationDialogComponent } from './consolidation-dialog.component';
 
 type DetailState = MemoryDetail | 'loading' | 'error';
 
@@ -33,10 +34,10 @@ type DetailState = MemoryDetail | 'loading' | 'error';
     MatFormFieldModule,
     MatInputModule,
     MatCheckboxModule,
+    MatDialogModule,
     MatProgressBarModule,
     MatTabsModule,
     MatTooltipModule,
-    ConsolidationPanelComponent,
   ],
   templateUrl: './memories-panel.component.html',
   styleUrl: './memories-panel.component.scss',
@@ -46,6 +47,8 @@ export class MemoriesPanelComponent {
   private readonly snackBar = inject(MatSnackBar);
   private readonly signalr = inject(SignalrService);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly dialog = inject(MatDialog);
+  private readonly injector = inject(Injector);
   protected readonly ctx = inject(ProjectContextService);
 
   protected readonly searchModel = signal({ query: '', includeSuperseded: false });
@@ -94,6 +97,15 @@ export class MemoriesPanelComponent {
       if (this.resource.error()) {
         this.snackBar.open('Failed to search memories — is Context.Host running?', 'Dismiss');
       }
+    });
+  }
+
+  protected openConsolidation(): void {
+    this.dialog.open(ConsolidationDialogComponent, {
+      injector: this.injector,
+      width: '1100px',
+      maxWidth: '95vw',
+      maxHeight: '90vh',
     });
   }
 

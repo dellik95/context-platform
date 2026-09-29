@@ -3,14 +3,13 @@ using Microsoft.Extensions.AI;
 
 namespace Context.Providers.Llm;
 
-public sealed class OllamaChatClientDecorator(IChatClient inner, string model, TimeProvider? timeProvider = null) : DelegatingChatClient(inner)
+public sealed class OllamaChatClientDecorator(
+    IChatClient inner, string model, ProviderResilienceOptions? resilience = null, TimeProvider? timeProvider = null) : DelegatingChatClient(inner)
 {
     // Ollama cloud models ('-cloud') enforce hourly/daily usage limits. Once one answers 429, every
     // queued job would otherwise hit it again immediately and keep the quota exhausted, so calls
     // fail fast until the cooldown ends; each 429 after a cooldown doubles it.
-    private static readonly TimeSpan InitialCooldown = TimeSpan.FromMinutes(1);
-    private static readonly TimeSpan MaxCooldown = TimeSpan.FromMinutes(30);
-
+    private readonly ProviderResilienceOptions _resilience = resilience ?? new();
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private readonly Lock _gate = new();
     private TimeSpan _cooldown = TimeSpan.Zero;
@@ -66,7 +65,9 @@ public sealed class OllamaChatClientDecorator(IChatClient inner, string model, T
                 return _cooldownUntil;
             }
 
-            _cooldown = _cooldown == TimeSpan.Zero ? InitialCooldown : TimeSpan.FromTicks(Math.Min(MaxCooldown.Ticks, _cooldown.Ticks * 2));
+            _cooldown = _cooldown == TimeSpan.Zero
+                ? _resilience.RateLimitCooldown
+                : TimeSpan.FromTicks(Math.Min(_resilience.RateLimitMaxCooldown.Ticks, _cooldown.Ticks * 2));
             _cooldownUntil = now + _cooldown;
             return _cooldownUntil;
         }

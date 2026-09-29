@@ -40,7 +40,6 @@ public sealed class ProjectProviderResolver(
     IServiceScopeFactory scopeFactory,
     IOptions<AnthropicOptions> anthropicOptions,
     IOptions<OpenAiOptions> openAiOptions,
-    IOptions<ContextProvidersOptions> defaultOptions,
     IOptions<FoundryLocalOptions>? foundryOptions = null,
     ILoggerFactory? loggerFactory = null) : IProviderResolver
 {
@@ -50,7 +49,6 @@ public sealed class ProjectProviderResolver(
     private readonly FoundryLocalOptions _foundryDefaults = foundryOptions?.Value ?? new FoundryLocalOptions();
     private readonly ConcurrentDictionary<string, Lazy<IEmbeddingGenerator<string, Embedding<float>>>> _embeddingCache = new();
     private readonly ConcurrentDictionary<string, Lazy<IChatClient>> _chatCache = new();
-    private readonly TimeSpan _timeout = TimeSpan.FromSeconds(defaultOptions.Value.LlmTimeoutSeconds);
 
     public async Task<IEmbeddingGenerator<string, Embedding<float>>> GetEmbeddingGeneratorAsync(Guid projectId, CancellationToken ct)
     {
@@ -60,20 +58,21 @@ public sealed class ProjectProviderResolver(
         var model = settings.OllamaEmbeddingModel is { Length: > 0 } configuredModel ? configuredModel : OllamaOptions.DefaultEmbeddingModel;
         var foundryBaseUrl = settings.FoundryBaseUrl is { Length: > 0 } configuredFoundryUrl ? configuredFoundryUrl : _foundryDefaults.BaseUrl;
         var foundryModel = settings.FoundryEmbeddingModel is { Length: > 0 } configuredFoundryModel ? configuredFoundryModel : _foundryDefaults.EmbeddingModel;
+        var resilience = settings.ToResilienceOptions();
 
         var key = provider switch
         {
-            "ollama" => $"emb|ollama|{baseUrl}|{model}",
-            "foundry" => $"emb|foundry|{foundryBaseUrl}|{foundryModel}",
-            "openai" => $"emb|openai|{openAiOptions.Value.BaseUrl}|{openAiOptions.Value.Model}",
+            "ollama" => $"emb|ollama|{baseUrl}|{model}|{resilience}",
+            "foundry" => $"emb|foundry|{foundryBaseUrl}|{foundryModel}|{resilience}",
+            "openai" => $"emb|openai|{openAiOptions.Value.BaseUrl}|{openAiOptions.Value.Model}|{resilience}",
             _ => "emb|noop",
         };
 
         return _embeddingCache.GetOrAdd(key, _ => new Lazy<IEmbeddingGenerator<string, Embedding<float>>>(() => provider switch
         {
-            "ollama" => ProviderFactory.CreateOllamaEmbeddingGenerator(baseUrl, model, _timeout, _loggerFactory),
-            "foundry" => ProviderFactory.CreateFoundryLocalEmbeddingGenerator(foundryBaseUrl, foundryModel, _timeout),
-            "openai" => ProviderFactory.CreateOpenAiEmbeddingGenerator(openAiOptions.Value, _timeout, _loggerFactory),
+            "ollama" => ProviderFactory.CreateOllamaEmbeddingGenerator(baseUrl, model, resilience, _loggerFactory),
+            "foundry" => ProviderFactory.CreateFoundryLocalEmbeddingGenerator(foundryBaseUrl, foundryModel, resilience),
+            "openai" => ProviderFactory.CreateOpenAiEmbeddingGenerator(openAiOptions.Value, resilience, _loggerFactory),
             _ => new NoOpEmbeddingGenerator(),
         })).Value;
     }
@@ -86,20 +85,23 @@ public sealed class ProjectProviderResolver(
         var model = settings.OllamaChatModel is { Length: > 0 } configuredModel ? configuredModel : OllamaOptions.DefaultChatModel;
         var foundryBaseUrl = settings.FoundryBaseUrl is { Length: > 0 } configuredFoundryUrl ? configuredFoundryUrl : _foundryDefaults.BaseUrl;
         var foundryModel = settings.FoundryChatModel is { Length: > 0 } configuredFoundryModel ? configuredFoundryModel : _foundryDefaults.ChatModel;
+        var resilience = settings.ToResilienceOptions();
 
+        // Resilience is part of the key: the Ollama client carries its 429 cooldown state, so a
+        // settings change gets a fresh client rather than mutating one other projects share.
         var key = provider switch
         {
-            "ollama" => $"chat|ollama|{baseUrl}|{model}",
-            "foundry" => $"chat|foundry|{foundryBaseUrl}|{foundryModel}",
-            "anthropic" => $"chat|anthropic|{anthropicOptions.Value.BaseUrl}|{anthropicOptions.Value.Model}",
+            "ollama" => $"chat|ollama|{baseUrl}|{model}|{resilience}",
+            "foundry" => $"chat|foundry|{foundryBaseUrl}|{foundryModel}|{resilience}",
+            "anthropic" => $"chat|anthropic|{anthropicOptions.Value.BaseUrl}|{anthropicOptions.Value.Model}|{resilience}",
             _ => "chat|noop",
         };
 
         return _chatCache.GetOrAdd(key, _ => new Lazy<IChatClient>(() => provider switch
         {
-            "ollama" => ProviderFactory.CreateOllamaChatClient(baseUrl, model, _timeout, _loggerFactory),
-            "foundry" => ProviderFactory.CreateFoundryLocalChatClient(foundryBaseUrl, foundryModel, _timeout),
-            "anthropic" => ProviderFactory.CreateAnthropicChatClient(anthropicOptions.Value, _timeout, _loggerFactory),
+            "ollama" => ProviderFactory.CreateOllamaChatClient(baseUrl, model, resilience, _loggerFactory),
+            "foundry" => ProviderFactory.CreateFoundryLocalChatClient(foundryBaseUrl, foundryModel, resilience),
+            "anthropic" => ProviderFactory.CreateAnthropicChatClient(anthropicOptions.Value, resilience, _loggerFactory),
             _ => new NoOpChatClient(),
         })).Value;
     }

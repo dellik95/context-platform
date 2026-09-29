@@ -1,3 +1,5 @@
+using Context.Providers;
+
 namespace Context.Application.Settings;
 
 // Persisted verbatim (as JSON) into Project.ConfigJson - the whole field is this DTO's
@@ -64,4 +66,23 @@ public sealed record ProjectSettingsDto(
     // falls back to CONTEXT_FOUNDRY_* / FoundryLocalOptions' defaults.
     string? FoundryBaseUrl = null,
     string? FoundryEmbeddingModel = null,
-    string? FoundryChatModel = null);
+    string? FoundryChatModel = null,
+    // Provider resilience, applied by ProjectProviderResolver to every provider client it builds.
+    // LlmTimeoutSeconds bounds one call including its retries. LlmMaxRetries 0 = never retry (the
+    // job-level retry in JobDispatcher still applies); retries back off exponentially from
+    // LlmRetryBaseDelaySeconds. The cooldown pair sets the pause after an Ollama 429.
+    int LlmTimeoutSeconds = ContextProvidersOptions.DefaultLlmTimeoutSeconds,
+    int LlmMaxRetries = 0,
+    int LlmRetryBaseDelaySeconds = ProviderResilienceOptions.DefaultRetryBaseDelaySeconds,
+    int RateLimitCooldownMinutes = ProviderResilienceOptions.DefaultRateLimitCooldownMinutes,
+    int RateLimitMaxCooldownMinutes = ProviderResilienceOptions.DefaultRateLimitMaxCooldownMinutes)
+{
+    public ProviderResilienceOptions ToResilienceOptions() => new()
+    {
+        Timeout = TimeSpan.FromSeconds(LlmTimeoutSeconds),
+        MaxRetries = LlmMaxRetries,
+        RetryBaseDelay = TimeSpan.FromSeconds(LlmRetryBaseDelaySeconds),
+        RateLimitCooldown = TimeSpan.FromMinutes(RateLimitCooldownMinutes),
+        RateLimitMaxCooldown = TimeSpan.FromMinutes(RateLimitMaxCooldownMinutes),
+    };
+}

@@ -73,7 +73,7 @@ public class FoundryLocalProviderTests
     [Fact]
     public void Chat_client_reports_foundry_as_its_provider()
     {
-        using var client = ProviderFactory.CreateFoundryLocalChatClient("http://127.0.0.1:5273/v1/", "phi-3.5-mini", TimeSpan.FromSeconds(30));
+        using var client = ProviderFactory.CreateFoundryLocalChatClient("http://127.0.0.1:5273/v1/", "phi-3.5-mini", new ProviderResilienceOptions());
 
         var metadata = client.GetService<ChatClientMetadata>();
 
@@ -88,7 +88,7 @@ public class FoundryLocalProviderTests
     [InlineData("http://127.0.0.1:5273/v1")]
     public void Chat_client_targets_the_v1_api_even_when_the_base_url_omits_it(string baseUrl)
     {
-        using var client = ProviderFactory.CreateFoundryLocalChatClient(baseUrl, "phi-3.5-mini", TimeSpan.FromSeconds(30));
+        using var client = ProviderFactory.CreateFoundryLocalChatClient(baseUrl, "phi-3.5-mini", new ProviderResilienceOptions());
 
         client.GetService<ChatClientMetadata>()!.ProviderUri.Should().Be(new Uri("http://127.0.0.1:5273/v1"));
     }
@@ -96,7 +96,7 @@ public class FoundryLocalProviderTests
     [Fact]
     public void Embedding_generator_targets_the_v1_api_even_when_the_base_url_omits_it()
     {
-        using var generator = ProviderFactory.CreateFoundryLocalEmbeddingGenerator("http://127.0.0.1:5273", "qwen3-embedding-0.6b", TimeSpan.FromSeconds(30));
+        using var generator = ProviderFactory.CreateFoundryLocalEmbeddingGenerator("http://127.0.0.1:5273", "qwen3-embedding-0.6b", new ProviderResilienceOptions());
 
         generator.GetService<EmbeddingGeneratorMetadata>()!.ProviderUri.Should().Be(new Uri("http://127.0.0.1:5273/v1/"));
     }

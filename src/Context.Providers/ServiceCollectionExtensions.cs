@@ -13,8 +13,6 @@ using OllamaSharp;
 using OpenAI;
 using OpenAI.Embeddings;
 using Polly;
-using Polly.Retry;
-using Polly.Timeout;
 
 namespace Context.Providers;
 
@@ -30,7 +28,7 @@ public static class ServiceCollectionExtensions
         services.Configure<AnthropicOptions>(o => o.ApiKey = options.AnthropicApiKey);
         services.Configure<OpenAiOptions>(o => o.ApiKey = options.OpenAiApiKey);
 
-        var timeout = TimeSpan.FromSeconds(options.LlmTimeoutSeconds);
+        var resilience = new ProviderResilienceOptions { Timeout = TimeSpan.FromSeconds(options.LlmTimeoutSeconds) };
 
         switch (options.EmbeddingProvider.Trim().ToLowerInvariant())
         {
@@ -45,7 +43,7 @@ public static class ServiceCollectionExtensions
                             "(e.g. sourced from the OPENAI_API_KEY environment variable) before use.");
                     }
 
-                    var clientOptions = new OpenAIClientOptions { NetworkTimeout = timeout };
+                    var clientOptions = new OpenAIClientOptions { NetworkTimeout = resilience.Timeout, RetryPolicy = resilience.ToClientRetryPolicy() };
                     if (!string.IsNullOrWhiteSpace(o.BaseUrl))
                     {
                         clientOptions.Endpoint = new Uri(o.BaseUrl);
@@ -62,7 +60,7 @@ public static class ServiceCollectionExtensions
                 break;
             case "ollama":
                 var embeddingsClient = services.AddHttpClient("ollama-embeddings");
-                ConfigureLlmRetry(embeddingsClient, timeout);
+                ConfigureLlmRetry(embeddingsClient, resilience);
                 embeddingsClient.AddHttpMessageHandler(sp => new OllamaHostFallbackHandler(
                     sp.GetRequiredService<IOptionsMonitor<OllamaOptions>>().Get(OllamaOptions.EmbeddingName).BaseUrl,
                     "Ollama embeddings", sp.GetService<ILoggerFactory>()?.CreateLogger<OllamaHostFallbackHandler>()));
@@ -79,7 +77,7 @@ public static class ServiceCollectionExtensions
                 });
                 break;
             case "foundry":
-                ConfigureLlmRetry(services.AddHttpClient("foundry-embeddings"), timeout);
+                ConfigureLlmRetry(services.AddHttpClient("foundry-embeddings"), resilience);
                 services.AddEmbeddingGenerator(sp =>
                 {
                     var o = sp.GetRequiredService<IOptions<FoundryLocalOptions>>().Value;
@@ -109,7 +107,7 @@ public static class ServiceCollectionExtensions
         {
             case "anthropic":
                 var anthropicClient = services.AddHttpClient("anthropic-chat");
-                ConfigureLlmRetry(anthropicClient, timeout);
+                ConfigureLlmRetry(anthropicClient, resilience);
                 services.AddChatClient(sp =>
                 {
                     var o = sp.GetRequiredService<IOptions<AnthropicOptions>>().Value;
@@ -137,7 +135,7 @@ public static class ServiceCollectionExtensions
                 break;
             case "ollama":
                 var chatClient = services.AddHttpClient("ollama-chat");
-                ConfigureLlmRetry(chatClient, timeout);
+                ConfigureLlmRetry(chatClient, resilience);
                 chatClient.AddHttpMessageHandler(sp => new OllamaHostFallbackHandler(
                     sp.GetRequiredService<IOptionsMonitor<OllamaOptions>>().Get(OllamaOptions.ChatName).BaseUrl,
                     "Ollama chat", sp.GetService<ILoggerFactory>()?.CreateLogger<OllamaHostFallbackHandler>()));
@@ -150,14 +148,14 @@ public static class ServiceCollectionExtensions
                     // Not something a generic retry handler can do: turns "the request threw" into an
                     // actionable hint ("have you pulled this model?"), not a retry decision.
                     IChatClient inner = new OllamaApiClient(http, o.Model);
-                    return new OllamaChatClientDecorator(inner, o.Model);
+                    return new OllamaChatClientDecorator(inner, o.Model, resilience);
                 });
                 break;
             case "foundry":
                 services.AddChatClient(sp =>
                 {
                     var o = sp.GetRequiredService<IOptions<FoundryLocalOptions>>().Value;
-                    return ProviderFactory.CreateFoundryLocalChatClient(o.BaseUrl, o.ChatModel, timeout);
+                    return ProviderFactory.CreateFoundryLocalChatClient(o.BaseUrl, o.ChatModel, resilience);
                 });
                 break;
             default:
@@ -169,39 +167,20 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Retry + an overall timeout for transient failures (connection refused, 5xx, 429, request
-    /// timeout) on an LLM/embedding HTTP call -- deliberately NOT <c>AddStandardResilienceHandler</c>,
-    /// which also bundles a circuit breaker and rate limiter. Neither fits here: this is a single
-    /// local process talking to one self-hosted or third-party endpoint, not a multi-tenant gateway,
-    /// and a circuit breaker would start hard-failing requests during exactly the kind of "Ollama is
-    /// still loading the model" stretch a caller should instead wait out.
-    /// <see cref="System.Threading.Timeout"/> is added before <see cref="RetryResiliencePipelineBuilderExtensions.AddRetry{TResult}"/>
-    /// so it bounds the whole call (all retries + backoff combined), not just one attempt --
-    /// verified live: an inner handler that always throws, retried under a short outer timeout,
-    /// aborts at the timeout boundary instead of running all retry attempts to completion.
+    /// An overall timeout plus the optional retry from <see cref="ProviderResilienceOptions"/> --
+    /// deliberately NOT <c>AddStandardResilienceHandler</c>, which also bundles a circuit breaker and
+    /// rate limiter. Neither fits here: this is a single local process talking to one self-hosted or
+    /// third-party endpoint, and a circuit breaker would start hard-failing requests during exactly
+    /// the kind of "Ollama is still loading the model" stretch a caller should instead wait out.
+    /// The timeout is added first so it bounds the whole call (all retries + backoff combined).
     /// </summary>
-    private static void ConfigureLlmRetry(IHttpClientBuilder builder, TimeSpan timeout) =>
+    private static void ConfigureLlmRetry(IHttpClientBuilder builder, ProviderResilienceOptions resilience) =>
         builder.AddResilienceHandler("llm-retry", pipeline =>
         {
-            pipeline.AddTimeout(timeout);
-            pipeline.AddRetry(new HttpRetryStrategyOptions
+            pipeline.AddTimeout(resilience.Timeout);
+            if (resilience.MaxRetries > 0)
             {
-                MaxRetryAttempts = 3,
-                Delay = TimeSpan.FromSeconds(1),
-                BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true,
-                ShouldHandle = static args => ValueTask.FromResult(ShouldRetryLlmCall(args)),
-            });
+                pipeline.AddRetry(resilience.ToHttpRetryStrategy());
+            }
         });
-
-    private static bool ShouldRetryLlmCall(RetryPredicateArguments<HttpResponseMessage> args)
-    {
-        if (args.Outcome.Result is { } response)
-        {
-            var statusCode = (int)response.StatusCode;
-            return statusCode is 408 or 429 || statusCode >= 500;
-        }
-
-        return args.Outcome.Exception is HttpRequestException or TimeoutRejectedException;
-    }
 }

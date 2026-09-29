@@ -157,8 +157,7 @@
 // override) -- mat-expansion-panel defaults to hard corners otherwise.
 .failed-jobs-panel,
 .running-jobs-panel,
-.hooks-panel,
-.logs-panel {
+.hooks-panel {
   border-radius: 14px !important;
   overflow: hidden;
 }
@@ -192,21 +191,12 @@
   padding: 12px 0 4px;
 }
 
-// Shown next to the Refresh/Show-logs button during a background reload that already has content
+// Shown next to the Refresh button during a background reload that already has content
 // to keep displaying underneath -- a compact indicator instead of the full-panel spinner that
-// initialJobsLoading()/initialLogsLoading() reserve for the true first load.
+// initialJobsLoading() reserves for the true first load.
 .inline-progress {
   flex: 1;
   max-width: 120px;
-}
-
-.log-path {
-  overflow: hidden;
-  color: var(--mat-sys-on-surface-variant);
-  font-family: ui-monospace, monospace;
-  font-size: 0.78rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 // Wide tables (Type/Attempts/Last error/Created/Retry) can outgrow a narrow viewport -- scroll
@@ -268,12 +258,6 @@
   font-size: 0.8rem;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-// Caps a long tail so it scrolls inside its own box instead of growing the page indefinitely.
-.log-tail {
-  max-height: 400px;
-  overflow-y: auto;
 }
 
 .hooks-list {

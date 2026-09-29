@@ -91,6 +91,12 @@
         <dt>Uptime</dt>
         <dd>{{ formatUptime(displayUptimeSeconds() ?? hostStatus.uptimeSeconds) }}</dd>
       </dl>
+      <div class="actions">
+        <button mat-stroked-button type="button" (click)="openLogs()">
+          <mat-icon>description</mat-icon>
+          Logs
+        </button>
+      </div>
     </mat-card>
 
     <div class="stat-grid">
@@ -352,47 +358,6 @@
           </div>
         }
       </div>
-    }
-  </mat-expansion-panel>
-
-  <mat-expansion-panel class="logs-panel">
-    <mat-expansion-panel-header>
-      <mat-panel-title>
-        <mat-icon>description</mat-icon>
-        Recent logs
-      </mat-panel-title>
-    </mat-expansion-panel-header>
-
-    <div class="panel-toolbar">
-      @if (logLines() === null) {
-        <button mat-stroked-button type="button" (click)="loadLogTail()" [disabled]="logsLoading()">
-          <mat-icon>visibility</mat-icon>
-          Show recent logs
-        </button>
-      } @else {
-        <button mat-stroked-button type="button" (click)="loadLogTail()" [disabled]="logsLoading()">
-          <mat-icon>refresh</mat-icon>
-          Refresh
-        </button>
-        @if (logFilePath()) {
-          <span class="log-path">{{ logFilePath() }}</span>
-        }
-        @if (logsLoading() && !initialLogsLoading()) {
-          <mat-progress-bar mode="indeterminate" class="inline-progress" />
-        }
-      }
-    </div>
-
-    @if (initialLogsLoading()) {
-      <mat-progress-bar mode="indeterminate" />
-    } @else if (logLines(); as lines) {
-      @if (lines.length === 0) {
-        <div class="empty-state">
-          <p>No log lines available.</p>
-        </div>
-      } @else {
-        <pre class="raw-json log-tail">{{ lines.join('\n') }}</pre>
-      }
     }
   </mat-expansion-panel>
 </div>

@@ -86,6 +86,32 @@ public sealed class ProjectSettingsValidatorTests
         errors.Should().BeEmpty();
     }
 
+    [Fact]
+    public void Validate_rejects_a_zero_LlmTimeoutSeconds()
+    {
+        var errors = ProjectSettingsValidator.Validate(BuildValidSettings() with { LlmTimeoutSeconds = 0 });
+
+        errors.Should().ContainSingle(e => e.Contains(nameof(ProjectSettingsDto.LlmTimeoutSeconds)));
+    }
+
+    [Fact]
+    public void Validate_allows_zero_LlmMaxRetries_but_not_negative()
+    {
+        ProjectSettingsValidator.Validate(BuildValidSettings() with { LlmMaxRetries = 0 }).Should().BeEmpty();
+        ProjectSettingsValidator.Validate(BuildValidSettings() with { LlmMaxRetries = -1 })
+            .Should().ContainSingle(e => e.Contains(nameof(ProjectSettingsDto.LlmMaxRetries)));
+    }
+
+    [Fact]
+    public void Validate_rejects_a_max_cooldown_below_the_initial_one()
+    {
+        var dto = BuildValidSettings() with { RateLimitCooldownMinutes = 10, RateLimitMaxCooldownMinutes = 5 };
+
+        var errors = ProjectSettingsValidator.Validate(dto);
+
+        errors.Should().ContainSingle(e => e.Contains(nameof(ProjectSettingsDto.RateLimitMaxCooldownMinutes)));
+    }
+
     private static ProjectSettingsDto BuildValidSettings() =>
         new(
             EmbeddingProvider: "noop",

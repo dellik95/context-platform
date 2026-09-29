@@ -72,6 +72,12 @@ export class SettingsPanelComponent {
     hookInvocationRetentionDays: 30,
     memoryReconsolidationEnabled: false,
     memoryReconsolidationIntervalMinutes: 60,
+    llmTimeoutSeconds: 1200,
+    llmRetryEnabled: false,
+    llmMaxRetries: 2,
+    llmRetryBaseDelaySeconds: 30,
+    rateLimitCooldownMinutes: 5,
+    rateLimitMaxCooldownMinutes: 60,
   });
 
   protected readonly settingsForm = form(this.settingsModel, (path) => {
@@ -83,6 +89,11 @@ export class SettingsPanelComponent {
     min(path.staleSessionTimeoutMinutes, 1);
     min(path.hookInvocationRetentionDays, 1);
     min(path.memoryReconsolidationIntervalMinutes, 1);
+    min(path.llmTimeoutSeconds, 1);
+    min(path.llmMaxRetries, 1);
+    min(path.llmRetryBaseDelaySeconds, 1);
+    min(path.rateLimitCooldownMinutes, 1);
+    min(path.rateLimitMaxCooldownMinutes, ({ valueOf }) => valueOf(path.rateLimitCooldownMinutes));
   });
 
   protected readonly showOllamaBaseUrl = computed(() => {
@@ -148,6 +159,14 @@ export class SettingsPanelComponent {
       : 'Reconsolidation off';
   });
 
+  protected readonly resilienceSummary = computed(() => {
+    const m = this.settingsModel();
+    const retries = m.llmRetryEnabled
+      ? `${m.llmMaxRetries} retries from ${m.llmRetryBaseDelaySeconds} s`
+      : 'no retries';
+    return `Timeout ${m.llmTimeoutSeconds} s · ${retries} · 429 pause ${m.rateLimitCooldownMinutes}–${m.rateLimitMaxCooldownMinutes} min`;
+  });
+
   protected readonly retentionSummary = computed(() => {
     const m = this.settingsModel();
     const parts = [
@@ -202,6 +221,12 @@ export class SettingsPanelComponent {
           settings.memoryReconsolidationIntervalMinutes > 0
             ? settings.memoryReconsolidationIntervalMinutes
             : 60,
+        llmTimeoutSeconds: settings.llmTimeoutSeconds,
+        llmRetryEnabled: settings.llmMaxRetries > 0,
+        llmMaxRetries: settings.llmMaxRetries > 0 ? settings.llmMaxRetries : 2,
+        llmRetryBaseDelaySeconds: settings.llmRetryBaseDelaySeconds,
+        rateLimitCooldownMinutes: settings.rateLimitCooldownMinutes,
+        rateLimitMaxCooldownMinutes: settings.rateLimitMaxCooldownMinutes,
       });
     });
 
@@ -263,6 +288,13 @@ export class SettingsPanelComponent {
     }));
   }
 
+  protected setLlmRetryEnabled(event: MatSlideToggleChange): void {
+    this.settingsModel.update((current) => ({
+      ...current,
+      llmRetryEnabled: event.checked,
+    }));
+  }
+
   protected save(): void {
     if (this.settingsForm().invalid()) {
       return;
@@ -299,6 +331,11 @@ export class SettingsPanelComponent {
         ? raw.memoryReconsolidationIntervalMinutes
         : 0,
       lastMemoryReconsolidationScheduledAt: this.lastMemoryReconsolidationScheduledAt,
+      llmTimeoutSeconds: raw.llmTimeoutSeconds,
+      llmMaxRetries: raw.llmRetryEnabled ? raw.llmMaxRetries : 0,
+      llmRetryBaseDelaySeconds: raw.llmRetryBaseDelaySeconds,
+      rateLimitCooldownMinutes: raw.rateLimitCooldownMinutes,
+      rateLimitMaxCooldownMinutes: raw.rateLimitMaxCooldownMinutes,
     };
 
     this.saving.set(true);

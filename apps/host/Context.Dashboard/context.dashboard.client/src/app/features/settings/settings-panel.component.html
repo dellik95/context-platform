@@ -137,6 +137,64 @@
       <mat-accordion class="settings-accordion" multi>
         <mat-expansion-panel class="settings-panel">
           <mat-expansion-panel-header>
+            <mat-panel-title>Provider resilience</mat-panel-title>
+            <mat-panel-description>{{ resilienceSummary() }}</mat-panel-description>
+          </mat-expansion-panel-header>
+
+          <div class="panel-body">
+            <div class="field-grid">
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Request timeout (seconds)</mat-label>
+                <input matInput type="number" [formField]="settingsForm.llmTimeoutSeconds" />
+                <mat-hint>Budget for one embedding/chat call, retries included</mat-hint>
+              </mat-form-field>
+            </div>
+
+            <h3 class="subsection-title">Retries</h3>
+            <p class="note">
+              <mat-icon>info</mat-icon>
+              <span>
+                Off by default: a failed job is already retried later by the job queue. When on,
+                only connection errors, 408 and 5xx are retried, each wait doubling from the base
+                delay. A 429 or a timeout is never retried.
+              </span>
+            </p>
+            <mat-slide-toggle
+              [checked]="settingsForm.llmRetryEnabled().value()"
+              (change)="setLlmRetryEnabled($event)"
+            >
+              Retry failed provider calls
+            </mat-slide-toggle>
+
+            <div class="field-grid">
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Max retries</mat-label>
+                <input matInput type="number" [formField]="settingsForm.llmMaxRetries" />
+              </mat-form-field>
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Base delay (seconds)</mat-label>
+                <input matInput type="number" [formField]="settingsForm.llmRetryBaseDelaySeconds" />
+                <mat-hint>Exponential backoff with jitter</mat-hint>
+              </mat-form-field>
+            </div>
+
+            <h3 class="subsection-title">Rate limits (Ollama)</h3>
+            <div class="field-grid">
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Cooldown after 429 (minutes)</mat-label>
+                <input matInput type="number" [formField]="settingsForm.rateLimitCooldownMinutes" />
+                <mat-hint>Chat calls pause this long; doubles on each repeat</mat-hint>
+              </mat-form-field>
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Max cooldown (minutes)</mat-label>
+                <input matInput type="number" [formField]="settingsForm.rateLimitMaxCooldownMinutes" />
+              </mat-form-field>
+            </div>
+          </div>
+        </mat-expansion-panel>
+
+        <mat-expansion-panel class="settings-panel">
+          <mat-expansion-panel-header>
             <mat-panel-title>Reindexing</mat-panel-title>
             <mat-panel-description>{{ reindexSummary() }}</mat-panel-description>
           </mat-expansion-panel-header>

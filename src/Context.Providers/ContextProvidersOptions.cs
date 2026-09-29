@@ -13,7 +13,7 @@ namespace Context.Providers;
 /// </summary>
 public sealed record ContextProvidersOptions
 {
-    public const int DefaultLlmTimeoutSeconds = 600;
+    public const int DefaultLlmTimeoutSeconds = 1200;
 
     /// <summary>"noop" (default), "openai", "ollama", or "foundry" (Foundry Local).</summary>
     public string EmbeddingProvider { get; init; } = "noop";

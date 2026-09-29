@@ -264,10 +264,8 @@ export class ApiService {
     });
   }
 
-  /** `requested` gates the initial fetch (stays idle until true); call the returned resource's
-   *  own `.reload()` for a subsequent manual refresh. */
-  logTailResource(requested: Signal<boolean>): HttpResourceRef<LogTailDto | undefined> {
-    return httpResource<LogTailDto>(() => (requested() ? `${this.base}/api/logs/tail` : undefined));
+  logTailResource(): HttpResourceRef<LogTailDto | undefined> {
+    return httpResource<LogTailDto>(() => `${this.base}/api/logs/tail`);
   }
 
   /** `days` is a Signal (not a plain default param) so the Usage tab's 7/30/90 range toggle

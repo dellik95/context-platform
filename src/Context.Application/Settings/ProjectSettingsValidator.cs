@@ -35,6 +35,31 @@ public static class ProjectSettingsValidator
             errors.Add($"{nameof(dto.ReindexIntervalMinutes)} must be at least 1.");
         }
 
+        if (dto.LlmTimeoutSeconds < 1)
+        {
+            errors.Add($"{nameof(dto.LlmTimeoutSeconds)} must be at least 1.");
+        }
+
+        if (dto.LlmMaxRetries < 0)
+        {
+            errors.Add($"{nameof(dto.LlmMaxRetries)} must not be negative.");
+        }
+
+        if (dto.LlmRetryBaseDelaySeconds < 1)
+        {
+            errors.Add($"{nameof(dto.LlmRetryBaseDelaySeconds)} must be at least 1.");
+        }
+
+        if (dto.RateLimitCooldownMinutes < 1)
+        {
+            errors.Add($"{nameof(dto.RateLimitCooldownMinutes)} must be at least 1.");
+        }
+
+        if (dto.RateLimitMaxCooldownMinutes < dto.RateLimitCooldownMinutes)
+        {
+            errors.Add($"{nameof(dto.RateLimitMaxCooldownMinutes)} must be at least {nameof(dto.RateLimitCooldownMinutes)}.");
+        }
+
         return errors;
     }
 }
