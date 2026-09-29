@@ -4,6 +4,7 @@ using Context.Application.Notifications;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
 using Context.Infrastructure.Abstractions;
+using Context.Providers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -588,6 +589,24 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 
     private async Task HandleFailureAsync(IJobRepository jobRepository, Job job, Exception ex, CancellationToken ct)
     {
+        if (FindRateLimit(ex) is { } rateLimited)
+        {
+            // A provider quota says nothing about the job itself, so it waits out the cooldown with
+            // its attempt budget intact instead of failing permanently within seconds.
+            job.Status = JobStatus.Pending;
+            job.Attempts = Math.Max(0, job.Attempts - 1);
+            job.StartedAt = null;
+            job.NextRetryAt = rateLimited.RetryAt;
+            job.LastError = rateLimited.Message;
+            await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
+
+            _logger.LogWarning(
+                "Job {JobId} ({JobType}) was rate-limited by its provider; retrying at {NextRetryAt:O} without spending an attempt.",
+                job.Id, job.Type, job.NextRetryAt);
+            await PublishJobCountsAsync(job.ProjectId, ct).ConfigureAwait(false);
+            return;
+        }
+
         var maxAttempts = job.Type == JobType.EmbedChunk ? EmbedChunkMaxAttempts : DefaultMaxAttempts;
         var message = ex.ToString();
         job.LastError = message.Length > 4000 ? message[..4000] : message;
@@ -620,6 +639,19 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
             job.Id, job.Type, job.Attempts, maxAttempts, job.NextRetryAt);
 
         await PublishJobCountsAsync(job.ProjectId, ct).ConfigureAwait(false);
+    }
+
+    private static ProviderRateLimitedException? FindRateLimit(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is ProviderRateLimitedException rateLimited)
+            {
+                return rateLimited;
+            }
+        }
+
+        return null;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
