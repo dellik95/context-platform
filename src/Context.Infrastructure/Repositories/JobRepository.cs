@@ -69,6 +69,7 @@ public class JobRepository(ContextDbContext db) : IJobRepository
                     .SetProperty(j => j.Status, JobStatus.Running)
                     .SetProperty(j => j.StartedAt, now)
                     .SetProperty(j => j.Attempts, 1)
+                    .SetProperty(j => j.LastError, (string?)null)
                     .SetProperty(j => j.NextRetryAt, (DateTimeOffset?)null)
                     .SetProperty(j => j.FinishedAt, (DateTimeOffset?)null),
                 ct);

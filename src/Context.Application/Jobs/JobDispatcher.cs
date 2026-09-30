@@ -197,6 +197,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 
         job.Status = JobStatus.Pending;
         job.Attempts = 0;
+        job.LastError = null;
         job.NextRetryAt = null;
         job.StartedAt = null;
         job.FinishedAt = null;

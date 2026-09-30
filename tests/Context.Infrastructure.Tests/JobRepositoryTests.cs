@@ -109,6 +109,7 @@ public sealed class JobRepositoryTests : IDisposable
 
         var job = NewJob();
         job.Attempts = 4;
+        job.LastError = "System.Net.Http.HttpRequestException: Connection refused";
         job.NextRetryAt = DateTimeOffset.UtcNow.AddMinutes(5);
         db.Jobs.Add(job);
         await db.SaveChangesAsync();
@@ -118,6 +119,7 @@ public sealed class JobRepositoryTests : IDisposable
         claimed.Should().NotBeNull();
         claimed!.Status.Should().Be(JobStatus.Running);
         claimed.Attempts.Should().Be(1);
+        claimed.LastError.Should().BeNull();
         claimed.NextRetryAt.Should().BeNull();
     }
 
