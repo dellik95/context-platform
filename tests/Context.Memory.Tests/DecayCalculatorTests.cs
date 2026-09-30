@@ -103,20 +103,6 @@ public sealed class DecayCalculatorTests
         DecayCalculator.IsExpired(Knowledge(MemoryTier.Working, ageDays: 3650, pinned: true), Now).Should().BeFalse();
     }
 
-    [Fact]
-    public void IsExpired_retires_events_after_the_retention_window_regardless_of_confidence()
-    {
-        var old = Knowledge(MemoryTier.Working, ageDays: 91);
-        old.Type = MemoryType.Event;
-        old.Confidence = 0.95;
-        var recent = Knowledge(MemoryTier.Working, ageDays: 89);
-        recent.Type = MemoryType.Event;
-        recent.Confidence = 0.05;
-
-        DecayCalculator.IsExpired(old, Now).Should().BeTrue();
-        DecayCalculator.IsExpired(recent, Now).Should().BeFalse();
-    }
-
     private static DomainMemory Knowledge(MemoryTier tier, int ageDays, bool pinned = false) => new()
     {
         Title = "Payments webhook retries",

@@ -8,5 +8,4 @@ public enum ConsolidationOutcome
     Merged,
     Superseded,
     Contested,
-    EventRecorded,
 }

@@ -21,7 +21,7 @@ public sealed class DecayMemoryJobHandlerTests : IDisposable
         new DbContextOptionsBuilder<ContextDbContext>().UseSqlite($"Data Source={_dbPath}").Options;
 
     [Fact]
-    public async Task HandleAsync_retires_decayed_working_knowledge_and_old_events_without_deleting_anything()
+    public async Task HandleAsync_retires_decayed_working_memories_without_deleting_anything()
     {
         var payments = Guid.NewGuid();
         var billing = Guid.NewGuid();
@@ -29,8 +29,6 @@ public sealed class DecayMemoryJobHandlerTests : IDisposable
         var freshWorking = NewMemory(payments, "Fresh working fact", ageDays: 10);
         var staleLongTerm = NewMemory(payments, "Long-term fact", ageDays: 365, tier: MemoryTier.LongTerm);
         var stalePinned = NewMemory(payments, "Pinned fact", ageDays: 365, pinned: true);
-        var oldEvent = NewMemory(payments, "Deployed build 7", ageDays: 100, type: MemoryType.Event, confidence: 0.95);
-        var recentEvent = NewMemory(payments, "Deployed build 8", ageDays: 30, type: MemoryType.Event);
         var staleContested = NewMemory(payments, "Contested fact", ageDays: 200, status: MemoryStatus.Contested);
         var freshPartner = NewMemory(payments, "Contesting fact", ageDays: 5, status: MemoryStatus.Contested);
         var staleSuperseded = NewMemory(payments, "Superseded fact", ageDays: 200, status: MemoryStatus.Superseded);
@@ -43,7 +41,7 @@ public sealed class DecayMemoryJobHandlerTests : IDisposable
                 new Project { Id = payments, Name = "Payments", RootPath = "/repo/payments", CreatedAt = DateTimeOffset.UtcNow },
                 new Project { Id = billing, Name = "Billing", RootPath = "/repo/billing", CreatedAt = DateTimeOffset.UtcNow });
             seed.Memories.AddRange(
-                staleWorking, freshWorking, staleLongTerm, stalePinned, oldEvent, recentEvent, staleContested, freshPartner, staleSuperseded, otherProjectStale);
+                staleWorking, freshWorking, staleLongTerm, stalePinned, staleContested, freshPartner, staleSuperseded, otherProjectStale);
             seed.MemoryEvidence.AddRange(
                 Contradicted(staleContested, freshPartner),
                 Contradicted(freshPartner, staleContested),
@@ -61,15 +59,13 @@ public sealed class DecayMemoryJobHandlerTests : IDisposable
 
         await using var verify = new ContextDbContext(Options);
         var statuses = await verify.Memories.ToDictionaryAsync(m => m.Id, m => m.Status);
-        statuses.Should().HaveCount(10);
+        statuses.Should().HaveCount(8);
         statuses[staleWorking.Id].Should().Be(MemoryStatus.Obsolete);
-        statuses[oldEvent.Id].Should().Be(MemoryStatus.Obsolete);
         statuses[staleContested.Id].Should().Be(MemoryStatus.Obsolete);
         statuses[otherProjectStale.Id].Should().Be(MemoryStatus.Obsolete);
         statuses[freshWorking.Id].Should().Be(MemoryStatus.Active);
         statuses[staleLongTerm.Id].Should().Be(MemoryStatus.Active);
         statuses[stalePinned.Id].Should().Be(MemoryStatus.Active);
-        statuses[recentEvent.Id].Should().Be(MemoryStatus.Active);
         statuses[staleSuperseded.Id].Should().Be(MemoryStatus.Superseded);
         statuses[freshPartner.Id].Should().Be(MemoryStatus.Active, "its only contest partner was retired");
     }

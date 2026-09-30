@@ -18,12 +18,6 @@
         <mat-icon matPrefix>search</mat-icon>
       </mat-form-field>
 
-      <mat-button-toggle-group [value]="kindFilter() ?? 'All'" (change)="setKind($event)" aria-label="Memory kind">
-        <mat-button-toggle value="All">All</mat-button-toggle>
-        <mat-button-toggle value="Knowledge">Knowledge</mat-button-toggle>
-        <mat-button-toggle value="Event">Events</mat-button-toggle>
-      </mat-button-toggle-group>
-
       <mat-checkbox [checked]="searchForm.includeSuperseded().value()" (change)="setIncludeSuperseded($event)">
         Include superseded
       </mat-checkbox>

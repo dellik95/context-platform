@@ -14,8 +14,7 @@ using DomainMemory = Context.Domain.Entities.Memory;
 namespace Context.Memory.Consolidation;
 
 /// <summary>
-/// Default <see cref="IMemoryConsolidator"/>. Events are recorded apart from knowledge and only deduped
-/// within their session. A knowledge candidate is compared with at most <see cref="MaxNeighbours"/>
+/// Default <see cref="IMemoryConsolidator"/>. A candidate is compared with at most <see cref="MaxNeighbours"/>
 /// live neighbours found by shared strong entity, topic key or embedding similarity, and the strongest
 /// verdict (duplicate, supersedes, contradicts, complements) decides whether it reinforces, replaces,
 /// contests, merges into a neighbour or is inserted on its own. Each placement is written in one
@@ -77,38 +76,7 @@ public sealed class MemoryConsolidator(
             now,
             normalized.ObservedAt is { } observedAt && observedAt < now ? observedAt : now);
 
-        return normalized.Type.IsEvent()
-            ? await store.InTransactionAsync(() => RecordEventAsync(incoming, ct), ct).ConfigureAwait(false)
-            : await PlaceKnowledgeAsync(incoming, isInteractive ? InteractiveOptions : null, ct).ConfigureAwait(false);
-    }
-
-    private async Task<ConsolidationResult> RecordEventAsync(Incoming incoming, CancellationToken ct)
-    {
-        if (incoming.SessionId is { } sessionId)
-        {
-            var titleKey = TextTokens.Normalize(incoming.Candidate.Title);
-            var sameSession = await store.ListLiveEventsBySessionAsync(incoming.ProjectId, sessionId, ct).ConfigureAwait(false);
-            if (sameSession.FirstOrDefault(e => TextTokens.Normalize(e.Title) == titleKey) is { } existing)
-            {
-                var evidence = await store.ListEvidenceAsync([existing.Id], ct).ConfigureAwait(false);
-                var entityRows = await store.ListEntitiesAsync([existing.Id], ct).ConfigureAwait(false);
-                List<MemoryEvidence> added = [NewEvidence(incoming, existing.Id, EvidenceRelation.Reinforced)];
-
-                Absorb(existing, incoming.Candidate, FactMerger.Merge(EntityExtractor.ParseList(existing.FactsJson), incoming.Candidate.Facts));
-                existing.ReinforcementCount++;
-                existing.LastReinforcedAt = incoming.Now;
-                ConfidenceModel.Recompute(existing, [.. evidence, .. added]);
-
-                await store.UpdateAsync(existing, null, MemoryFields.UnionEntities(existing, entityRows, incoming.Entities), added, ct).ConfigureAwait(false);
-                return new ConsolidationResult(existing, ConsolidationOutcome.EventRecorded);
-            }
-        }
-
-        var memory = NewMemory(incoming, MemoryStatus.Active);
-        List<MemoryEvidence> created = [NewEvidence(incoming, memory.Id, EvidenceRelation.Created)];
-        ConfidenceModel.Recompute(memory, created);
-        await store.InsertAsync(memory, null, MemoryFields.EntityRows(memory, incoming.Entities), created, ct).ConfigureAwait(false);
-        return new ConsolidationResult(memory, ConsolidationOutcome.EventRecorded);
+        return await PlaceKnowledgeAsync(incoming, isInteractive ? InteractiveOptions : null, ct).ConfigureAwait(false);
     }
 
     private async Task<ConsolidationResult> PlaceKnowledgeAsync(Incoming incoming, EmbeddingGenerationOptions? options, CancellationToken ct)
@@ -185,7 +153,7 @@ public sealed class MemoryConsolidator(
         if (incoming.TopicKey is { } topicKey)
         {
             var sameTopic = await store.ListLiveByTopicKeyAsync(incoming.ProjectId, topicKey, ct).ConfigureAwait(false);
-            ids.UnionWith(sameTopic.Where(m => m.Type.IsKnowledge()).Take(MaxTopicNeighbours).Select(m => m.Id));
+            ids.UnionWith(sameTopic.Take(MaxTopicNeighbours).Select(m => m.Id));
         }
 
         var similar = await store.SearchSimilarAsync(incoming.ProjectId, query, SimilaritySearchLimit, ct).ConfigureAwait(false);
@@ -201,7 +169,7 @@ public sealed class MemoryConsolidator(
         }
 
         var memories = (await store.GetByIdsAsync(ids, ct).ConfigureAwait(false))
-            .Where(m => m.IsLive && m.ProjectId == incoming.ProjectId && m.Type.IsKnowledge())
+            .Where(m => m.IsLive && m.ProjectId == incoming.ProjectId)
             .ToList();
         if (memories.Count == 0)
         {

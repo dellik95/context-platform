@@ -187,7 +187,7 @@ export class ConsolidationDialogComponent {
       return '';
     }
     return `${stats.groups} groups · ${stats.canonicals} canonicals from ${stats.sourcesMerged} sources · `
-      + `${stats.contradictions} contradictions · ${stats.reclassifiedEvents} events reclassified`
+      + `${stats.contradictions} contradictions · ${stats.retiredChangeLogs} change logs retired`
       + (stats.usedModel ? '' : ' · heuristic only');
   }
 

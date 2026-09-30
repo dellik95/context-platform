@@ -68,7 +68,7 @@ public sealed class MemoryReconsolidationScheduler(
         await settingsService.UpdateAsync(projectId, settings with { LastMemoryReconsolidationScheduledAt = now }, ct).ConfigureAwait(false);
 
         var live = await memories.ListByProjectAsync(projectId, includeSuperseded: false, ct).ConfigureAwait(false);
-        if (!live.Any(m => m.Type != MemoryType.Event && (last is null || m.LastReinforcedAt > last.Value)))
+        if (!live.Any(m => last is null || m.LastReinforcedAt > last.Value))
         {
             return;
         }

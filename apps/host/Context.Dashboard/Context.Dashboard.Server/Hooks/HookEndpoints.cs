@@ -351,16 +351,15 @@ public static class HookEndpoints
     };
 
     /// <summary>
-    /// SessionStart context: a short project snapshot plus the project's most relevant knowledge
-    /// (never events). Any failure is swallowed - Context Platform being briefly unhealthy must never
-    /// block Claude Code's own session start.
+    /// SessionStart context: a short project snapshot plus the project's most relevant memories. Any
+    /// failure is swallowed - Context Platform being briefly unhealthy must never block Claude Code's
+    /// own session start.
     /// </summary>
     internal static async Task<string?> TryBuildSessionStartContextAsync(IContextEngine engine, Guid projectId, CancellationToken ct)
     {
         try
         {
-            var memories = await engine.SearchMemoryAsync(
-                projectId, string.Empty, includeSuperseded: false, ct, kind: MemoryKind.Knowledge).ConfigureAwait(false);
+            var memories = await engine.SearchMemoryAsync(projectId, string.Empty, includeSuperseded: false, ct).ConfigureAwait(false);
             if (memories.Count == 0)
             {
                 return null;

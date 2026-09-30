@@ -105,14 +105,13 @@ public sealed class LlmMemoryExtractor(
         }
 
         logger?.LogInformation(
-            "Memory consolidation for session {SessionId}: {Created} created, {Reinforced} reinforced, {Merged} merged, {Superseded} superseded, {Contested} contested, {Events} events.",
+            "Memory consolidation for session {SessionId}: {Created} created, {Reinforced} reinforced, {Merged} merged, {Superseded} superseded, {Contested} contested.",
             sessionId,
             outcomes.GetValueOrDefault(ConsolidationOutcome.Created),
             outcomes.GetValueOrDefault(ConsolidationOutcome.Reinforced),
             outcomes.GetValueOrDefault(ConsolidationOutcome.Merged),
             outcomes.GetValueOrDefault(ConsolidationOutcome.Superseded),
-            outcomes.GetValueOrDefault(ConsolidationOutcome.Contested),
-            outcomes.GetValueOrDefault(ConsolidationOutcome.EventRecorded));
+            outcomes.GetValueOrDefault(ConsolidationOutcome.Contested));
 
         return results;
     }
@@ -168,7 +167,7 @@ public sealed class LlmMemoryExtractor(
         if (rejected.Count > 0)
         {
             logger?.LogWarning(
-                "Rejected {RejectedCount} malformed candidate memories for session {SessionId}: {Reasons}.",
+                "Rejected {RejectedCount} candidate memories for session {SessionId}: {Reasons}.",
                 rejected.Count, sessionId, string.Join(", ", rejected.Distinct()));
         }
 

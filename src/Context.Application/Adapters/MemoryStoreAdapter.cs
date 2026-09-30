@@ -71,9 +71,7 @@ public sealed class MemoryStoreAdapter(
 
         var keyArray = keys.ToArray();
         var knowledgeIds = db.Memories
-            .Where(m => m.ProjectId == projectId
-                && m.Type != MemoryType.Event
-                && (m.Status == MemoryStatus.Active || m.Status == MemoryStatus.Contested))
+            .Where(m => m.ProjectId == projectId && (m.Status == MemoryStatus.Active || m.Status == MemoryStatus.Contested))
             .Select(m => m.Id);
         return await db.MemoryEntities.AsNoTracking()
             .Where(e => e.ProjectId == projectId && keyArray.Contains(e.Key) && knowledgeIds.Contains(e.MemoryId))
@@ -104,28 +102,16 @@ public sealed class MemoryStoreAdapter(
     public Task<IReadOnlyList<MemoryEvidence>> ListEvidenceAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct) =>
         memoryRepository.ListEvidenceAsync(ids, ct);
 
-    public async Task<IReadOnlyList<DomainMemory>> ListLiveEventsBySessionAsync(Guid projectId, Guid sessionId, CancellationToken ct) =>
-        await db.Memories.AsNoTracking()
-            .Where(m => m.ProjectId == projectId
-                && m.Type == MemoryType.Event
-                && m.CreatedFromSessionId == sessionId
-                && (m.Status == MemoryStatus.Active || m.Status == MemoryStatus.Contested))
-            .ToListAsync(ct).ConfigureAwait(false);
-
     public async Task<IReadOnlyList<DomainMemory>> ListLiveKnowledgeAsync(Guid projectId, CancellationToken ct) =>
         await db.Memories.AsNoTracking()
-            .Where(m => m.ProjectId == projectId
-                && m.Type != MemoryType.Event
-                && (m.Status == MemoryStatus.Active || m.Status == MemoryStatus.Contested))
+            .Where(m => m.ProjectId == projectId && (m.Status == MemoryStatus.Active || m.Status == MemoryStatus.Contested))
             .ToListAsync(ct).ConfigureAwait(false);
 
     public async Task<IReadOnlyList<DomainMemory>> ListLiveKnowledgeCreatedSinceAsync(Guid projectId, DateTimeOffset since, CancellationToken ct)
     {
         // SQLite cannot compare DateTimeOffset server-side, so only ids and timestamps are pulled to filter.
         var stamps = await db.Memories.AsNoTracking()
-            .Where(m => m.ProjectId == projectId
-                && m.Type != MemoryType.Event
-                && (m.Status == MemoryStatus.Active || m.Status == MemoryStatus.Contested))
+            .Where(m => m.ProjectId == projectId && (m.Status == MemoryStatus.Active || m.Status == MemoryStatus.Contested))
             .Select(m => new { m.Id, m.CreatedAt })
             .ToListAsync(ct).ConfigureAwait(false);
         var ids = stamps.Where(s => s.CreatedAt >= since).Select(s => s.Id).ToArray();
@@ -179,7 +165,6 @@ public sealed class MemoryStoreAdapter(
         }
 
         var topicChanged = !string.Equals(stored.Topic, memory.Topic, StringComparison.Ordinal);
-        var becameEvent = stored.Type.IsKnowledge() && memory.Type.IsEvent();
         db.Entry(stored).CurrentValues.SetValues(memory);
 
         var touched = new List<object?> { stored };
@@ -192,10 +177,10 @@ public sealed class MemoryStoreAdapter(
         db.MemoryEvidence.AddRange(evidenceRows);
         touched.AddRange(evidenceRows);
 
-        var embeddingRow = becameEvent ? null
-            : reembedding is null ? await db.MemoryEmbeddings.AsNoTracking().FirstOrDefaultAsync(e => e.MemoryId == memory.Id, ct).ConfigureAwait(false)
+        var embeddingRow = reembedding is null
+            ? await db.MemoryEmbeddings.AsNoTracking().FirstOrDefaultAsync(e => e.MemoryId == memory.Id, ct).ConfigureAwait(false)
             : await StageEmbeddingAsync(memory.Id, reembedding, ct).ConfigureAwait(false);
-        if (reembedding is not null && !becameEvent)
+        if (reembedding is not null)
         {
             touched.Add(embeddingRow);
         }
@@ -207,14 +192,6 @@ public sealed class MemoryStoreAdapter(
         finally
         {
             Detach(touched);
-        }
-
-        if (becameEvent)
-        {
-            // Events are never embedded, so a reclassified memory leaves the vector index too.
-            await db.MemoryEmbeddings.Where(e => e.MemoryId == memory.Id).ExecuteDeleteAsync(ct).ConfigureAwait(false);
-            await DeleteVectorAsync(memory.Id, ct).ConfigureAwait(false);
-            return;
         }
 
         // The vector record carries Topic for filtered ANN, so a topic change re-upserts it.

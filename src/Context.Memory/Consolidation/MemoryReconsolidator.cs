@@ -17,8 +17,9 @@ namespace Context.Memory.Consolidation;
 /// Batch reconsolidation of a project's live knowledge. <see cref="PlanAsync"/> groups related
 /// memories (a shared strong entity or topic key, backed by embedding similarity or a second shared
 /// entity), asks the chat model to rewrite each group into canonical memories, and validates that no
-/// source fact is lost; it writes nothing but refreshed embeddings. <see cref="ApplyAsync"/> re-checks
-/// every source against the plan, inserts the canonicals and supersedes their sources.
+/// source fact is lost; it writes nothing but refreshed embeddings. It also lists change logs stored as
+/// memories for retirement. <see cref="ApplyAsync"/> re-checks every source against the plan, inserts the
+/// canonicals, supersedes their sources and retires the change logs.
 /// </summary>
 public sealed partial class MemoryReconsolidator(
     IMemoryStore store,
@@ -44,13 +45,13 @@ public sealed partial class MemoryReconsolidator(
             .ToList();
         var evidence = (await store.ListEvidenceAsync([.. live.Select(m => m.Id)], ct).ConfigureAwait(false)).ToLookup(e => e.MemoryId);
 
-        var reclassified = new List<ReclassifiedEvent>();
+        var changeLogs = new List<RetiredChangeLog>();
         var knowledge = new List<DomainMemory>();
         foreach (var memory in live)
         {
-            if (EventLikeReason(memory, evidence[memory.Id]) is { } reason)
+            if (ChangeLogReason(memory, evidence[memory.Id]) is { } reason)
             {
-                reclassified.Add(new ReclassifiedEvent(memory.Id, memory.Title, memory.Status, memory.LastReinforcedAt, reason));
+                changeLogs.Add(new RetiredChangeLog(memory.Id, memory.Title, memory.Status, memory.LastReinforcedAt, reason));
             }
             else
             {
@@ -111,8 +112,8 @@ public sealed partial class MemoryReconsolidator(
 
         return new ReconsolidationReport(
             groups,
-            reclassified,
-            live.Count - touched.Count - reclassified.Count,
+            changeLogs,
+            live.Count - touched.Count - changeLogs.Count,
             new ReconsolidationStats(
                 live.Count,
                 reembedded,
@@ -121,14 +122,15 @@ public sealed partial class MemoryReconsolidator(
                 groups.Sum(g => g.Canonicals.Count),
                 groups.Sum(g => g.Canonicals.Sum(c => c.SourceIds.Count)),
                 groups.Sum(g => g.Contradictions.Count),
-                reclassified.Count,
+                changeLogs.Count,
                 usedModel));
     }
 
     /// <summary>
     /// Applies every non-excluded, non-ambiguous group whose sources are still live and unchanged since
-    /// the plan, then the event reclassifications. Each group and each reclassification is re-validated
-    /// and written in its own store transaction. Sources are superseded, never deleted.
+    /// the plan, then retires the planned change logs. Each group and each retirement is re-validated
+    /// and written in its own store transaction. Nothing is deleted: sources are superseded and change
+    /// logs become Obsolete.
     /// </summary>
     public async Task<ReconsolidationReport> ApplyAsync(
         Guid projectId, ReconsolidationReport report, ReconsolidationApplyOptions options, CancellationToken ct)
@@ -201,37 +203,31 @@ public sealed partial class MemoryReconsolidator(
             }
         }
 
-        var reclassifiedCount = 0;
-        var skippedEvents = new List<Guid>();
-        foreach (var planned in report.ReclassifiedEvents)
+        var retiredCount = 0;
+        var skippedChangeLogs = new List<Guid>();
+        foreach (var planned in report.RetiredChangeLogs)
         {
-            var reclassified = await store.InTransactionAsync(async () =>
+            var retired = await store.InTransactionAsync(async () =>
             {
                 var memory = (await store.GetByIdsAsync([planned.Id], ct).ConfigureAwait(false)).FirstOrDefault();
-                if (memory is null || !IsUnchanged(memory, projectId, planned.Status, planned.LastReinforcedAt))
-                {
-                    return false;
-                }
-
-                memory.Type = MemoryType.Event;
-                ConfidenceModel.Recompute(memory, await store.ListEvidenceAsync([memory.Id], ct).ConfigureAwait(false));
-                await store.UpdateAsync(memory, null, null, [], ct).ConfigureAwait(false);
-                return true;
+                return memory is not null
+                    && IsUnchanged(memory, projectId, planned.Status, planned.LastReinforcedAt)
+                    && await MemoryContests.RetireAsync(store, memory.Id, ct).ConfigureAwait(false);
             }, ct).ConfigureAwait(false);
 
-            if (reclassified)
+            if (retired)
             {
-                reclassifiedCount++;
+                retiredCount++;
             }
             else
             {
-                skippedEvents.Add(planned.Id);
+                skippedChangeLogs.Add(planned.Id);
             }
         }
 
         return report with
         {
-            Outcome = new ReconsolidationApplyOutcome(now, applied, excluded, skipped, reclassifiedCount, skippedEvents),
+            Outcome = new ReconsolidationApplyOutcome(now, applied, excluded, skipped, retiredCount, skippedChangeLogs),
         };
     }
 
@@ -253,14 +249,13 @@ public sealed partial class MemoryReconsolidator(
 
     private static bool IsUnchanged(DomainMemory memory, Guid projectId, MemoryStatus status, DateTimeOffset lastReinforcedAt) =>
         memory.IsLive
-        && memory.Type.IsKnowledge()
         && memory.ProjectId == projectId
         && memory.Status == status
         && memory.LastReinforcedAt == lastReinforcedAt;
 
-    /// <summary>A change summary stored as knowledge: explicit, pinned and contested memories are never
-    /// touched, and a change-log title keeps its knowledge type while it carries facts.</summary>
-    private static string? EventLikeReason(DomainMemory memory, IEnumerable<MemoryEvidence> evidence)
+    /// <summary>A change summary stored as a memory: explicit, pinned and contested memories are never
+    /// touched, and a change-log title stays while one of its facts states more than a change.</summary>
+    private static string? ChangeLogReason(DomainMemory memory, IEnumerable<MemoryEvidence> evidence)
     {
         if (memory.Pinned || memory.Status == MemoryStatus.Contested || evidence.Any(e => e.Source == EvidenceSource.Explicit))
         {
@@ -272,8 +267,8 @@ public sealed partial class MemoryReconsolidator(
             return "file-change summary";
         }
 
-        return MemoryCandidateValidator.IsChangeLogTitle(memory.Title) && EntityExtractor.ParseList(memory.FactsJson).Count == 0
-            ? "change-log title without facts"
+        return MemoryCandidateValidator.IsChangeLog(memory.Title, EntityExtractor.ParseList(memory.FactsJson))
+            ? "change log without durable facts"
             : null;
     }
 
@@ -394,10 +389,10 @@ public sealed partial class MemoryReconsolidator(
                 continue;
             }
 
-            var candidate = MemoryCandidateValidator.Normalize(parsed.Candidate, out var reason, reclassifyChangeLog: false, maxFacts: MaxCanonicalFacts);
-            if (candidate is null || candidate.Type.IsEvent())
+            var candidate = MemoryCandidateValidator.Normalize(parsed.Candidate, out var reason, maxFacts: MaxCanonicalFacts);
+            if (candidate is null)
             {
-                problems.Add($"canonical {n + 1} is not knowledge ({reason ?? "Event"})");
+                problems.Add($"canonical {n + 1} is not knowledge ({reason})");
                 continue;
             }
 

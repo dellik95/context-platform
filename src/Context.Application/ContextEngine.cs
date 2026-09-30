@@ -65,7 +65,6 @@ public sealed class ContextEngine(
     private const double MatchWeight = 0.5;
     private const double RelevanceWeight = 0.3;
     private const double TypeBonusWeight = 0.2;
-    private const double EventSearchWeight = 0.5;
     private const int SemanticSearchLimit = 50;
     private const int MemorySemanticSearchLimit = 20;
 
@@ -123,18 +122,16 @@ public sealed class ContextEngine(
     }
 
     /// <summary>
-    /// Knowledge-first memory search. Candidates are lexical, semantic and entity matches (every
-    /// memory in the filtered pool when the query names no subject); events count half unless the
-    /// query asks for change history.
+    /// Memory search. Candidates are lexical, semantic and entity matches (every memory in the
+    /// filtered pool when the query names no subject).
     /// </summary>
     public async Task<IReadOnlyList<Context.Domain.Entities.Memory>> SearchMemoryAsync(
-        Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null, MemoryKind? kind = null)
+        Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null)
     {
         var memories = await memoryRepository.ListByProjectAsync(projectId, includeSuperseded, ct).ConfigureAwait(false);
         var topicFilter = string.IsNullOrWhiteSpace(topic) ? null : topic.Trim();
         var pool = memories
-            .Where(m => (topicFilter is null || string.Equals(m.Topic?.Trim(), topicFilter, StringComparison.OrdinalIgnoreCase))
-                && (kind is null || m.Type.Kind() == kind))
+            .Where(m => topicFilter is null || string.Equals(m.Topic?.Trim(), topicFilter, StringComparison.OrdinalIgnoreCase))
             .ToList();
         if (pool.Count == 0)
         {
@@ -143,12 +140,11 @@ public sealed class ContextEngine(
 
         var parsed = MemoryQuery.Parse(query);
         var matches = await MatchAsync(projectId, parsed, pool, topicFilter, ct).ConfigureAwait(false);
-        var eventWeight = QueryIntent.IsChangeHistory(parsed.Text) ? 1.0 : EventSearchWeight;
         var now = DateTimeOffset.UtcNow;
 
         return [.. pool
             .Where(m => !parsed.HasSubject || matches.ContainsKey(m.Id))
-            .OrderByDescending(m => Score(m, matches.GetValueOrDefault(m.Id), now) * (m.Type.IsEvent() ? eventWeight : 1.0))];
+            .OrderByDescending(m => Score(m, matches.GetValueOrDefault(m.Id), now))];
     }
 
     /// <summary>Best of lexical, entity and semantic match per memory of <paramref name="pool"/>;
@@ -519,10 +515,9 @@ public sealed class ContextEngine(
     }
 
     /// <summary>
-    /// Query-aware memory sections for a pack. Historical notes hold matching knowledge (Active before
-    /// Contested), preceded by events only for a change-history query, newest first. Open issues hold
-    /// matching issues, or every live issue for a pending-work query. A query naming no subject gets
-    /// the top knowledge by relevance and never events unless it asks for change history.
+    /// Query-aware memory sections for a pack. Historical notes hold matching non-issue memories
+    /// (Active before Contested); open issues hold matching issues, or every live issue for a
+    /// pending-work query. A query naming no subject gets the top memories by relevance.
     /// </summary>
     private async Task<(IReadOnlyList<string> HistoricalNotes, IReadOnlyList<string> OpenIssues)> BuildMemorySectionsAsync(
         SearchQuery query, CancellationToken ct)
@@ -544,14 +539,10 @@ public sealed class ContextEngine(
         double ScoreOf(Context.Domain.Entities.Memory m) => Score(m, matches.GetValueOrDefault(m.Id), now);
 
         var knowledge = memories
-            .Where(m => m.Type.IsKnowledge() && m.Type != MemoryType.Issue && IsCandidate(m))
+            .Where(m => m.Type != MemoryType.Issue && IsCandidate(m))
             .OrderBy(m => m.Status == MemoryStatus.Contested)
             .ThenByDescending(ScoreOf)
             .Take(maxNotes);
-
-        var events = QueryIntent.IsChangeHistory(parsed.Text)
-            ? memories.Where(m => m.Type.IsEvent() && IsCandidate(m)).OrderByDescending(m => m.CreatedAt).Take(maxNotes)
-            : [];
 
         var includeAllIssues = !parsed.HasSubject || QueryIntent.IsPendingWork(parsed.Text);
         var issues = memories
@@ -560,7 +551,7 @@ public sealed class ContextEngine(
             .Take(maxNotes);
 
         return (
-            RenderNotes([.. events, .. knowledge], (int)(query.TokenBudget * ContextPackBuilder.DefaultHistoricalReserveRatio)),
+            RenderNotes([.. knowledge], (int)(query.TokenBudget * ContextPackBuilder.DefaultHistoricalReserveRatio)),
             RenderNotes([.. issues], (int)(query.TokenBudget * ContextPackBuilder.DefaultOpenIssuesReserveRatio)));
     }
 

@@ -6,7 +6,7 @@ namespace Context.Memory.Abstractions;
 /// Given some session material (a batch of raw events or a compaction summary),
 /// asks an LLM (or falls back to a heuristic) to propose candidate memories and consolidates each
 /// through <see cref="IMemoryConsolidator"/>. Every method returns the memory each candidate ended
-/// up in (created, reinforced, merged, replacing or contesting another, or a recorded event).
+/// up in (created, reinforced, merged, or replacing or contesting another).
 /// </summary>
 public interface IMemoryExtractor
 {

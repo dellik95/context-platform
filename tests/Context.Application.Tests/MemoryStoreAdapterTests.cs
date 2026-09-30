@@ -20,7 +20,6 @@ public sealed class MemoryStoreAdapterTests : IDisposable
     private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"context-memorystore-tests-{Guid.NewGuid():N}.db");
     private readonly Guid _projectId = Guid.NewGuid();
     private readonly Guid _sessionId = Guid.NewGuid();
-    private readonly Guid _otherSessionId = Guid.NewGuid();
     private readonly Mock<IMemoryVectorIndex> _vectorIndex = new();
 
     private DbContextOptions<ContextDbContext> Options =>
@@ -132,23 +131,6 @@ public sealed class MemoryStoreAdapterTests : IDisposable
     }
 
     [Fact]
-    public async Task ListLiveEventsBySessionAsync_returns_only_live_events_of_that_session()
-    {
-        await using var db = await CreateDbAsync();
-        var liveEvent = NewMemory("Deployed build 42", type: MemoryType.Event);
-        var obsoleteEvent = NewMemory("Deployed build 41", type: MemoryType.Event, status: MemoryStatus.Obsolete);
-        var otherSessionEvent = NewMemory("Deployed build 40", type: MemoryType.Event, session: _otherSessionId);
-        var knowledge = NewMemory("Deploys run nightly");
-        db.Memories.AddRange(liveEvent, obsoleteEvent, otherSessionEvent, knowledge);
-        await db.SaveChangesAsync();
-        db.ChangeTracker.Clear();
-
-        var events = await CreateSut(db).ListLiveEventsBySessionAsync(_projectId, _sessionId, CancellationToken.None);
-
-        events.Select(m => m.Id).Should().Equal(liveEvent.Id);
-    }
-
-    [Fact]
     public async Task UpdateAsync_refuses_to_write_a_memory_that_is_no_longer_live()
     {
         await using var db = await CreateDbAsync();
@@ -164,14 +146,14 @@ public sealed class MemoryStoreAdapterTests : IDisposable
     }
 
     [Fact]
-    public async Task FindLiveKnowledgeEntityMatchesAsync_skips_events_and_memories_that_are_no_longer_live()
+    public async Task FindLiveKnowledgeEntityMatchesAsync_skips_memories_that_are_no_longer_live()
     {
         await using var db = await CreateDbAsync();
         var sut = CreateSut(db);
         var live = NewMemory("Webhook retries");
         var superseded = NewMemory("Old webhook retries", status: MemoryStatus.Superseded);
-        var liveEvent = NewMemory("Fixed the webhook retry bug", type: MemoryType.Event);
-        foreach (var memory in new[] { live, superseded, liveEvent })
+        var obsolete = NewMemory("Webhook retry bug", status: MemoryStatus.Obsolete);
+        foreach (var memory in new[] { live, superseded, obsolete })
         {
             await sut.InsertAsync(memory, null, [Entity("symbol:webhookclient", "WebhookClient")], [], CancellationToken.None);
         }
@@ -293,7 +275,7 @@ public sealed class MemoryStoreAdapterTests : IDisposable
     }
 
     [Fact]
-    public async Task ListLiveKnowledgeCreatedSinceAsync_returns_only_live_knowledge_created_at_or_after_the_cutoff()
+    public async Task ListLiveKnowledgeCreatedSinceAsync_returns_only_live_memories_created_at_or_after_the_cutoff()
     {
         await using var db = await CreateDbAsync();
         var sut = CreateSut(db);
@@ -302,8 +284,7 @@ public sealed class MemoryStoreAdapterTests : IDisposable
         var old = NewMemory("Deploys run nightly");
         old.CreatedAt = since.AddMinutes(-1);
         var retired = NewMemory("Retries three times", status: MemoryStatus.Obsolete);
-        var recentEvent = NewMemory("Fixed the retry loop", type: MemoryType.Event);
-        foreach (var memory in new[] { recent, old, retired, recentEvent })
+        foreach (var memory in new[] { recent, old, retired })
         {
             await sut.InsertAsync(memory, null, [], [], CancellationToken.None);
         }
@@ -342,29 +323,22 @@ public sealed class MemoryStoreAdapterTests : IDisposable
         var db = new ContextDbContext(Options);
         await db.Database.MigrateAsync();
         db.Projects.Add(new Project { Id = _projectId, Name = "Payments", RootPath = "/repo/payments", CreatedAt = DateTimeOffset.UtcNow });
-        db.Sessions.AddRange(
-            new Session { Id = _sessionId, ProjectId = _projectId, StartedAt = DateTimeOffset.UtcNow },
-            new Session { Id = _otherSessionId, ProjectId = _projectId, StartedAt = DateTimeOffset.UtcNow });
+        db.Sessions.Add(new Session { Id = _sessionId, ProjectId = _projectId, StartedAt = DateTimeOffset.UtcNow });
         await db.SaveChangesAsync();
         db.ChangeTracker.Clear();
         return db;
     }
 
-    private DomainMemory NewMemory(
-        string title,
-        string? topic = null,
-        MemoryType type = MemoryType.Fact,
-        MemoryStatus status = MemoryStatus.Active,
-        Guid? session = null) => new()
+    private DomainMemory NewMemory(string title, string? topic = null, MemoryStatus status = MemoryStatus.Active) => new()
     {
         Id = Guid.NewGuid(),
         ProjectId = _projectId,
-        Type = type,
+        Type = MemoryType.Fact,
         Status = status,
         Title = title,
         Body = title + ".",
         Topic = topic,
-        CreatedFromSessionId = session ?? _sessionId,
+        CreatedFromSessionId = _sessionId,
         CreatedAt = DateTimeOffset.UtcNow,
         LastReinforcedAt = DateTimeOffset.UtcNow,
     };

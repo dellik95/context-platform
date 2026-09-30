@@ -88,7 +88,7 @@
               @if (outcome.excludedGroups.length > 0) {
                 · excluded {{ outcome.excludedGroups.join(', ') }}
               }
-              · {{ outcome.reclassifiedEvents }} events reclassified
+              · {{ outcome.retiredChangeLogs }} change logs retired
               @for (skipped of outcome.skippedGroups; track skipped.index) {
                 <div class="muted">Group {{ skipped.index }} skipped: {{ skipped.reason }}</div>
               }
@@ -193,11 +193,11 @@
             }
           </mat-accordion>
 
-          @if (dto.report.reclassifiedEvents.length > 0) {
-            <span class="detail-label">Reclassified as events</span>
+          @if (dto.report.retiredChangeLogs.length > 0) {
+            <span class="detail-label">Change logs to retire</span>
             <ul>
-              @for (evt of dto.report.reclassifiedEvents; track evt.id) {
-                <li>{{ evt.title }} <span class="muted">— {{ evt.reason }}</span></li>
+              @for (log of dto.report.retiredChangeLogs; track log.id) {
+                <li>{{ log.title }} <span class="muted">— {{ log.reason }}</span></li>
               }
             </ul>
           }

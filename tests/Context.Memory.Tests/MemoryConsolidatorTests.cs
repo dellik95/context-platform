@@ -426,43 +426,19 @@ public sealed class MemoryConsolidatorTests
     }
 
     [Fact]
-    public async Task Event_is_stored_as_an_event_and_never_merged_into_knowledge()
+    public async Task A_change_log_is_rejected_unless_it_was_remembered_explicitly()
     {
-        _embeddings.Map("webhook retries", Axis(0));
-        _chat.UseModel(judge: _ => "1|DUPLICATE|would merge if asked");
-        var knowledge = await ConsolidateAsync(WebhookRetries(), _sessionA);
-        var deployed = new MemoryCandidate(
-            MemoryType.Event, "Deployed the webhook retries change to staging",
-            "PaymentsWebhookClient retry changes for PAY-231 went to staging.", EvidenceSource.EventBatch,
-            [], [], [], [], "Payments webhooks");
+        var changeLog = Knowledge(
+            MemoryType.Discovery, "Added retries to PaymentsWebhookClient", "Retries were added for PAY-231.", "Payments webhooks",
+            ["Added RetryPolicy to PaymentsWebhookClient"]);
+        _embeddings.Map("added retries", Axis(0));
 
-        var first = await ConsolidateAsync(deployed, _sessionA);
-        var repeat = await ConsolidateAsync(deployed with { Title = "deployed the webhook retries change to staging." }, _sessionA);
-        var otherSession = await ConsolidateAsync(deployed, _sessionB);
+        var extracted = () => ConsolidateAsync(changeLog, _sessionA);
+        var remembered = await ConsolidateAsync(changeLog with { Source = EvidenceSource.Explicit }, null);
 
-        first.Outcome.Should().Be(ConsolidationOutcome.EventRecorded);
-        first.Memory.Type.Should().Be(MemoryType.Event);
-        repeat.Outcome.Should().Be(ConsolidationOutcome.EventRecorded);
-        repeat.Memory.Id.Should().Be(first.Memory.Id);
-        _store.Get(first.Memory.Id).ReinforcementCount.Should().Be(1);
-        otherSession.Memory.Id.Should().NotBe(first.Memory.Id, "events are deduped only within their session");
-
-        var untouched = _store.Get(knowledge.Memory.Id);
-        untouched.ReinforcementCount.Should().Be(0);
-        untouched.Body.Should().Be(knowledge.Memory.Body);
-        _store.VectorOf(first.Memory.Id).Should().BeNull("events are not embedded");
-        _chat.Calls.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task Change_log_titled_knowledge_is_recorded_as_an_event()
-    {
-        var result = await ConsolidateAsync(
-            Knowledge(MemoryType.Discovery, "Added retries to PaymentsWebhookClient", "Retries were added for PAY-231.", "Payments webhooks"),
-            _sessionA);
-
-        result.Outcome.Should().Be(ConsolidationOutcome.EventRecorded);
-        result.Memory.Type.Should().Be(MemoryType.Event);
+        await extracted.Should().ThrowAsync<ArgumentException>().WithMessage("*change log*");
+        remembered.Outcome.Should().Be(ConsolidationOutcome.Created);
+        _store.Live.Should().ContainSingle().Which.Id.Should().Be(remembered.Memory.Id);
     }
 
     [Fact]

@@ -18,13 +18,10 @@ internal static partial class MemoryCandidateValidator
 
     /// <summary>
     /// The candidate normalized to the persistence limits, or null with <paramref name="reason"/> set
-    /// when it carries too little to be worth storing. A non-explicit knowledge candidate titled as a
-    /// change log ("Added X", "Upgraded Y") is reclassified as an Event unless
-    /// <paramref name="reclassifyChangeLog"/> is false: knowledge describes how things are now, not what
-    /// a session did.
+    /// when it carries too little to be worth storing. A non-explicit pure change log is rejected:
+    /// memory describes how things are now, not what a session did.
     /// </summary>
-    public static MemoryCandidate? Normalize(
-        MemoryCandidate candidate, out string? reason, bool reclassifyChangeLog = true, int maxFacts = MaxFacts)
+    public static MemoryCandidate? Normalize(MemoryCandidate candidate, out string? reason, int maxFacts = MaxFacts)
     {
         var title = candidate.Title.Trim();
         var body = candidate.Body.Trim();
@@ -41,17 +38,15 @@ internal static partial class MemoryCandidateValidator
             return null;
         }
 
-        var type = reclassifyChangeLog
-            && candidate.Type.IsKnowledge()
-            && candidate.Source != EvidenceSource.Explicit
-            && IsChangeLogTitle(title)
-                ? MemoryType.Event
-                : candidate.Type;
+        if (candidate.Source != EvidenceSource.Explicit && IsChangeLog(title, candidate.Facts))
+        {
+            reason = "change log";
+            return null;
+        }
 
         reason = null;
         return candidate with
         {
-            Type = type,
             Title = Truncate(title, MaxTitleLength),
             Body = Truncate(body, MaxBodyLength),
             Facts = [.. candidate.Facts
@@ -67,7 +62,11 @@ internal static partial class MemoryCandidateValidator
         };
     }
 
-    public static bool IsChangeLogTitle(string title) => ChangeLogTitleRegex().IsMatch(title.Trim());
+    /// <summary>A change-log title ("Added X", "Upgraded Y") with no fact that states anything but another change.</summary>
+    public static bool IsChangeLog(string title, IEnumerable<string> facts) =>
+        IsChangeLogStatement(title) && facts.Where(f => !string.IsNullOrWhiteSpace(f)).All(IsChangeLogStatement);
+
+    private static bool IsChangeLogStatement(string text) => ChangeLogRegex().IsMatch(text.Trim());
 
     private static IReadOnlyList<string> Limit(IReadOnlyList<string> values) =>
         [.. values.Select(v => v.Trim()).Where(v => v.Length > 0).Take(MaxListEntries)];
@@ -76,5 +75,5 @@ internal static partial class MemoryCandidateValidator
         value.Length <= maxLength ? value : value[..maxLength];
 
     [GeneratedRegex(@"^(?:added|updated|changed|implemented|fixed|removed|refactored|renamed|upgraded|migrated|introduced|replaced|modified|deleted|bumped|moved|created|reverted|switched)\b", RegexOptions.IgnoreCase)]
-    private static partial Regex ChangeLogTitleRegex();
+    private static partial Regex ChangeLogRegex();
 }

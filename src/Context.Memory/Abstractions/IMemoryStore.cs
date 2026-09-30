@@ -16,7 +16,7 @@ public interface IMemoryStore
     /// <summary>Missing ids are omitted.</summary>
     Task<IReadOnlyList<Context.Domain.Entities.Memory>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct);
 
-    /// <summary>Entity rows with any of <paramref name="keys"/> belonging to live non-event memories of the project.</summary>
+    /// <summary>Entity rows with any of <paramref name="keys"/> belonging to live memories of the project.</summary>
     Task<IReadOnlyList<MemoryEntity>> FindLiveKnowledgeEntityMatchesAsync(Guid projectId, IReadOnlyCollection<string> keys, CancellationToken ct);
 
     Task<IReadOnlyList<Context.Domain.Entities.Memory>> ListLiveByTopicKeyAsync(Guid projectId, string topicKey, CancellationToken ct);
@@ -33,12 +33,10 @@ public interface IMemoryStore
     /// <summary>Oldest first.</summary>
     Task<IReadOnlyList<MemoryEvidence>> ListEvidenceAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct);
 
-    Task<IReadOnlyList<Context.Domain.Entities.Memory>> ListLiveEventsBySessionAsync(Guid projectId, Guid sessionId, CancellationToken ct);
-
-    /// <summary>Every live non-event memory of the project.</summary>
+    /// <summary>Every live memory of the project.</summary>
     Task<IReadOnlyList<Context.Domain.Entities.Memory>> ListLiveKnowledgeAsync(Guid projectId, CancellationToken ct);
 
-    /// <summary>Live non-event memories of the project created at or after <paramref name="since"/>.</summary>
+    /// <summary>Live memories of the project created at or after <paramref name="since"/>.</summary>
     Task<IReadOnlyList<Context.Domain.Entities.Memory>> ListLiveKnowledgeCreatedSinceAsync(Guid projectId, DateTimeOffset since, CancellationToken ct);
 
     /// <summary>Inserts the memory with its entities and evidence in one save. A Superseded memory may be
@@ -52,7 +50,7 @@ public interface IMemoryStore
 
     /// <summary>Writes every column of a live memory, appends <paramref name="evidence"/>, replaces the
     /// entity set when <paramref name="entities"/> is non-null and the embedding when
-    /// <paramref name="reembedding"/> is non-null. Turning knowledge into an Event drops its embedding.
+    /// <paramref name="reembedding"/> is non-null.
     /// The memory must have been read inside the caller's <see cref="InTransactionAsync{T}"/>; writing a
     /// memory that is not live, or over a stored row that is no longer live, throws.</summary>
     Task UpdateAsync(

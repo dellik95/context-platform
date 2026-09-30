@@ -98,8 +98,8 @@ public sealed class ReconsolidateMemoryJobHandler(
             ct).ConfigureAwait(false);
 
         logger?.LogInformation(
-            "Reconsolidation plan {ReportId} for project {ProjectId}: {Groups} groups ({Ambiguous} ambiguous), {Canonicals} canonicals, {Contradictions} contradictions, {Events} events.",
-            report.Id, payload.ProjectId, plan.Stats.Groups, plan.Stats.AmbiguousGroups, plan.Stats.Canonicals, plan.Stats.Contradictions, plan.Stats.ReclassifiedEvents);
+            "Reconsolidation plan {ReportId} for project {ProjectId}: {Groups} groups ({Ambiguous} ambiguous), {Canonicals} canonicals, {Contradictions} contradictions, {ChangeLogs} change logs to retire.",
+            report.Id, payload.ProjectId, plan.Stats.Groups, plan.Stats.AmbiguousGroups, plan.Stats.Canonicals, plan.Stats.Contradictions, plan.Stats.RetiredChangeLogs);
 
         if (payload.DryRun)
         {
@@ -132,7 +132,7 @@ public sealed class ReconsolidateMemoryJobHandler(
         }
 
         logger?.LogInformation(
-            "Applied reconsolidation report {ReportId}: {Applied} groups applied, {Skipped} skipped, {Excluded} excluded, {Events} events reclassified.",
-            reportId, outcome.AppliedGroups.Count, outcome.SkippedGroups.Count, outcome.ExcludedGroups.Count, outcome.ReclassifiedEvents);
+            "Applied reconsolidation report {ReportId}: {Applied} groups applied, {Skipped} skipped, {Excluded} excluded, {ChangeLogs} change logs retired.",
+            reportId, outcome.AppliedGroups.Count, outcome.SkippedGroups.Count, outcome.ExcludedGroups.Count, outcome.RetiredChangeLogs);
     }
 }

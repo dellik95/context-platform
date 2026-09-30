@@ -229,7 +229,6 @@ public class HybridScorerTests
     [InlineData(MemoryType.Procedure, 0.10)]
     [InlineData(MemoryType.Issue, 0.10)]
     [InlineData(MemoryType.Fact, 0.05)]
-    [InlineData(MemoryType.Event, 0.0)]
     public void MemoryTypeBonus_MatchesDocumentedConstantPerMemoryType(MemoryType type, double expectedBonus)
     {
         var bonus = HybridScorer.MemoryTypeBonus.TryGetValue(type, out var b) ? b : 0.0;
@@ -239,17 +238,15 @@ public class HybridScorerTests
     }
 
     [Fact]
-    public void NormalizedMemoryTypeBonus_OrdersDecisionAboveBehaviorAboveFactAboveEvent()
+    public void NormalizedMemoryTypeBonus_OrdersDecisionAboveBehaviorAboveFact()
     {
         var decision = HybridScorer.NormalizedMemoryTypeBonus(MemoryType.Decision);
         var behavior = HybridScorer.NormalizedMemoryTypeBonus(MemoryType.Behavior);
         var fact = HybridScorer.NormalizedMemoryTypeBonus(MemoryType.Fact);
-        var evt = HybridScorer.NormalizedMemoryTypeBonus(MemoryType.Event);
 
         decision.Should().Be(1.0);
         decision.Should().BeGreaterThan(behavior);
         behavior.Should().BeGreaterThan(fact);
-        fact.Should().BeGreaterThan(evt);
-        evt.Should().Be(0.0);
+        fact.Should().BeGreaterThan(0.0);
     }
 }

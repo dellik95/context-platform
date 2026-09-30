@@ -13,12 +13,12 @@ public interface IContextEngine
     Task<Context.Graph.Abstractions.ImpactSet> GraphImpactAsync(Guid symbolId, int maxHops, CancellationToken ct);
 
     /// <summary>
-    /// Knowledge-first memory search, best first. <paramref name="topic"/> restricts to memories with
-    /// that exact topic (case-insensitive); <paramref name="kind"/> to knowledge or events;
-    /// <paramref name="includeSuperseded"/> adds every non-live status. A blank query lists the pool.
+    /// Memory search, best first. <paramref name="topic"/> restricts to memories with that exact topic
+    /// (case-insensitive); <paramref name="includeSuperseded"/> adds every non-live status. A blank
+    /// query lists the pool.
     /// </summary>
     Task<IReadOnlyList<Context.Domain.Entities.Memory>> SearchMemoryAsync(
-        Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null, Context.Domain.Enums.MemoryKind? kind = null);
+        Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null);
 
     /// <summary>The memory with its evidence (oldest first) and entities; null when it doesn't exist
     /// or belongs to another project.</summary>

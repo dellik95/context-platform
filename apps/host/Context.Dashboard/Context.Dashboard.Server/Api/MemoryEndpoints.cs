@@ -1,6 +1,5 @@
 using Context.Application;
 using Context.Dashboard.Server.Security;
-using Context.Domain.Enums;
 
 namespace Context.Dashboard.Server.Api;
 
@@ -19,11 +18,11 @@ public static class MemoryEndpoints
     }
 
     private static async Task<IResult> SearchAsync(
-        Guid? projectId, string? q, bool? includeSuperseded, string? topic, MemoryKind? kind,
+        Guid? projectId, string? q, bool? includeSuperseded, string? topic,
         IContextEngine engine, CurrentProjectAccessor currentProject, CancellationToken ct)
     {
         var results = await engine
-            .SearchMemoryAsync(projectId ?? currentProject.ProjectId, q ?? string.Empty, includeSuperseded ?? false, ct, topic, kind)
+            .SearchMemoryAsync(projectId ?? currentProject.ProjectId, q ?? string.Empty, includeSuperseded ?? false, ct, topic)
             .ConfigureAwait(false);
         return Results.Ok(results);
     }

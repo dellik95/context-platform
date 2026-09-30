@@ -59,8 +59,7 @@ internal sealed class InMemoryStore : IMemoryStore
     public Task<IReadOnlyList<MemoryEntity>> FindLiveKnowledgeEntityMatchesAsync(Guid projectId, IReadOnlyCollection<string> keys, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<MemoryEntity>>([.. _entities.Where(e => e.ProjectId == projectId
             && keys.Contains(e.Key)
-            && _memories[e.MemoryId].IsLive
-            && _memories[e.MemoryId].Type != MemoryType.Event)]);
+            && _memories[e.MemoryId].IsLive)]);
 
     public Task<IReadOnlyList<DomainMemory>> ListLiveByTopicKeyAsync(Guid projectId, string topicKey, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<DomainMemory>>([.. _memories.Values
@@ -86,19 +85,14 @@ internal sealed class InMemoryStore : IMemoryStore
     public Task<IReadOnlyList<MemoryEvidence>> ListEvidenceAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<MemoryEvidence>>([.. _evidence.Where(e => ids.Contains(e.MemoryId))]);
 
-    public Task<IReadOnlyList<DomainMemory>> ListLiveEventsBySessionAsync(Guid projectId, Guid sessionId, CancellationToken ct) =>
-        Task.FromResult<IReadOnlyList<DomainMemory>>([.. _memories.Values
-            .Where(m => m.ProjectId == projectId && m.Type == MemoryType.Event && m.CreatedFromSessionId == sessionId && m.IsLive)
-            .Select(Clone)]);
-
     public Task<IReadOnlyList<DomainMemory>> ListLiveKnowledgeAsync(Guid projectId, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<DomainMemory>>([.. _memories.Values
-            .Where(m => m.ProjectId == projectId && m.Type != MemoryType.Event && m.IsLive)
+            .Where(m => m.ProjectId == projectId && m.IsLive)
             .Select(Clone)]);
 
     public Task<IReadOnlyList<DomainMemory>> ListLiveKnowledgeCreatedSinceAsync(Guid projectId, DateTimeOffset since, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<DomainMemory>>([.. _memories.Values
-            .Where(m => m.ProjectId == projectId && m.Type != MemoryType.Event && m.IsLive && m.CreatedAt >= since)
+            .Where(m => m.ProjectId == projectId && m.IsLive && m.CreatedAt >= since)
             .Select(Clone)]);
 
     public Task InsertAsync(
@@ -121,13 +115,8 @@ internal sealed class InMemoryStore : IMemoryStore
             throw new InvalidOperationException($"Memory {memory.Id} is {stored.Status} and cannot be written as {memory.Status}.");
         }
 
-        var becameEvent = _memories[memory.Id].Type != MemoryType.Event && memory.Type == MemoryType.Event;
         _memories[memory.Id] = Clone(memory);
-        if (becameEvent)
-        {
-            _vectors.Remove(memory.Id);
-        }
-        else if (reembedding is not null)
+        if (reembedding is not null)
         {
             _vectors[memory.Id] = reembedding;
         }

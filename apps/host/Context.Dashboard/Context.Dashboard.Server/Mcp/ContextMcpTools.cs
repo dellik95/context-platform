@@ -121,19 +121,18 @@ public sealed class ContextMcpTools(
     }
 
     [McpServerTool(Name = "memory_search")]
-    [Description("Searches a project's persistent memories. Knowledge (decisions, constraints, architecture, behavior, " +
-        "configuration, discoveries, procedures, issues, facts) ranks first; events (the change log) rank lower unless the " +
-        "query asks what changed or when. Each memory carries a short reusable Topic tag (e.g. \"Auth middleware\") naming " +
+    [Description("Searches the project's knowledge base: durable memories of how the system works (architecture, " +
+        "component behavior, decisions and their reasons, constraints, configuration, gotchas, procedures, open issues). " +
+        "Each memory carries a short reusable Topic tag (e.g. \"Auth middleware\") naming " +
         "the feature/subsystem it's about, so memories on the same subject from different sessions can be found together via the topic filter.")]
     public async Task<IReadOnlyList<Context.Domain.Entities.Memory>> MemorySearchAsync(
         [Description("Search query — matched by text, by the files/symbols/tickets it names, and by semantic similarity, so a paraphrase with no shared words can still surface a relevant memory.")] string query,
         [Description("Include superseded and obsolete memories.")] bool includeSuperseded = false,
         [Description("Optional exact-match filter on the memory's Topic tag, e.g. \"Auth middleware\".")] string? topic = null,
-        [Description("Optional: \"knowledge\" or \"event\". Omit for both.")] string? kind = null,
         [Description("Maximum memories to return.")] int limit = DefaultMemorySearchLimit,
         CancellationToken ct = default)
     {
-        var memories = await engine.SearchMemoryAsync(currentProject.ProjectId, query, includeSuperseded, ct, topic, ParseMemoryKind(kind)).ConfigureAwait(false);
+        var memories = await engine.SearchMemoryAsync(currentProject.ProjectId, query, includeSuperseded, ct, topic).ConfigureAwait(false);
         // Every other search tool here caps its result set; without this one a project with a few
         // hundred memories returns all of them, full Body text included, into the caller's context.
         return [.. memories.Take(Math.Clamp(limit, 1, MaxMemorySearchLimit))];
@@ -164,8 +163,8 @@ public sealed class ContextMcpTools(
         [Description("The memory's main content: 2-5 self-contained sentences naming the SPECIFIC files (by path), " +
             "classes/functions/symbols (by name), and config keys actually involved — never a generic stand-in " +
             "('a service', 'some files'). State the actual mechanism/reasoning, not just that something happened.")] string content,
-        [Description("One of Fact, Decision, Constraint, Architecture, Behavior, Configuration, Discovery, Procedure, Issue, Event. Unknown or omitted means Fact.")] string? type = null,
-        [Description("Short one-line title (under 100 chars), outcome-focused (what changed/was learned, not what you did to find out). " +
+        [Description("One of Fact, Decision, Constraint, Architecture, Behavior, Configuration, Discovery, Procedure, Issue. Unknown or omitted means Fact.")] string? type = null,
+        [Description("Short one-line title (under 100 chars) stating what is true or was learned, in the present tense — not what was changed or what you did to find out. " +
             "Omit to auto-derive one from the first sentence of content.")] string? title = null,
         [Description("Short 2-5 word phrase naming the feature/subsystem/component this memory is about (e.g. \"Auth middleware\", " +
             "\"Job dispatcher retry logic\") — reuse an existing name for that area rather than inventing a one-off phrase, so memories " +
@@ -174,7 +173,7 @@ public sealed class ContextMcpTools(
             "surrounding narrative (shown when a search result needs to say something useful in very few tokens). Reuse concrete " +
             "names from content (a file path, a symbol, a number, a config key) rather than a vaguer paraphrase.")] string[]? facts = null,
         [Description("1-3 tags naming what KIND of knowledge this is, chosen ONLY from this fixed list: how-it-works, why-it-exists, " +
-            "what-changed, problem-solution, gotcha, pattern, trade-off. Omit if none clearly apply.")] string[]? concepts = null,
+            "problem-solution, gotcha, pattern, trade-off. Omit if none clearly apply.")] string[]? concepts = null,
         [Description("Specific files this memory is about that were read/examined but not changed. Omit if not applicable.")] string[]? filesRead = null,
         [Description("Specific files this memory is about that were actually edited because of it. Omit if not applicable.")] string[]? filesModified = null,
         CancellationToken ct = default)
@@ -351,9 +350,6 @@ public sealed class ContextMcpTools(
 
         return parsed;
     }
-
-    private static MemoryKind? ParseMemoryKind(string? kind) =>
-        Enum.TryParse<MemoryKind>(kind?.Trim(), ignoreCase: true, out var parsed) && Enum.IsDefined(parsed) ? parsed : null;
 
     private static GraphEdgeKind[]? ParseEdgeKinds(string[]? kinds)
     {

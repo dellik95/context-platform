@@ -109,11 +109,11 @@ public sealed class RecreateEmbeddingsJobHandlerTests
     }
 
     [Fact]
-    public async Task HandleAsync_re_embeds_live_knowledge_and_skips_events()
+    public async Task HandleAsync_re_embeds_every_live_memory()
     {
         var projectId = Guid.NewGuid();
-        var knowledge = MakeMemory(projectId, MemoryType.Decision);
-        var sessionEvent = MakeMemory(projectId, MemoryType.Event);
+        var decision = MakeMemory(projectId, MemoryType.Decision);
+        var issue = MakeMemory(projectId, MemoryType.Issue);
 
         var chunkRepository = new Mock<IChunkRepository>();
         chunkRepository.Setup(r => r.ListByProjectAsync(projectId, It.IsAny<CancellationToken>()))
@@ -121,7 +121,7 @@ public sealed class RecreateEmbeddingsJobHandlerTests
 
         var memoryRepository = new Mock<IMemoryRepository>();
         memoryRepository.Setup(r => r.ListByProjectAsync(projectId, false, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<Context.Domain.Entities.Memory>)[knowledge, sessionEvent]);
+            .ReturnsAsync((IReadOnlyList<Context.Domain.Entities.Memory>)[decision, issue]);
 
         var memoryStore = new Mock<IMemoryStore>();
         var sut = new RecreateEmbeddingsJobHandler(
@@ -130,12 +130,16 @@ public sealed class RecreateEmbeddingsJobHandlerTests
 
         await sut.HandleAsync(MakeJob(projectId), CancellationToken.None);
 
-        memoryStore.Verify(
-            s => s.UpsertEmbeddingAsync(
-                It.Is<Context.Domain.Entities.Memory>(m => m.Id == knowledge.Id),
-                It.Is<MemoryVector>(v => v.ModelKey == "unknown" && v.Vector.SequenceEqual(FixedVector)),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
+        foreach (var memory in new[] { decision, issue })
+        {
+            memoryStore.Verify(
+                s => s.UpsertEmbeddingAsync(
+                    It.Is<Context.Domain.Entities.Memory>(m => m.Id == memory.Id),
+                    It.Is<MemoryVector>(v => v.ModelKey == "unknown" && v.Vector.SequenceEqual(FixedVector)),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+
         memoryStore.VerifyNoOtherCalls();
     }
 

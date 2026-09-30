@@ -99,7 +99,7 @@ public sealed class MemoryReconsolidatorTests
         var prompt = _chat.Calls.Should().ContainSingle().Subject;
         SourceTitles(prompt).Should().BeEquivalentTo(npmSandbox.Title, npmE2e.Title);
         plan.Untouched.Should().Be(3);
-        plan.ReclassifiedEvents.Should().BeEmpty("a change-log title that carries facts stays knowledge");
+        plan.RetiredChangeLogs.Should().BeEmpty("a change-log title that carries a durable fact stays");
 
         await ApplyAsync(plan);
 
@@ -140,9 +140,9 @@ public sealed class MemoryReconsolidatorTests
         plan.Stats.LiveKnowledge.Should().Be(4);
         plan.Stats.Reembedded.Should().Be(1);
         _store.VectorOf(rules.Id)!.ModelKey.Should().Be(ModelKey);
-        var reclassified = plan.ReclassifiedEvents.Should().ContainSingle().Subject;
-        reclassified.Id.Should().Be(changes.Id);
-        reclassified.Reason.Should().Be("file-change summary");
+        var retired = plan.RetiredChangeLogs.Should().ContainSingle().Subject;
+        retired.Id.Should().Be(changes.Id);
+        retired.Reason.Should().Be("file-change summary");
 
         var roundTripped = ReconsolidationReport.FromJson(plan.ToJson());
         roundTripped.Groups.Single().Canonicals.Single().Facts.Should().Equal(plan.Groups.Single().Canonicals.Single().Facts);
@@ -300,7 +300,7 @@ public sealed class MemoryReconsolidatorTests
     }
 
     [Fact]
-    public async Task Change_summaries_stored_as_knowledge_are_reclassified_as_events_on_apply()
+    public async Task Change_logs_stored_as_memories_are_retired_on_apply()
     {
         var summary = Seed(Knowledge(MemoryType.Discovery, "Changed 3 files in the refund service",
             "RefundPolicy.cs, RefundJob.cs and RefundJobTests.cs were edited.", "Refund service"), Axis(1));
@@ -314,6 +314,8 @@ public sealed class MemoryReconsolidatorTests
             "PaymentsGatewayClient.cs was edited.", "Payments gateway", source: EvidenceSource.Explicit), Axis(5));
         var withFacts = Seed(Knowledge(MemoryType.Configuration, "Updated webhook signing to HMAC-SHA256",
             "WebhookVerifier signs with HMAC-SHA256.", "Payments webhooks", ["Webhook signatures use HMAC-SHA256"]), Axis(6));
+        var changeFacts = Seed(Knowledge(MemoryType.Configuration, "Bumped the refunds SDK",
+            "Refunds.Sdk moved to 4.2.", "Refund service", ["Bumped Refunds.Sdk to 4.2", "Updated the lock file"]), Axis(0));
         var contested = Seed(Knowledge(MemoryType.Discovery, "Changed 5 files in the refund export",
             "RefundExport.cs was edited.", "Refund export"), Axis(7));
         contested.Status = MemoryStatus.Contested;
@@ -321,11 +323,12 @@ public sealed class MemoryReconsolidatorTests
 
         var plan = await PlanAsync();
 
-        plan.ReclassifiedEvents.Select(e => (e.Id, e.Reason)).Should().BeEquivalentTo(new[]
+        plan.RetiredChangeLogs.Select(e => (e.Id, e.Reason)).Should().BeEquivalentTo(new[]
         {
             (summary.Id, "file-change summary"),
-            (changeLog.Id, "change-log title without facts"),
-            (stale.Id, "change-log title without facts"),
+            (changeLog.Id, "change log without durable facts"),
+            (stale.Id, "change log without durable facts"),
+            (changeFacts.Id, "change log without durable facts"),
         });
 
         var touched = _store.Get(stale.Id);
@@ -334,19 +337,19 @@ public sealed class MemoryReconsolidatorTests
 
         var applied = await ApplyAsync(plan);
 
-        applied.Outcome!.ReclassifiedEvents.Should().Be(2);
-        applied.Outcome.SkippedEvents.Should().Equal(stale.Id);
-        foreach (var reclassified in new[] { summary, changeLog })
+        applied.Outcome!.RetiredChangeLogs.Should().Be(3);
+        applied.Outcome.SkippedChangeLogs.Should().Equal(stale.Id);
+        foreach (var retired in new[] { summary, changeLog, changeFacts })
         {
-            _store.Get(reclassified.Id).Type.Should().Be(MemoryType.Event);
-            _store.VectorOf(reclassified.Id).Should().BeNull("events are never embedded");
+            _store.Get(retired.Id).Status.Should().Be(MemoryStatus.Obsolete);
         }
 
-        _store.Get(stale.Id).Type.Should().Be(MemoryType.Discovery);
-        _store.Get(pinned.Id).Type.Should().Be(MemoryType.Discovery);
-        _store.Get(explicitMemory.Id).Type.Should().Be(MemoryType.Discovery);
-        _store.Get(withFacts.Id).Type.Should().Be(MemoryType.Configuration);
-        _store.Get(contested.Id).Type.Should().Be(MemoryType.Discovery, "a contested claim is settled, not reclassified away");
+        foreach (var kept in new[] { stale, pinned, explicitMemory, withFacts })
+        {
+            _store.Get(kept.Id).Status.Should().Be(MemoryStatus.Active);
+        }
+
+        _store.Get(contested.Id).Status.Should().Be(MemoryStatus.Contested, "a contested claim is settled, not retired away");
     }
 
     [Fact]

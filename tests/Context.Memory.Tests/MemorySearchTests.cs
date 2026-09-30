@@ -78,9 +78,9 @@ public sealed class MemorySearchTests
     [Fact]
     public void Header_omits_a_blank_topic_and_uses_singular_source()
     {
-        var memory = Memory("Nightly job", "Ran reindex", MemoryType.Event);
+        var memory = Memory("Nightly job", "Reindexes every project", MemoryType.Procedure);
 
-        MemoryNote.Header(memory).Should().Be("[Event · conf 0.70 · 1 source]");
-        MemoryNote.Format(memory, includeFacts: true).Should().Be("[Event · conf 0.70 · 1 source] Nightly job: Ran reindex");
+        MemoryNote.Header(memory).Should().Be("[Procedure · conf 0.70 · 1 source]");
+        MemoryNote.Format(memory, includeFacts: true).Should().Be("[Procedure · conf 0.70 · 1 source] Nightly job: Reindexes every project");
     }
 }

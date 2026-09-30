@@ -7,15 +7,12 @@
 
 export type MemoryType =
   | 'Fact' | 'Decision' | 'Constraint' | 'Architecture' | 'Behavior'
-  | 'Configuration' | 'Discovery' | 'Procedure' | 'Issue' | 'Event';
+  | 'Configuration' | 'Discovery' | 'Procedure' | 'Issue';
 
 // Active and Contested are live; Superseded and Obsolete are kept for history.
 export type MemoryStatus = 'Active' | 'Contested' | 'Superseded' | 'Obsolete';
 
 export type MemoryTier = 'Working' | 'LongTerm';
-
-// Knowledge is every type but Event.
-export type MemoryKind = 'Knowledge' | 'Event';
 
 export type EvidenceRelation = 'Created' | 'Reinforced' | 'Merged' | 'Superseded' | 'Contradicted' | 'Verified' | 'Refuted';
 
@@ -120,8 +117,8 @@ export interface Memory {
   title: string;
   body: string;
   factsJson: string | null;
-  // conceptsJson: fixed taxonomy tags (how-it-works, why-it-exists, what-changed,
-  // problem-solution, gotcha, pattern, trade-off). filesReadJson/filesModifiedJson: the specific
+  // conceptsJson: fixed taxonomy tags (how-it-works, why-it-exists, problem-solution, gotcha,
+  // pattern, trade-off). filesReadJson/filesModifiedJson: the specific
   // files THIS memory is about (not every file touched in its session).
   conceptsJson: string | null;
   filesReadJson: string | null;
@@ -184,7 +181,7 @@ export interface ReconsolidationStats {
   canonicals: number;
   sourcesMerged: number;
   contradictions: number;
-  reclassifiedEvents: number;
+  retiredChangeLogs: number;
   usedModel: boolean;
 }
 
@@ -240,7 +237,7 @@ export interface ReconsolidationGroup {
   note: string | null;
 }
 
-export interface ReclassifiedEvent {
+export interface RetiredChangeLog {
   id: string;
   title: string;
   status: MemoryStatus;
@@ -253,13 +250,13 @@ export interface ReconsolidationApplyOutcome {
   appliedGroups: number[];
   excludedGroups: number[];
   skippedGroups: { index: number; reason: string }[];
-  reclassifiedEvents: number;
-  skippedEvents: string[];
+  retiredChangeLogs: number;
+  skippedChangeLogs: string[];
 }
 
 export interface ReconsolidationReport {
   groups: ReconsolidationGroup[];
-  reclassifiedEvents: ReclassifiedEvent[];
+  retiredChangeLogs: RetiredChangeLog[];
   untouched: number;
   stats: ReconsolidationStats;
   outcome: ReconsolidationApplyOutcome | null;

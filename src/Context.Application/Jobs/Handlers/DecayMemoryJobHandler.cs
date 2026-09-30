@@ -10,7 +10,7 @@ namespace Context.Application.Jobs.Handlers;
 
 /// <summary>
 /// Retires memories <see cref="DecayCalculator.IsExpired"/> says have run their course: Working-tier
-/// knowledge whose decayed relevance fell below the threshold, and events past their retention.
+/// memories whose decayed relevance fell below the threshold.
 /// They become <see cref="MemoryStatus.Obsolete"/> (kept for history, dropped from the vector index) and
 /// release the contest partners they leave uncontested; nothing is deleted. Ranking decay itself is
 /// applied at read time and needs no write-back.

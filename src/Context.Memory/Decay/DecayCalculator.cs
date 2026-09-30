@@ -14,9 +14,6 @@ public static class DecayCalculator
     /// <summary>Working knowledge below this relevance is retired to Obsolete.</summary>
     public const double ObsoleteRelevanceThreshold = 0.15;
 
-    /// <summary>Events older than this (since last reinforced) are retired to Obsolete.</summary>
-    public static readonly TimeSpan EventRetention = TimeSpan.FromDays(90);
-
     public static TimeSpan HalfLifeFor(MemoryTier tier) => tier == MemoryTier.LongTerm ? LongTermHalfLife : WorkingHalfLife;
 
     /// <summary><c>0.5 ^ (age / halfLife(tier))</c>, or 1.0 for a pinned memory.</summary>
@@ -35,22 +32,10 @@ public static class DecayCalculator
     public static double ComputeRelevanceMultiplier(double confidence, DateTimeOffset lastReinforcedAt, bool pinned, MemoryTier tier, DateTimeOffset now) =>
         Math.Clamp(confidence, 0.0, 1.0) * ComputeDecayFactor(lastReinforcedAt, pinned, tier, now);
 
-    /// <summary>Whether the decay job should retire <paramref name="memory"/>: events past
-    /// <see cref="EventRetention"/>, Working knowledge below <see cref="ObsoleteRelevanceThreshold"/>.
-    /// Pinned and LongTerm knowledge never expire.</summary>
-    public static bool IsExpired(Context.Domain.Entities.Memory memory, DateTimeOffset now)
-    {
-        if (memory.Pinned)
-        {
-            return false;
-        }
-
-        if (memory.Type.IsEvent())
-        {
-            return now - memory.LastReinforcedAt > EventRetention;
-        }
-
-        return memory.Tier == MemoryTier.Working
-            && ComputeRelevanceMultiplier(memory.Confidence, memory.LastReinforcedAt, false, memory.Tier, now) < ObsoleteRelevanceThreshold;
-    }
+    /// <summary>Whether the decay job should retire <paramref name="memory"/>: Working memory below
+    /// <see cref="ObsoleteRelevanceThreshold"/>. Pinned and LongTerm memories never expire.</summary>
+    public static bool IsExpired(Context.Domain.Entities.Memory memory, DateTimeOffset now) =>
+        !memory.Pinned
+        && memory.Tier == MemoryTier.Working
+        && ComputeRelevanceMultiplier(memory.Confidence, memory.LastReinforcedAt, false, memory.Tier, now) < ObsoleteRelevanceThreshold;
 }

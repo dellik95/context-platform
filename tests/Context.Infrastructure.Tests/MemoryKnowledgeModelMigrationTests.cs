@@ -8,20 +8,24 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace Context.Infrastructure.Tests;
 
 /// <summary>
-/// Seeds rows in the pre-MemoryKnowledgeModel schema with raw SQL, then migrates to latest and checks
-/// the data rewrite.
+/// Seeds rows in the pre-MemoryKnowledgeModel schema with raw SQL, then migrates through
+/// MemoryKnowledgeModel and checks the data rewrite.
 /// </summary>
 public sealed class MemoryKnowledgeModelMigrationTests : IDisposable
 {
     private const string PreviousMigration = "20260928103618_PrioritizePendingSessionJobs";
+    private const string TargetMigration = "20260928152330_MemoryKnowledgeModel";
+
+    // The Event ordinal this migration mapped change-log types to; RemoveEventMemories deletes those rows.
+    private const MemoryType Event = (MemoryType)9;
 
     private static readonly Guid ProjectId = Guid.NewGuid();
     private static readonly Guid SessionId = Guid.NewGuid();
 
     private static readonly (int Old, MemoryType New)[] TypeRemap =
     [
-        (0, MemoryType.Decision), (1, MemoryType.Discovery), (2, MemoryType.Discovery), (3, MemoryType.Event),
-        (4, MemoryType.Event), (5, MemoryType.Event), (6, MemoryType.Event), (7, MemoryType.Architecture),
+        (0, MemoryType.Decision), (1, MemoryType.Discovery), (2, MemoryType.Discovery), (3, Event),
+        (4, Event), (5, Event), (6, Event), (7, MemoryType.Architecture),
         (8, MemoryType.Issue), (9, MemoryType.Constraint), (10, MemoryType.Behavior), (11, MemoryType.Configuration),
         (12, MemoryType.Procedure), (13, MemoryType.Architecture),
     ];
@@ -75,7 +79,7 @@ public sealed class MemoryKnowledgeModelMigrationTests : IDisposable
                 $"('{Id(Guid.NewGuid())}', 7, 'p', 0, 10, 0, '{At(created)}');";
             await db.Database.ExecuteSqlRawAsync(sql);
 
-            await db.Database.MigrateAsync();
+            await db.GetService<IMigrator>().MigrateAsync(TargetMigration);
         }
 
         await using var readDb = CreateContext();

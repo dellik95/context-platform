@@ -12,5 +12,4 @@ public enum MemoryType
     Discovery = 6,
     Procedure = 7,
     Issue = 8,
-    Event = 9,
 }

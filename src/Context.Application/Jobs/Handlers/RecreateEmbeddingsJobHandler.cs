@@ -66,9 +66,8 @@ public sealed class RecreateEmbeddingsJobHandler(
             }
         }
 
-        // Events are never embedded: consolidation compares only knowledge by similarity.
-        var liveKnowledge = await memories.ListByProjectAsync(payload.ProjectId, includeSuperseded: false, ct).ConfigureAwait(false);
-        foreach (var batch in batchLimits.Split(liveKnowledge.Where(m => m.Type.IsKnowledge()), MemoryEmbeddingText.For))
+        var liveMemories = await memories.ListByProjectAsync(payload.ProjectId, includeSuperseded: false, ct).ConfigureAwait(false);
+        foreach (var batch in batchLimits.Split(liveMemories, MemoryEmbeddingText.For))
         {
             ct.ThrowIfCancellationRequested();
 

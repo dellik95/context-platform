@@ -199,75 +199,28 @@ public sealed class ContextEngineTests
         pack.OpenIssues.Should().ContainSingle().Which.Should().Contain("Issue B");
     }
 
-    // ---- 1b. Query-aware memory sections: knowledge for domain questions, events for change history ----
+    // ---- 1b. Query-aware memory sections ----
 
     private void SetupLiveMemories(Guid projectId, params DomainMemory[] memories) =>
         _memoryRepository.Setup(r => r.ListByProjectAsync(projectId, false, It.IsAny<CancellationToken>()))
             .ReturnsAsync(memories);
 
-    private (DomainMemory Canonical, DomainMemory[] Events) SeedTokenRefreshHistory(Guid projectId)
+    [Fact]
+    public async Task SearchContextAsync_answers_a_domain_question_with_the_matching_memory_only()
     {
+        var projectId = Guid.NewGuid();
         var canonical = MakeMemory(projectId, MemoryType.Decision, "Token refresh strategy",
             "Refresh tokens rotate on every refresh and expire after 14 days", confidence: 0.8);
         canonical.SourceCount = 6;
         canonical.Topic = "Auth";
-
-        var now = DateTimeOffset.UtcNow;
-        var events = Enumerable.Range(1, 6)
-            .Select(i =>
-            {
-                var e = MakeMemory(projectId, MemoryType.Event, $"Adjusted token refresh step {i}",
-                    $"Session {i} tweaked how the token refresh works", confidence: 0.9);
-                e.CreatedAt = now.AddDays(-i);
-                return e;
-            })
-            .ToArray();
-
-        SetupLiveMemories(projectId, [canonical, .. events]);
-        return (canonical, events);
-    }
-
-    [Fact]
-    public async Task SearchContextAsync_answers_a_domain_question_with_canonical_knowledge_and_no_events()
-    {
-        var projectId = Guid.NewGuid();
-        SeedTokenRefreshHistory(projectId);
+        var unrelated = MakeMemory(projectId, MemoryType.Architecture, "Dashboard layout", "Panels are lazy-loaded Angular routes", confidence: 0.9);
+        SetupLiveMemories(projectId, canonical, unrelated);
 
         var pack = await _sut.SearchContextAsync(
             new SearchQuery(projectId, "how does token refresh work", null, TokenBudget: 5000), CancellationToken.None);
 
         pack.HistoricalNotes.Should().ContainSingle()
             .Which.Should().Be("[Decision · Auth · conf 0.80 · 6 sources] Token refresh strategy: Refresh tokens rotate on every refresh and expire after 14 days");
-    }
-
-    [Fact]
-    public async Task SearchContextAsync_answers_a_change_history_question_with_events_newest_first()
-    {
-        var projectId = Guid.NewGuid();
-        var (canonical, events) = SeedTokenRefreshHistory(projectId);
-
-        var pack = await _sut.SearchContextAsync(
-            new SearchQuery(projectId, "what changed in token refresh recently", null, TokenBudget: 5000), CancellationToken.None);
-
-        var expectedEvents = events.OrderByDescending(e => e.CreatedAt).ToList();
-        pack.HistoricalNotes.Should().HaveCount(events.Length + 1);
-        for (var i = 0; i < expectedEvents.Count; i++)
-        {
-            pack.HistoricalNotes[i].Should().StartWith($"[Event · conf 0.90 · 1 source] {expectedEvents[i].Title}:");
-        }
-
-        pack.HistoricalNotes[^1].Should().Contain(canonical.Title);
-    }
-
-    [Fact]
-    public async Task SearchContextAsync_with_an_empty_query_shows_top_knowledge_and_never_events()
-    {
-        var projectId = Guid.NewGuid();
-        var (canonical, _) = SeedTokenRefreshHistory(projectId);
-
-        var pack = await _sut.SearchContextAsync(new SearchQuery(projectId, string.Empty, null, TokenBudget: 5000), CancellationToken.None);
-
-        pack.HistoricalNotes.Should().ContainSingle().Which.Should().Contain(canonical.Title);
     }
 
     [Fact]
@@ -753,39 +706,20 @@ public sealed class ContextEngineTests
     }
 
     [Fact]
-    public async Task SearchMemoryAsync_puts_knowledge_before_events_unless_the_query_asks_for_change_history()
-    {
-        var projectId = Guid.NewGuid();
-        var evt = MakeMemory(projectId, MemoryType.Event, "SQLite migration shipped", "Moved the SQLite migration to startup", confidence: 0.9);
-        var fact = MakeMemory(projectId, MemoryType.Fact, "SQLite migration", "Runs from the SQLite migration runner", confidence: 0.5);
-        SetupLiveMemories(projectId, evt, fact);
-
-        var domain = await _sut.SearchMemoryAsync(projectId, "sqlite migration", includeSuperseded: false, CancellationToken.None);
-        var history = await _sut.SearchMemoryAsync(projectId, "what changed in sqlite migration recently", includeSuperseded: false, CancellationToken.None);
-
-        domain.Should().Equal(fact, evt);
-        history.Should().Equal(evt, fact);
-    }
-
-    [Fact]
-    public async Task SearchMemoryAsync_filters_by_kind_and_topic()
+    public async Task SearchMemoryAsync_filters_by_topic()
     {
         var projectId = Guid.NewGuid();
         var authDecision = MakeMemory(projectId, MemoryType.Decision, "JWT", "Short-lived tokens");
         authDecision.Topic = "Auth";
-        var authEvent = MakeMemory(projectId, MemoryType.Event, "Rotated keys", "Rotated JWT signing keys");
-        authEvent.Topic = "Auth";
+        var authConstraint = MakeMemory(projectId, MemoryType.Constraint, "Signing keys", "JWT signing keys rotate monthly");
+        authConstraint.Topic = "Auth";
         var dbFact = MakeMemory(projectId, MemoryType.Fact, "SQLite", "WAL mode");
         dbFact.Topic = "Storage";
-        SetupLiveMemories(projectId, authDecision, authEvent, dbFact);
+        SetupLiveMemories(projectId, authDecision, authConstraint, dbFact);
 
-        var knowledge = await _sut.SearchMemoryAsync(projectId, string.Empty, includeSuperseded: false, CancellationToken.None, kind: MemoryKind.Knowledge);
-        var events = await _sut.SearchMemoryAsync(projectId, string.Empty, includeSuperseded: false, CancellationToken.None, kind: MemoryKind.Event);
         var auth = await _sut.SearchMemoryAsync(projectId, string.Empty, includeSuperseded: false, CancellationToken.None, topic: " auth ");
 
-        knowledge.Should().BeEquivalentTo([authDecision, dbFact]);
-        events.Should().ContainSingle().Which.Should().BeSameAs(authEvent);
-        auth.Should().BeEquivalentTo([authDecision, authEvent]);
+        auth.Should().BeEquivalentTo([authDecision, authConstraint]);
     }
 
     [Fact]

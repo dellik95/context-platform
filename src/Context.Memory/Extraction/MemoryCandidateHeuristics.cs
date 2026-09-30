@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
 
@@ -17,7 +16,6 @@ internal static class MemoryCandidateHeuristics
     public static IReadOnlyList<MemoryCandidate> FromSummary(SessionSummaryChunk chunk)
     {
         var candidates = new List<MemoryCandidate>();
-        var changedFiles = ParseChangedFiles(chunk.ChangedFilesJson);
 
         // No LLM judgment is available offline to say WHICH files a Decision/Discovery/Issue
         // candidate is specifically about, so those three don't get FilesModified populated here
@@ -25,7 +23,6 @@ internal static class MemoryCandidateHeuristics
         TryAdd(candidates, MemoryType.Decision, chunk.Decisions);
         TryAdd(candidates, MemoryType.Discovery, chunk.Discovered);
         TryAdd(candidates, MemoryType.Issue, chunk.OpenIssues);
-        TryAddChangedFiles(candidates, changedFiles);
 
         return candidates;
     }
@@ -49,38 +46,6 @@ internal static class MemoryCandidateHeuristics
 
         var title = Truncate(firstLine, MaxTitleLength);
         candidates.Add(new MemoryCandidate(type, title, section.Trim(), EvidenceSource.Heuristic, ExtractFacts(section), [], [], []));
-    }
-
-    private static void TryAddChangedFiles(List<MemoryCandidate> candidates, IReadOnlyList<string> files)
-    {
-        if (files.Count == 0)
-        {
-            return;
-        }
-
-        var title = Truncate($"Changed {files.Count} file(s): {string.Join(", ", files.Take(3))}", MaxTitleLength);
-        var body = "Files touched this session:\n" + string.Join('\n', files.Select(f => $"- {f}"));
-        var facts = files.Take(MaxFacts).Select(f => $"Changed {f}").ToList();
-        // An activity record, not knowledge: FilesModified is accurate here, not a guess.
-        candidates.Add(new MemoryCandidate(MemoryType.Event, title, body, EvidenceSource.Heuristic, facts, [], [], files,
-            ScopePath: ScopePathHeuristics.DeriveFromFiles(files, [])));
-    }
-
-    private static IReadOnlyList<string> ParseChangedFiles(string? changedFilesJson)
-    {
-        if (string.IsNullOrWhiteSpace(changedFilesJson))
-        {
-            return [];
-        }
-
-        try
-        {
-            return JsonSerializer.Deserialize<List<string>>(changedFilesJson) ?? [];
-        }
-        catch (JsonException)
-        {
-            return [];
-        }
     }
 
     /// <summary>Turns a section's first few non-empty lines into standalone facts — a cheap

@@ -3,7 +3,6 @@ import { Component, DestroyRef, Injector, computed, effect, inject, signal } fro
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormField, form } from '@angular/forms/signals';
 import { MatButtonModule } from '@angular/material/button';
-import { MatButtonToggleChange, MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatCardModule } from '@angular/material/card';
 import { MatCheckboxChange, MatCheckboxModule } from '@angular/material/checkbox';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
@@ -16,7 +15,7 @@ import { MatSnackBar } from '@angular/material/snack-bar';
 import { MatTabChangeEvent, MatTabsModule } from '@angular/material/tabs';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { ApiService } from '../../core/api.service';
-import { Memory, MemoryDetail, MemoryKind } from '../../core/models';
+import { Memory, MemoryDetail } from '../../core/models';
 import { SignalrService } from '../../core/signalr.service';
 import { ProjectContextService } from '../projects/project-context.service';
 import { ConsolidationDialogComponent } from './consolidation-dialog.component';
@@ -30,7 +29,6 @@ type DetailState = MemoryDetail | 'loading' | 'error';
     FormField,
     MatCardModule,
     MatButtonModule,
-    MatButtonToggleModule,
     MatIconModule,
     MatFormFieldModule,
     MatInputModule,
@@ -56,9 +54,8 @@ export class MemoriesPanelComponent {
   protected readonly searchModel = signal({ query: '', includeSuperseded: false });
   protected readonly searchForm = form(this.searchModel);
 
-  protected readonly kindFilter = signal<MemoryKind | null>(null);
   private readonly committedQuery = signal<
-    { projectId: string; query: string; includeSuperseded: boolean; kind: MemoryKind | null } | undefined
+    { projectId: string; query: string; includeSuperseded: boolean } | undefined
   >(undefined);
   private readonly resource = this.api.memoriesResource(this.committedQuery);
   protected readonly memories = computed(() => (this.resource.hasValue() ? this.resource.value() : []));
@@ -120,14 +117,9 @@ export class MemoriesPanelComponent {
     this.searchModel.update((current) => ({ ...current, includeSuperseded: event.checked }));
   }
 
-  protected setKind(event: MatButtonToggleChange): void {
-    this.kindFilter.set(event.value === 'All' ? null : (event.value as MemoryKind));
-    this.commitSearch();
-  }
-
   private commitSearch(): void {
     const { query, includeSuperseded } = this.searchForm().value();
-    this.committedQuery.set({ projectId: this.ctx.projectId(), query, includeSuperseded, kind: this.kindFilter() });
+    this.committedQuery.set({ projectId: this.ctx.projectId(), query, includeSuperseded });
   }
 
   protected onTabChange(memory: Memory, event: MatTabChangeEvent): void {

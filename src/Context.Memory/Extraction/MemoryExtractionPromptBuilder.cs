@@ -24,8 +24,10 @@ internal static class MemoryExtractionPromptBuilder
         material — a batch of raw session events (user prompts, the assistant's replies, tool calls
         with their inputs and outputs, file reads/edits, shell commands, errors), a conversation summary written when the session
         was compacted, or a session summary — so it can be remembered across future sessions. Memory is a long-term
-        engineering knowledge base for this codebase — not a transcript of what happened in this
-        session. Propose between 0 and 5 candidate memories.
+        engineering knowledge base describing how this codebase works: its architecture, how its
+        components behave and interact, the decisions behind them and their reasons, constraints,
+        configuration, gotchas and procedures. It is NOT a record of what the agent or the user did
+        in this session. Propose between 0 and 5 candidate memories.
 
         CORE RULE: only propose a memory if it passes this test — "would this still help another
         coding session, working on this repository weeks or months from now, understand, modify,
@@ -38,6 +40,9 @@ internal static class MemoryExtractionPromptBuilder
 
         Reject (do NOT propose a memory for) anything that is session/process narration rather
         than project knowledge:
+        - change logs: what was added, changed, fixed, removed, renamed, upgraded or refactored in
+          this session ("Added X", "Fixed Y", "Moved Z to W"). If the only thing to say about a piece
+          of work is that it was done, propose nothing for it
         - what was searched, grepped, or inspected, and in what order ("checked X", "searched for
           Y", "traced the error through four hops") — keep the verified conclusion, if any, drop
           the process that led to it
@@ -65,17 +70,20 @@ internal static class MemoryExtractionPromptBuilder
         thread into several candidates that each restate the same fact from a different angle —
         if a single thread clearly dominates the session and everything else is trivial, propose
         one memory for it, not a handful of near-duplicates. Only propose more than one memory
-        when they describe genuinely distinct decisions, discoveries, or fixes. Do not invent
+        when they describe genuinely distinct decisions, mechanisms, or gotchas. Do not invent
         diversity where none exists. Do not propose a memory for a class/function/file merely
         existing or being located somewhere — that's what a code index is for; only propose one
         when there is a non-obvious behavior, invariant, or relationship attached to it.
 
-        KNOWLEDGE vs EVENT: every TYPE except Event is knowledge and must describe how the code
-        behaves NOW, in the present tense, as an engineer reading it next month would need it.
-        "Added X", "Upgraded Y to Z", "Fixed W" are change logs: either restate them as the current
-        behavior they produced ("Authentication uses the OAuth2 PKCE flow") or, if the change itself
-        is all there is to say, propose it as TYPE Event. Never put the prior behavior in FACTS
-        ("previously ...", "used to ...") - that history is recorded separately.
+        KNOWLEDGE, NOT HISTORY: every memory describes how the code behaves NOW, in the present
+        tense, as an engineer reading it next month would need it. Good subjects: how a component
+        works and what it depends on, why a design was chosen over the alternatives, an invariant
+        or constraint the code relies on, what a config key controls, a gotcha and its root cause,
+        how to perform a recurring procedure. When a session changed something, record only the
+        durable knowledge the change reveals - restate it as the current behavior and its reason
+        ("Authentication uses the OAuth2 PKCE flow because the SPA cannot keep a client secret"),
+        never as the act of changing it ("Switched authentication to PKCE"). Never put the prior
+        behavior in FACTS ("previously ...", "used to ...").
 
         Titles must be outcome-focused (what is true or was learned), never process-focused (what
         you did to find out), and must be as concrete as the session material allows - name the
@@ -98,9 +106,9 @@ internal static class MemoryExtractionPromptBuilder
           or settings actually involved, exactly as they appeared in the session material below -
           never fall back to a generic stand-in ("a service", "some files", "the config", "the
           module") when the concrete name is available.
-        - State the actual mechanism or reasoning, not just that something happened: what the
-          concrete problem or prior behavior was, what specifically changed or was found, and why
-          that resolves/explains it (the causal link a reader would otherwise have to re-derive).
+        - State the actual mechanism or reasoning, not just that something happened: how the code
+          behaves, the concrete problem or constraint behind it, and why it is built this way (the
+          causal link a reader would otherwise have to re-derive).
         - Prefer one dense, specific paragraph over several vague ones. A BODY that could be copy-
           pasted onto an unrelated memory of the same TYPE without anyone noticing is too generic -
           rewrite it with the details that make it true of THIS session and no other.
@@ -112,14 +120,14 @@ internal static class MemoryExtractionPromptBuilder
                     OllamaEmbeddingGeneratorDecorator.cs) wraps the raw Ollama client and limits
                     concurrent GenerateAsync calls to 4 via a SemaphoreSlim, because the shared
                     Ollama instance returned truncated/zero vectors when more than ~6 embedding
-                    requests were in flight at once. EmbeddingLookupAdapter now awaits this
-                    decorator instead of calling the raw generator directly."
+                    requests were in flight at once. EmbeddingLookupAdapter goes through this
+                    decorator rather than calling the raw generator directly."
 
         Respond in EXACTLY this format:
 
         MEMORY_COUNT: <n>
         MEMORY 1
-        TYPE: <one of Fact, Decision, Constraint, Architecture, Behavior, Configuration, Discovery, Procedure, Issue, Event>
+        TYPE: <one of Fact, Decision, Constraint, Architecture, Behavior, Configuration, Discovery, Procedure, Issue>
         TITLE: <short one-line title, under 100 characters>
         BODY: <2-5 sentences, self-contained, naming specific files/symbols/config keys and the actual mechanism or reasoning per the BODY guidance above - not a restatement of TITLE>
         TOPIC: <short 2-5 word phrase naming the feature/subsystem/component this memory is about>
@@ -155,8 +163,8 @@ internal static class MemoryExtractionPromptBuilder
         softer summary of it.
 
         CONCEPTS is 1-3 tags naming what KIND of knowledge this memory is, chosen ONLY from this
-        fixed list (do not invent new ones): how-it-works, why-it-exists, what-changed,
-        problem-solution, gotcha, pattern, trade-off. This lets a future search filter by kind of
+        fixed list (do not invent new ones): how-it-works, why-it-exists, problem-solution,
+        gotcha, pattern, trade-off. This lets a future search filter by kind of
         insight instead of only matching text. Omit the CONCEPTS block entirely if none clearly apply.
 
         FILES_READ / FILES_MODIFIED are the specific files THIS memory is about — not every file

@@ -51,7 +51,7 @@ public sealed class LlmMemoryExtractorTests
 
         logger.Messages.Should().HaveCountGreaterThanOrEqualTo(2);
         logger.Messages.Should().Contain(m => m.Contains("candidate memories", StringComparison.Ordinal));
-        logger.Messages.Should().Contain(m => m.Contains("1 created, 0 reinforced, 0 merged, 0 superseded, 0 contested, 0 events", StringComparison.Ordinal));
+        logger.Messages.Should().Contain(m => m.Contains("1 created, 0 reinforced, 0 merged, 0 superseded, 0 contested.", StringComparison.Ordinal));
         logger.Messages.Should().NotContain(m => m.Contains(SecretTitle, StringComparison.Ordinal));
         logger.Messages.Should().NotContain(m => m.Contains("SECRET_BODY_57f3d2", StringComparison.Ordinal));
     }

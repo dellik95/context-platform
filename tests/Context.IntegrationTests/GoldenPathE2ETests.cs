@@ -22,7 +22,8 @@ namespace Context.IntegrationTests;
 /// <summary>
 /// True end-to-end test of the golden path through the IIndexingPipeline/IContextEngine surface:
 /// index a real (tiny) source tree, search for a symbol in it, run a session that edits a file,
-/// end the session, and confirm the resulting memory can be found again by a later search.
+/// end the session without storing its change log as a memory, and confirm knowledge remembered
+/// about the file can be found again by a later search.
 ///
 /// No mocks anywhere: this composes the exact same DI graph the host builds
 /// (AddContextInfrastructure -> AddContextIndexing -> AddContextGraph -> AddContextProviders ->
@@ -200,10 +201,8 @@ public sealed class GoldenPathE2ETests : IAsyncLifetime
             await WaitForJobsToDrainAsync(_provider, TimeSpan.FromSeconds(60), ct);
 
             // -----------------------------------------------------------------------------------
-            // Step 8: a SessionSummary now exists, and at least one Change memory was extracted
-            // from the offline heuristic candidate generator's ChangedFiles path (see
-            // MemoryCandidateHeuristics.TryAddChangedFiles, fed by HeuristicSessionSummaryBuilder's
-            // FileEdit-derived ChangedFilesJson).
+            // Step 8: a SessionSummary now exists, and the session's file edit alone left no
+            // memory behind: memory is a knowledge base, not a change log.
             // -----------------------------------------------------------------------------------
             SessionSummary? summary;
             IReadOnlyList<DomainMemory> memories;
@@ -218,24 +217,24 @@ public sealed class GoldenPathE2ETests : IAsyncLifetime
 
             summary.Should().NotBeNull("EndSessionAsync should have enqueued SummarizeSession, which persists a SessionSummary row");
 
-            var changeMemory = memories.FirstOrDefault(m => m.Type == MemoryType.Event);
-            changeMemory.Should().NotBeNull(
-                "the offline MemoryCandidateHeuristics.TryAddChangedFiles path should turn the session's FileEdit event into an Event memory");
-            changeMemory!.Body.Should().Contain(orderCalculatorRelativePath,
-                "the Event memory's body lists the files touched this session");
+            memories.Should().BeEmpty("a session that only edited a file has no durable knowledge to extract offline");
 
             // -----------------------------------------------------------------------------------
-            // Step 9: the next session picks up the prior memory via SearchMemoryAsync.
+            // Step 9: knowledge remembered about the file is recalled by a later search.
             // -----------------------------------------------------------------------------------
+            DomainMemory remembered;
             IReadOnlyList<DomainMemory> recalled;
             await using (var recallScope = _provider.CreateAsyncScope())
             {
                 var engine = recallScope.ServiceProvider.GetRequiredService<IContextEngine>();
+                remembered = await engine.RememberExplicitlyAsync(
+                    project.Id, "OrderCalculator.ComputeTotal sums every line total of the order.", MemoryType.Behavior, ct,
+                    filesModified: [orderCalculatorRelativePath]);
                 recalled = await engine.SearchMemoryAsync(project.Id, orderCalculatorRelativePath, includeSuperseded: false, ct);
             }
 
-            recalled.Should().NotBeEmpty("searching for the edited file's path should recall the Change memory recorded about it");
-            recalled.Should().Contain(m => m.Id == changeMemory.Id);
+            recalled.Should().Contain(m => m.Id == remembered.Id,
+                "searching for the file's path should recall the knowledge remembered about it");
         }
         finally
         {

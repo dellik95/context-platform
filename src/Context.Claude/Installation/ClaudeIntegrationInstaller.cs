@@ -241,7 +241,7 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         - `context_search` - hybrid (lexical + semantic) search over code and docs, merged with ranked project memory into a token-budgeted context pack.
         - `code_search` - raw ranked code/text search hits, no memory merge or budgeting.
         - `symbol_search` - finds symbols (classes, functions, methods, ...) by name pattern.
-        - `memory_search` - searches persistent memories (decisions, discoveries, bug fixes, open issues, ...).
+        - `memory_search` - semantic search over the project's knowledge base: how the system works (architecture, component behavior, decisions and their reasons, constraints, configuration, gotchas, procedures, open issues).
         - `memory_get` - fetches one memory by id.
         - `memory_remember` - explicitly stores something right now, bypassing the normal extraction triggers.
         - `memory_forget` - permanently deletes one memory by id. No undo.
@@ -255,7 +255,7 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
         ## When to use them
 
         - Prefer `context_search` or `code_search` over re-reading files from scratch when looking for how something in the codebase works.
-        - Check `memory_search` for prior decisions, bugfixes, or discoveries before re-investigating a question that may already be answered from an earlier session.
+        - Check `memory_search` for how a component works, prior decisions, or known gotchas before re-investigating a question that may already be answered from an earlier session. Ask in plain language; a paraphrase finds the memory without sharing its words.
         - Call `graph_impact` on a symbol before changing it, to see its blast radius (callers, implementers, tests).
 
         ## Storing memories (`memory_remember`)
@@ -272,8 +272,9 @@ public sealed class ClaudeIntegrationInstaller : IClaudeIntegrationInstaller
           would otherwise cost someone real time to re-find.
         - The user shares significant standing context you'd otherwise have to ask for again: a constraint,
           a deadline, who owns what, where something is tracked externally.
-        - A feature/bugfix/refactor of real consequence completes (not "ran the tests" or "reviewed the
-          file" — an outcome, not routine narration).
+        - Work of real consequence completes and leaves durable knowledge behind: how the new or changed
+          component works and why. Record that knowledge in the present tense, never the change itself —
+          "Added X" / "Fixed Y" are change logs and do not belong in memory.
 
         Fill in `title`/`topic`/`facts`/`concepts`/`filesRead`/`filesModified` yourself when you call it —
         you already have the full context right now, so there's no reason to leave this an unstructured

@@ -10,7 +10,7 @@ namespace Context.IntegrationTests;
 public sealed class HookEndpointsSessionStartTests
 {
     [Fact]
-    public async Task TryBuildSessionStartContextAsync_lists_top_knowledge_with_canonical_headers()
+    public async Task TryBuildSessionStartContextAsync_lists_top_memories_with_canonical_headers()
     {
         var projectId = Guid.NewGuid();
         var memories = Enumerable.Range(1, 7)
@@ -28,7 +28,7 @@ public sealed class HookEndpointsSessionStartTests
             .ToList();
 
         var engine = new Mock<IContextEngine>(MockBehavior.Strict);
-        engine.Setup(e => e.SearchMemoryAsync(projectId, string.Empty, false, It.IsAny<CancellationToken>(), null, MemoryKind.Knowledge))
+        engine.Setup(e => e.SearchMemoryAsync(projectId, string.Empty, false, It.IsAny<CancellationToken>(), null))
             .ReturnsAsync(memories);
         engine.Setup(e => e.ProjectInfoAsync(projectId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProjectInfo(projectId, "p", "/repo", 10, 20, 7, null));
@@ -45,7 +45,7 @@ public sealed class HookEndpointsSessionStartTests
     public async Task TryBuildSessionStartContextAsync_returns_null_when_memory_search_fails()
     {
         var engine = new Mock<IContextEngine>();
-        engine.Setup(e => e.SearchMemoryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<string?>(), It.IsAny<MemoryKind?>()))
+        engine.Setup(e => e.SearchMemoryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<string?>()))
             .ThrowsAsync(new InvalidOperationException("db down"));
 
         var context = await HookEndpoints.TryBuildSessionStartContextAsync(engine.Object, Guid.NewGuid(), CancellationToken.None);

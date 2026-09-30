@@ -21,7 +21,6 @@ import {
   LogTailDto,
   Memory,
   MemoryDetail,
-  MemoryKind,
   ProjectDto,
   ProjectSettingsDto,
   ProjectStatusDto,
@@ -104,13 +103,12 @@ export class ApiService {
   }
 
   memoriesResource(
-    params: Signal<{ projectId: string; query: string; includeSuperseded: boolean; kind: MemoryKind | null } | undefined>,
+    params: Signal<{ projectId: string; query: string; includeSuperseded: boolean } | undefined>,
   ): HttpResourceRef<Memory[]> {
     return httpResource<Memory[]>(() => {
       const p = params();
       if (!p) return undefined;
       const requestParams: Record<string, string> = { projectId: p.projectId, q: p.query, includeSuperseded: String(p.includeSuperseded) };
-      if (p.kind) requestParams['kind'] = p.kind;
       return { url: `${this.base}/api/memories`, params: requestParams };
     }, { defaultValue: [] });
   }

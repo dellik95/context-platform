@@ -108,19 +108,6 @@ public class MemoryReconsolidationSchedulerTests
     }
 
     [Fact]
-    public async Task PollOnceAsync_only_stamps_when_nothing_but_events_changed_since_the_last_run()
-    {
-        var last = DateTimeOffset.UtcNow.AddHours(-2);
-        Settings(60, last);
-        LiveMemories((MemoryType.Fact, last.AddMinutes(-30)), (MemoryType.Event, last.AddMinutes(30)));
-
-        await CreateSut().PollOnceAsync(CancellationToken.None);
-
-        VerifyStamped(Times.Once());
-        VerifyEnqueued(Times.Never());
-    }
-
-    [Fact]
     public async Task PollOnceAsync_enqueues_the_first_run_of_a_project_with_knowledge()
     {
         Settings(60, null);

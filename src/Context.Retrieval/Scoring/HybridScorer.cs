@@ -44,10 +44,9 @@ public sealed class HybridScorer : IHybridScorer
     public const double DefaultMemoryWeight = 0.0;
 
     /// <summary>
-    /// Small additive kind-based re-rank nudge favoring durable knowledge over activity records:
-    /// decisions, constraints and architecture highest, other knowledge kinds next, generic facts a
-    /// little, events none. Used by memory ranking through <see cref="NormalizedMemoryTypeBonus"/>,
-    /// not folded into <see cref="Combine"/>.
+    /// Small additive kind-based re-rank nudge: decisions, constraints and architecture highest, other
+    /// kinds next, generic facts a little. Used by memory ranking through
+    /// <see cref="NormalizedMemoryTypeBonus"/>, not folded into <see cref="Combine"/>.
     /// </summary>
     public static readonly IReadOnlyDictionary<MemoryType, double> MemoryTypeBonus = new Dictionary<MemoryType, double>
     {
@@ -60,7 +59,6 @@ public sealed class HybridScorer : IHybridScorer
         [MemoryType.Procedure] = 0.10,
         [MemoryType.Issue] = 0.10,
         [MemoryType.Fact] = 0.05,
-        // MemoryType.Event is intentionally absent -> 0.0 bonus.
     };
 
     private static readonly double MaxMemoryTypeBonus = MemoryTypeBonus.Values.Max();

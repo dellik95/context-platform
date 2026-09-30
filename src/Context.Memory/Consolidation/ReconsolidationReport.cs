@@ -11,7 +11,7 @@ namespace Context.Memory.Consolidation;
 /// </summary>
 public sealed record ReconsolidationReport(
     IReadOnlyList<ReconsolidationGroup> Groups,
-    IReadOnlyList<ReclassifiedEvent> ReclassifiedEvents,
+    IReadOnlyList<RetiredChangeLog> RetiredChangeLogs,
     int Untouched,
     ReconsolidationStats Stats)
 {
@@ -65,7 +65,7 @@ public sealed record ReconsolidationContradiction(Guid A, Guid B, string? Reason
 /// <param name="WinnerId">Set when the code confirms one side and refutes the other.</param>
 public sealed record ContradictionCodeCheck(CodeCheckResult A, CodeCheckResult B, Guid? WinnerId, string? Note);
 
-public sealed record ReclassifiedEvent(Guid Id, string Title, MemoryStatus Status, DateTimeOffset LastReinforcedAt, string Reason);
+public sealed record RetiredChangeLog(Guid Id, string Title, MemoryStatus Status, DateTimeOffset LastReinforcedAt, string Reason);
 
 public sealed record ReconsolidationStats(
     int LiveKnowledge,
@@ -75,7 +75,7 @@ public sealed record ReconsolidationStats(
     int Canonicals,
     int SourcesMerged,
     int Contradictions,
-    int ReclassifiedEvents,
+    int RetiredChangeLogs,
     bool UsedModel);
 
 public sealed record ReconsolidationApplyOutcome(
@@ -83,8 +83,8 @@ public sealed record ReconsolidationApplyOutcome(
     IReadOnlyList<int> AppliedGroups,
     IReadOnlyList<int> ExcludedGroups,
     IReadOnlyList<SkippedGroup> SkippedGroups,
-    int ReclassifiedEvents,
-    IReadOnlyList<Guid> SkippedEvents);
+    int RetiredChangeLogs,
+    IReadOnlyList<Guid> SkippedChangeLogs);
 
 public sealed record SkippedGroup(int Index, string Reason);
 
