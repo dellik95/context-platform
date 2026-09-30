@@ -132,6 +132,14 @@
             }
           </div>
         }
+
+        <div class="field-grid">
+          <mat-form-field appearance="outline" subscriptSizing="dynamic">
+            <mat-label>Embedding batch size</mat-label>
+            <input matInput type="number" [formField]="settingsForm.embeddingBatchSize" />
+            <mat-hint>Texts per embedding request: 0 = provider default, 1 = no batching</mat-hint>
+          </mat-form-field>
+        </div>
       </mat-card>
 
       <mat-accordion class="settings-accordion" multi>

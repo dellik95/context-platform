@@ -44,6 +44,7 @@ describe('SettingsPanelComponent cloud provider disclosure', () => {
     llmRetryBaseDelaySeconds: 30,
     rateLimitCooldownMinutes: 5,
     rateLimitMaxCooldownMinutes: 60,
+    embeddingBatchSize: 0,
   };
 
   function fakeSettingsResource(settings: ProjectSettingsDto) {

@@ -161,11 +161,13 @@ public sealed partial class MemoryReconsolidator(
 
             // Embedding calls stay outside the write transaction.
             var vectors = new List<MemoryVector>();
-            foreach (var canonical in group.Canonicals)
+            if (group.Canonicals.Count > 0)
             {
                 generator ??= await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
-                var embedding = await generator.GenerateAsync(MemoryEmbeddingText.For(canonical.Title, canonical.Body), cancellationToken: ct).ConfigureAwait(false);
-                vectors.Add(new MemoryVector(generator.GetProviderModelKey(), embedding.Vector.ToArray()));
+                var modelKey = generator.GetProviderModelKey();
+                var embeddings = await generator.GenerateAsync(
+                    group.Canonicals.Select(c => MemoryEmbeddingText.For(c.Title, c.Body)), cancellationToken: ct).ConfigureAwait(false);
+                vectors.AddRange(embeddings.Select(e => new MemoryVector(modelKey, e.Vector.ToArray())));
             }
 
             var skipReason = await store.InTransactionAsync<string?>(async () =>

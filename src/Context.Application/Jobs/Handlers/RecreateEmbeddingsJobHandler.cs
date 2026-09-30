@@ -38,39 +38,45 @@ public sealed class RecreateEmbeddingsJobHandler(
 
         var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(payload.ProjectId, ct).ConfigureAwait(false);
         var providerKey = embeddingGenerator.GetProviderModelKey();
+        var batchLimits = embeddingGenerator.GetBatchLimits();
 
         var allChunks = await chunks.ListByProjectAsync(payload.ProjectId, ct).ConfigureAwait(false);
-        foreach (var group in allChunks.GroupBy(c => c.ContentHash))
+        foreach (var batch in batchLimits.Split(allChunks.GroupBy(c => c.ContentHash), g => g.First().Text))
         {
             ct.ThrowIfCancellationRequested();
 
-            var result = await embeddingGenerator.GenerateAsync(group.First().Text, cancellationToken: ct).ConfigureAwait(false);
-            var vector = result.Vector.ToArray();
-
-            await embeddings.UpsertAsync(new Context.Domain.Entities.Embedding
+            var generated = await embeddingGenerator.GenerateAsync(batch.Select(g => g.First().Text), cancellationToken: ct).ConfigureAwait(false);
+            for (var i = 0; i < batch.Count; i++)
             {
-                ContentHash = group.Key,
-                Provider = providerKey,
-                Model = embeddingGenerator.GetModelId() ?? providerKey,
-                Dim = vector.Length,
-                Vector = EmbeddingVectorCodec.Encode(vector),
-                CreatedAt = DateTimeOffset.UtcNow
-            }, ct).ConfigureAwait(false);
+                var vector = generated[i].Vector.ToArray();
+                await embeddings.UpsertAsync(new Context.Domain.Entities.Embedding
+                {
+                    ContentHash = batch[i].Key,
+                    Provider = providerKey,
+                    Model = embeddingGenerator.GetModelId() ?? providerKey,
+                    Dim = vector.Length,
+                    Vector = EmbeddingVectorCodec.Encode(vector),
+                    CreatedAt = DateTimeOffset.UtcNow
+                }, ct).ConfigureAwait(false);
 
-            foreach (var chunk in group)
-            {
-                await chunkVectorIndex.UpsertAsync(chunk.Id, payload.ProjectId, providerKey, vector, ct).ConfigureAwait(false);
+                foreach (var chunk in batch[i])
+                {
+                    await chunkVectorIndex.UpsertAsync(chunk.Id, payload.ProjectId, providerKey, vector, ct).ConfigureAwait(false);
+                }
             }
         }
 
         // Events are never embedded: consolidation compares only knowledge by similarity.
         var liveKnowledge = await memories.ListByProjectAsync(payload.ProjectId, includeSuperseded: false, ct).ConfigureAwait(false);
-        foreach (var memory in liveKnowledge.Where(m => m.Type.IsKnowledge()))
+        foreach (var batch in batchLimits.Split(liveKnowledge.Where(m => m.Type.IsKnowledge()), MemoryEmbeddingText.For))
         {
             ct.ThrowIfCancellationRequested();
 
-            var result = await embeddingGenerator.GenerateAsync(MemoryEmbeddingText.For(memory), cancellationToken: ct).ConfigureAwait(false);
-            await memoryStore.UpsertEmbeddingAsync(memory, new MemoryVector(providerKey, result.Vector.ToArray()), ct).ConfigureAwait(false);
+            var generated = await embeddingGenerator.GenerateAsync(batch.Select(MemoryEmbeddingText.For), cancellationToken: ct).ConfigureAwait(false);
+            for (var i = 0; i < batch.Count; i++)
+            {
+                await memoryStore.UpsertEmbeddingAsync(batch[i], new MemoryVector(providerKey, generated[i].Vector.ToArray()), ct).ConfigureAwait(false);
+            }
         }
     }
 }

@@ -235,6 +235,33 @@ public sealed class IndexingPipelineTests : IDisposable
         _reportedProgress.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task IndexFileAsync_enqueues_missing_embeddings_as_jobs_of_the_provider_batch_size()
+    {
+        var projectId = Guid.NewGuid();
+        _projectRepository.Setup(p => p.GetByIdAsync(projectId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Project { Id = projectId, Name = "Demo", RootPath = _root, CreatedAt = DateTimeOffset.UtcNow });
+        System.IO.File.WriteAllText(Path.Combine(_root, "multi.fake"), "multi");
+
+        _embeddingRepository.Setup(e => e.GetMissingContentHashesAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IEnumerable<string> hashes, string _, CancellationToken _) => (IReadOnlyList<string>)[.. hashes]);
+        _providerResolver.Setup(r => r.GetEmbeddingGeneratorAsync(projectId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BatchingEmbeddingGenerator(new NoOpEmbeddingGenerator(), new EmbeddingBatchLimits(3, int.MaxValue)));
+        var enqueued = new List<EmbedChunkPayload>();
+        _jobQueue.Setup(q => q.EnqueueAsync(JobType.EmbedChunk, It.IsAny<object>(), projectId, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Callback<JobType, object, Guid?, int, CancellationToken>((_, payload, _, _, _) => enqueued.Add((EmbedChunkPayload)payload))
+            .ReturnsAsync(Guid.NewGuid());
+
+        await BuildPipeline(new MultiSymbolFakeParser()).IndexFileAsync(projectId, "multi.fake", CancellationToken.None);
+
+        enqueued.Should().OnlyContain(p => p.ProjectId == projectId);
+        enqueued.Select(p => p.Items.Count).Should().Equal(3, 1);
+        var items = enqueued.SelectMany(p => p.Items).ToList();
+        items.Select(i => i.ContentHash).Should().OnlyHaveUniqueItems();
+        items.Select(i => i.ChunkIds.Count).Should().Equal(1, 1, 1, 2);
+        items[^1].Text.Should().Contain("dup()");
+    }
+
     private static async IAsyncEnumerable<ScannedFile> ToAsyncEnumerable(IEnumerable<ScannedFile> items)
     {
         foreach (var item in items)
@@ -278,6 +305,22 @@ public sealed class IndexingPipelineTests : IDisposable
             [new SymbolDraft("Foo", "Foo", SymbolKind.Function, 1, 1, "Foo()", "return;", DocComment: null, ParentQualifiedName: null)];
 
         public IReadOnlyList<RelationDraft> ExtractRelations(ParsedAst ast, IReadOnlySet<string>? projectSymbolNames = null) => [];
+    }
+
+    private sealed class MultiSymbolFakeParser : ILanguageParser
+    {
+        public IReadOnlySet<string> SupportedExtensions { get; } = new HashSet<string> { ".fake" };
+
+        public ParsedAst Parse(string sourceText, ParsedAst? previousTree = null) => new(new object(), sourceText);
+
+        // X.Dup and Y.Dup are byte-identical, so they share one content hash.
+        public IReadOnlyList<SymbolDraft> ExtractSymbols(ParsedAst ast) =>
+            [Draft("A", "a()"), Draft("B", "b()"), Draft("C", "c()"), Draft("X.Dup", "dup()"), Draft("Y.Dup", "dup()")];
+
+        public IReadOnlyList<RelationDraft> ExtractRelations(ParsedAst ast, IReadOnlySet<string>? projectSymbolNames = null) => [];
+
+        private static SymbolDraft Draft(string qualifiedName, string signature) =>
+            new(qualifiedName.Split('.')[^1], qualifiedName, SymbolKind.Function, 1, 1, signature, "return;", DocComment: null, ParentQualifiedName: null);
     }
 
     public void Dispose()

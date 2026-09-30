@@ -1,3 +1,5 @@
+using Context.Providers.Embeddings;
+
 namespace Context.Application.Settings;
 
 /// <summary>
@@ -58,6 +60,11 @@ public static class ProjectSettingsValidator
         if (dto.RateLimitMaxCooldownMinutes < dto.RateLimitCooldownMinutes)
         {
             errors.Add($"{nameof(dto.RateLimitMaxCooldownMinutes)} must be at least {nameof(dto.RateLimitCooldownMinutes)}.");
+        }
+
+        if (dto.EmbeddingBatchSize is < 0 or > EmbeddingBatchLimits.MaxConfigurableInputs)
+        {
+            errors.Add($"{nameof(dto.EmbeddingBatchSize)} must be between 0 (provider default) and {EmbeddingBatchLimits.MaxConfigurableInputs}.");
         }
 
         return errors;

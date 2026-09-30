@@ -1,3 +1,4 @@
+using Context.Providers.Embeddings;
 using Microsoft.Extensions.AI;
 
 namespace Context.Providers;
@@ -25,6 +26,11 @@ public static class ProviderMetadataExtensions
         var modelId = generator.GetModelId();
         return modelId is { Length: > 0 } ? $"{providerName}:{modelId}" : providerName;
     }
+
+    /// <summary>What one request to <paramref name="generator"/> may carry; a generator not wrapped in
+    /// <see cref="BatchingEmbeddingGenerator"/> gets one input per request.</summary>
+    public static EmbeddingBatchLimits GetBatchLimits(this IEmbeddingGenerator<string, Embedding<float>> generator) =>
+        generator.GetService<EmbeddingBatchLimits>() ?? EmbeddingBatchLimits.None;
 
     public static string GetProviderName(this IChatClient client) =>
         client.GetService<ChatClientMetadata>()?.ProviderName ?? "unknown";

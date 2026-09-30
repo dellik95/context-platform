@@ -8,7 +8,7 @@ namespace Context.Application.Scheduling;
 
 /// <summary>
 /// Deletes terminal (Done/Failed) <c>Jobs</c> rows older than <see cref="RetentionPeriod"/>.
-/// Indexing a repository enqueues one EmbedChunk job per chunk, and every one of them leaves a
+/// Indexing a repository enqueues an EmbedChunk job per batch of chunks, and every one of them leaves a
 /// permanent row behind with nothing downstream that ever reads it again — the System tab's manual
 /// cleanup was the only thing that removed them, so a host nobody clicks buttons on grew this table
 /// without bound and paid for it on every <see cref="IJobRepository.DequeueNextAsync"/>.

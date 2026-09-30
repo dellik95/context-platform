@@ -7,6 +7,7 @@ using Context.Domain.Enums;
 using Context.Infrastructure.Abstractions;
 using Context.Memory.Abstractions;
 using Context.Providers.Abstractions;
+using Context.Providers.Embeddings;
 using FluentAssertions;
 using Microsoft.Extensions.AI;
 using Moq;
@@ -138,6 +139,37 @@ public sealed class RecreateEmbeddingsJobHandlerTests
         memoryStore.VerifyNoOtherCalls();
     }
 
+    [Fact]
+    public async Task HandleAsync_embeds_chunks_and_memories_in_provider_sized_batches()
+    {
+        var projectId = Guid.NewGuid();
+        var chunkRepository = new Mock<IChunkRepository>();
+        chunkRepository.Setup(r => r.ListByProjectAsync(projectId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<Chunk>)[MakeChunk("h1", "one"), MakeChunk("h2", "two"), MakeChunk("h2", "two"), MakeChunk("h3", "three")]);
+        var memoryRepository = new Mock<IMemoryRepository>();
+        memoryRepository.Setup(r => r.ListByProjectAsync(projectId, false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<Context.Domain.Entities.Memory>)
+                [MakeMemory(projectId, MemoryType.Decision), MakeMemory(projectId, MemoryType.Decision), MakeMemory(projectId, MemoryType.Decision)]);
+
+        var generator = new FakeEmbeddingGenerator(FixedVector);
+        var resolver = new Mock<IProviderResolver>();
+        resolver.Setup(r => r.GetEmbeddingGeneratorAsync(projectId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BatchingEmbeddingGenerator(generator, new EmbeddingBatchLimits(2, int.MaxValue)));
+        var embeddingRepository = new Mock<IEmbeddingRepository>();
+        var memoryStore = new Mock<IMemoryStore>();
+
+        var sut = new RecreateEmbeddingsJobHandler(
+            chunkRepository.Object, memoryRepository.Object, embeddingRepository.Object,
+            new Mock<IChunkVectorIndex>().Object, memoryStore.Object, resolver.Object);
+
+        await sut.HandleAsync(MakeJob(projectId), CancellationToken.None);
+
+        generator.RequestSizes.Should().Equal(2, 1, 2, 1);
+        embeddingRepository.Verify(e => e.UpsertAsync(It.IsAny<Context.Domain.Entities.Embedding>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
+        memoryStore.Verify(
+            s => s.UpsertEmbeddingAsync(It.IsAny<Context.Domain.Entities.Memory>(), It.IsAny<MemoryVector>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
+    }
+
     private static Job MakeJob(Guid projectId) => new()
     {
         Id = Guid.NewGuid(),
@@ -184,9 +216,15 @@ public sealed class RecreateEmbeddingsJobHandlerTests
     /// <summary>Always returns <paramref name="vector"/>, regardless of the input text.</summary>
     private sealed class FakeEmbeddingGenerator(float[] vector) : IEmbeddingGenerator<string, Embedding<float>>
     {
+        public List<int> RequestSizes { get; } = [];
+
         public Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(
-            IEnumerable<string> values, EmbeddingGenerationOptions? options = null, CancellationToken ct = default) =>
-            Task.FromResult(new GeneratedEmbeddings<Embedding<float>>(values.Select(_ => new Embedding<float>(vector))));
+            IEnumerable<string> values, EmbeddingGenerationOptions? options = null, CancellationToken ct = default)
+        {
+            var inputs = values.ToList();
+            RequestSizes.Add(inputs.Count);
+            return Task.FromResult(new GeneratedEmbeddings<Embedding<float>>(inputs.Select(_ => new Embedding<float>(vector))));
+        }
 
         public object? GetService(Type serviceType, object? serviceKey = null) => null;
 

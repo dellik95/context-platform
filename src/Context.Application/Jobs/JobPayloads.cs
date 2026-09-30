@@ -19,14 +19,16 @@ public sealed record IndexFilePayload(Guid ProjectId, string RelativePath);
 /// </param>
 public sealed record UpdateGraphPayload(Guid ProjectId, Guid FileId, bool Invalidate, string? RelationDraftsJson = null);
 
+/// <summary>A batch of content to embed, sent to the provider in as few requests as its batch limits allow.</summary>
+public sealed record EmbedChunkPayload(Guid ProjectId, IReadOnlyList<EmbedChunkItem> Items);
+
 /// <summary>
-/// One job per distinct content hash needing embedding (dedup: two chunks with byte-identical
-/// content share one embedding-provider call), but <see cref="ChunkIds"/> lists every chunk that
-/// content hash covers -- each of them needs its own record in the per-chunk vector index
+/// One distinct content hash (two chunks with byte-identical content share one embedding), with
+/// every chunk it covers: each needs its own record in the per-chunk vector index
 /// (<see cref="Abstractions.IChunkVectorIndex"/>) even though they share one
 /// <see cref="Context.Domain.Entities.Embedding"/> cache row.
 /// </summary>
-public sealed record EmbedChunkPayload(Guid ProjectId, IReadOnlyList<Guid> ChunkIds, string ContentHash, string Text);
+public sealed record EmbedChunkItem(string ContentHash, string Text, IReadOnlyList<Guid> ChunkIds);
 
 /// <summary>
 /// <see cref="IsSessionEnd"/> distinguishes <c>ContextEngine.EndSessionAsync</c>'s final summary

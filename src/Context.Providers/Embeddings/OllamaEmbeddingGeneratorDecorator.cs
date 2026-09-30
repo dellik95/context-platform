@@ -65,9 +65,9 @@ public sealed class OllamaEmbeddingGeneratorDecorator(IEmbeddingGenerator<string
         {
             return await base.GenerateAsync(values, options, effectiveCt).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException && IsContextLengthError(ex))
+        catch (Exception ex) when (ex is not OperationCanceledException && EmbeddingContextLengthException.IsContextLengthError(ex))
         {
-            throw new InvalidOperationException(
+            throw new EmbeddingContextLengthException(
                 $"Ollama embeddings rejected this content as exceeding '{model}''s context window. " +
                 "It needs to be split into smaller chunks upstream, or embedded with a model that has a larger window.",
                 ex);
@@ -86,7 +86,4 @@ public sealed class OllamaEmbeddingGeneratorDecorator(IEmbeddingGenerator<string
             }
         }
     }
-
-    private static bool IsContextLengthError(Exception ex) =>
-        ex.Message.Contains("context length", StringComparison.OrdinalIgnoreCase);
 }

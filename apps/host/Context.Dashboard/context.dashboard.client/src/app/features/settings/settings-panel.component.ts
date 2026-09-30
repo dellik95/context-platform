@@ -1,5 +1,5 @@
 import { Component, computed, effect, inject, signal } from '@angular/core';
-import { FormField, form, min } from '@angular/forms/signals';
+import { FormField, form, max, min } from '@angular/forms/signals';
 import { Router } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
@@ -59,6 +59,7 @@ export class SettingsPanelComponent {
     foundryBaseUrl: '',
     foundryEmbeddingModel: '',
     foundryChatModel: '',
+    embeddingBatchSize: 0,
     reindexEnabled: false,
     reindexIntervalMinutes: 60,
     sessionSummaryEnabled: false,
@@ -83,6 +84,8 @@ export class SettingsPanelComponent {
   });
 
   protected readonly settingsForm = form(this.settingsModel, (path) => {
+    min(path.embeddingBatchSize, 0);
+    max(path.embeddingBatchSize, 256);
     min(path.reindexIntervalMinutes, 1);
     min(path.sessionSummaryIntervalMinutes, 1);
     min(path.minEventsForSessionSummary, 1);
@@ -204,6 +207,7 @@ export class SettingsPanelComponent {
         foundryBaseUrl: settings.foundryBaseUrl ?? '',
         foundryEmbeddingModel: settings.foundryEmbeddingModel ?? '',
         foundryChatModel: settings.foundryChatModel ?? '',
+        embeddingBatchSize: settings.embeddingBatchSize,
         reindexEnabled: settings.reindexEnabled,
         reindexIntervalMinutes: settings.reindexIntervalMinutes,
         sessionSummaryEnabled: settings.sessionSummaryIntervalMinutes > 0,
@@ -314,6 +318,7 @@ export class SettingsPanelComponent {
       foundryBaseUrl: raw.foundryBaseUrl || null,
       foundryEmbeddingModel: raw.foundryEmbeddingModel || null,
       foundryChatModel: raw.foundryChatModel || null,
+      embeddingBatchSize: raw.embeddingBatchSize,
       reindexEnabled: raw.reindexEnabled,
       reindexIntervalMinutes: raw.reindexIntervalMinutes,
       lastReindexScheduledAt: this.lastReindexScheduledAt,

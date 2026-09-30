@@ -59,6 +59,7 @@ public sealed class ProjectProviderResolver(
         var foundryBaseUrl = settings.FoundryBaseUrl is { Length: > 0 } configuredFoundryUrl ? configuredFoundryUrl : _foundryDefaults.BaseUrl;
         var foundryModel = settings.FoundryEmbeddingModel is { Length: > 0 } configuredFoundryModel ? configuredFoundryModel : _foundryDefaults.EmbeddingModel;
         var resilience = settings.ToResilienceOptions();
+        var batchLimits = EmbeddingBatchLimits.ForProvider(provider).WithMaxInputs(settings.EmbeddingBatchSize);
 
         var key = provider switch
         {
@@ -66,15 +67,17 @@ public sealed class ProjectProviderResolver(
             "foundry" => $"emb|foundry|{foundryBaseUrl}|{foundryModel}|{resilience}",
             "openai" => $"emb|openai|{openAiOptions.Value.BaseUrl}|{openAiOptions.Value.Model}|{resilience}",
             _ => "emb|noop",
-        };
+        } + $"|{batchLimits}";
 
-        return _embeddingCache.GetOrAdd(key, _ => new Lazy<IEmbeddingGenerator<string, Embedding<float>>>(() => provider switch
-        {
-            "ollama" => ProviderFactory.CreateOllamaEmbeddingGenerator(baseUrl, model, resilience, _loggerFactory),
-            "foundry" => ProviderFactory.CreateFoundryLocalEmbeddingGenerator(foundryBaseUrl, foundryModel, resilience),
-            "openai" => ProviderFactory.CreateOpenAiEmbeddingGenerator(openAiOptions.Value, resilience, _loggerFactory),
-            _ => new NoOpEmbeddingGenerator(),
-        })).Value;
+        return _embeddingCache.GetOrAdd(key, _ => new Lazy<IEmbeddingGenerator<string, Embedding<float>>>(() => new BatchingEmbeddingGenerator(
+            provider switch
+            {
+                "ollama" => ProviderFactory.CreateOllamaEmbeddingGenerator(baseUrl, model, resilience, _loggerFactory),
+                "foundry" => ProviderFactory.CreateFoundryLocalEmbeddingGenerator(foundryBaseUrl, foundryModel, resilience),
+                "openai" => ProviderFactory.CreateOpenAiEmbeddingGenerator(openAiOptions.Value, resilience, _loggerFactory),
+                _ => new NoOpEmbeddingGenerator(),
+            },
+            batchLimits))).Value;
     }
 
     public async Task<IChatClient> GetChatClientAsync(Guid projectId, CancellationToken ct)

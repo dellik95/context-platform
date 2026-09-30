@@ -510,6 +510,7 @@ export interface ProjectSettingsDto {
   llmRetryBaseDelaySeconds: number; // first retry delay, doubled per retry
   rateLimitCooldownMinutes: number; // pause after an Ollama 429, doubled per repeat
   rateLimitMaxCooldownMinutes: number;
+  embeddingBatchSize: number; // texts per embedding request; 0 = provider default, 1 = no batching
 }
 
 // Response of POST /api/projects/{id}/claude/install.

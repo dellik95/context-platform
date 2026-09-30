@@ -601,31 +601,17 @@ public sealed class IndexingPipeline(
             return;
         }
 
-        // One EmbedChunk job per distinct content hash (dedup: two chunks with byte-identical
-        // content share one embedding-provider call), but the job's payload lists every chunk id
-        // that hash covers -- EmbedChunkJobHandler upserts a vector-index record per id, since the
-        // vector index is keyed by ChunkId, not ContentHash (see EmbedChunkPayload's remarks).
+        // One item per distinct content hash, listing every chunk it covers (the vector index is keyed
+        // by ChunkId, not ContentHash), and one job per provider request's worth of items.
         var missingSet = missing.ToHashSet();
-        var chunkIdsByHash = new Dictionary<string, List<Guid>>();
-        foreach (var chunk in candidateChunks.Where(c => missingSet.Contains(c.ContentHash)))
+        var items = candidateChunks
+            .Where(c => missingSet.Contains(c.ContentHash))
+            .GroupBy(c => c.ContentHash)
+            .Select(g => new EmbedChunkItem(g.Key, g.First().Text, [.. g.Select(c => c.Id)]));
+
+        foreach (var batch in embeddingGenerator.GetBatchLimits().Split(items, i => i.Text))
         {
-            if (!chunkIdsByHash.TryGetValue(chunk.ContentHash, out var ids))
-            {
-                chunkIdsByHash[chunk.ContentHash] = ids = [];
-            }
-
-            ids.Add(chunk.Id);
-        }
-
-        foreach (var chunk in candidateChunks)
-        {
-            if (!chunkIdsByHash.Remove(chunk.ContentHash, out var chunkIds))
-            {
-                continue; // already embedded, or an earlier chunk in this batch owns this hash's job
-            }
-
-            await jobQueue.EnqueueAsync(
-                JobType.EmbedChunk, new EmbedChunkPayload(projectId, chunkIds, chunk.ContentHash, chunk.Text), projectId, ct: ct)
+            await jobQueue.EnqueueAsync(JobType.EmbedChunk, new EmbedChunkPayload(projectId, batch), projectId, ct: ct)
                 .ConfigureAwait(false);
         }
     }

@@ -112,6 +112,24 @@ public sealed class ProjectSettingsValidatorTests
         errors.Should().ContainSingle(e => e.Contains(nameof(ProjectSettingsDto.RateLimitMaxCooldownMinutes)));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(256)]
+    public void Validate_allows_an_EmbeddingBatchSize_from_provider_default_to_the_cap(int value)
+    {
+        ProjectSettingsValidator.Validate(BuildValidSettings() with { EmbeddingBatchSize = value }).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(257)]
+    public void Validate_rejects_an_EmbeddingBatchSize_outside_0_to_256(int value)
+    {
+        ProjectSettingsValidator.Validate(BuildValidSettings() with { EmbeddingBatchSize = value })
+            .Should().ContainSingle(e => e.Contains(nameof(ProjectSettingsDto.EmbeddingBatchSize)));
+    }
+
     private static ProjectSettingsDto BuildValidSettings() =>
         new(
             EmbeddingProvider: "noop",

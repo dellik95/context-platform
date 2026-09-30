@@ -75,7 +75,10 @@ public sealed record ProjectSettingsDto(
     int LlmMaxRetries = 0,
     int LlmRetryBaseDelaySeconds = ProviderResilienceOptions.DefaultRetryBaseDelaySeconds,
     int RateLimitCooldownMinutes = ProviderResilienceOptions.DefaultRateLimitCooldownMinutes,
-    int RateLimitMaxCooldownMinutes = ProviderResilienceOptions.DefaultRateLimitMaxCooldownMinutes)
+    int RateLimitMaxCooldownMinutes = ProviderResilienceOptions.DefaultRateLimitMaxCooldownMinutes,
+    // Texts per embedding request, and per EmbedChunk job. 0 = the provider's default
+    // (EmbeddingBatchLimits.ForProvider), 1 = no batching.
+    int EmbeddingBatchSize = 0)
 {
     public ProviderResilienceOptions ToResilienceOptions() => new()
     {

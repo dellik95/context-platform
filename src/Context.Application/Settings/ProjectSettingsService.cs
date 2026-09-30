@@ -144,7 +144,8 @@ public sealed class ProjectSettingsService(
                 : ProviderResilienceOptions.DefaultRateLimitCooldownMinutes,
             RateLimitMaxCooldownMinutes: int.TryParse(section?["RateLimitMaxCooldownMinutes"], out var rateLimitMaxCooldownMinutes)
                 ? rateLimitMaxCooldownMinutes
-                : ProviderResilienceOptions.DefaultRateLimitMaxCooldownMinutes);
+                : ProviderResilienceOptions.DefaultRateLimitMaxCooldownMinutes,
+            EmbeddingBatchSize: int.TryParse(section?["EmbeddingBatchSize"], out var embeddingBatchSize) ? embeddingBatchSize : 0);
     }
 
     // A malformed/legacy ConfigJson must fall back to defaults rather than fail GetAsync outright.
