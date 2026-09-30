@@ -27,6 +27,8 @@ public sealed class GitignoreStyleMatcher : IIgnoreMatcher
         ".git/", "node_modules/", "bin/", "obj/", ".venv/", "venv/", "dist/", "build/",
         ".angular/", ".next/", ".nuxt/", "__pycache__/", ".pytest_cache/", ".mypy_cache/",
         ".idea/", ".vs/", ".vscode/",
+        // Claude Code agent worktrees: full checkouts of the repo, usually excluded only via .git/info/exclude
+        "**/.claude/worktrees/",
         // common lockfiles
         "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "composer.lock",
         "Gemfile.lock", "poetry.lock", "Cargo.lock", "packages.lock.json",

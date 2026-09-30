@@ -35,6 +35,8 @@ public sealed class GitignoreStyleMatcherTests : IDisposable
     [InlineData("dist/bundle.js")]
     [InlineData(".idea/workspace.xml")]
     [InlineData(".vscode/settings.json")]
+    [InlineData(".claude/worktrees/agent-1/src/Program.cs")]
+    [InlineData("apps/web/.claude/worktrees/agent-1/index.ts")]
     public void IsIgnored_BuiltInStructuralDenylist_MatchesNestedPaths(string relativePath)
     {
         var sut = new GitignoreStyleMatcher(_root);
