@@ -9,6 +9,7 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatSelectModule, MatSelectChange } from '@angular/material/select';
 import { MatSlideToggleModule, MatSlideToggleChange } from '@angular/material/slide-toggle';
 import { MatSnackBar } from '@angular/material/snack-bar';
@@ -30,6 +31,7 @@ import { ProjectContextService } from '../projects/project-context.service';
     MatSelectModule,
     MatSlideToggleModule,
     MatProgressBarModule,
+    MatProgressSpinnerModule,
     MatDialogModule,
   ],
   templateUrl: './settings-panel.component.html',
@@ -180,7 +182,9 @@ export class SettingsPanelComponent {
   });
 
   private readonly resource = this.api.settingsResource(this.ctx.projectId);
-  protected readonly loading = this.resource.isLoading;
+  // No projectId yet means ctx.init is still reissuing a token; showing the form then would offer
+  // the placeholder defaults above for saving.
+  protected readonly loading = computed(() => !this.ctx.projectId() || this.resource.isLoading());
 
   constructor() {
     effect(() => {

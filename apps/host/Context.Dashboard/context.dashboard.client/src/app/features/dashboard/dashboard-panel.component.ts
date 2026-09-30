@@ -7,6 +7,7 @@ import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { MatExpansionModule } from '@angular/material/expansion';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { ApiService } from '../../core/api.service';
@@ -62,6 +63,7 @@ const JOB_PANEL_RELOAD_MIN_MS = 3000;
     MatExpansionModule,
     MatIconModule,
     MatProgressBarModule,
+    MatProgressSpinnerModule,
     MatTooltipModule,
   ],
   templateUrl: './dashboard-panel.component.html',
@@ -75,11 +77,10 @@ export class DashboardPanelComponent {
   private readonly dialog = inject(MatDialog);
   protected readonly ctx = inject(ProjectContextService);
 
-  // Fetched once at tick=0, then only reconciled on a slow fallback interval (see
+  // Fetched once, then only reconciled on a slow fallback interval (see
   // STATUS_RECONCILE_INTERVAL_MS) -- job counts within it are kept fresh live by the
   // "JobCountsChanged" SignalR push instead (patched in place below, no refetch).
-  private readonly pollTick = signal(0);
-  private readonly statusResource = this.api.systemStatusResource(this.pollTick);
+  private readonly statusResource = this.api.systemStatusResource();
   protected readonly status = computed(() => (this.statusResource.hasValue() ? this.statusResource.value() : null));
   protected readonly statusError = computed(() => Boolean(this.statusResource.error()));
 
@@ -94,6 +95,7 @@ export class DashboardPanelComponent {
     return startMs === null ? null : (Date.now() - startMs) / 1000;
   });
 
+  protected readonly reindexingFull = signal(false);
   protected readonly reindexProgress = signal<ReindexProgressEvent | null>(null);
   protected readonly showReindexProgress = signal(false);
 
@@ -106,8 +108,9 @@ export class DashboardPanelComponent {
   // Gates the *whole table* being replaced by a spinner -- true only on the very first load, when
   // there's nothing to show yet. A manual "Refresh" reload keeps showing the existing rows (with
   // isLoading() still available to the template for a non-blocking indicator) instead of blanking
-  // the panel, matching the same no-loader-on-a-live-update UX as the rest of this tab.
-  protected readonly initialJobsLoading = computed(() => this.jobsLoading() && !this.failedJobsResource.hasValue());
+  // the panel, matching the same no-loader-on-a-live-update UX as the rest of this tab. Keyed off
+  // status() rather than hasValue(): with a defaultValue, hasValue() is already true mid-first-load.
+  protected readonly initialJobsLoading = computed(() => this.failedJobsResource.status() === 'loading');
   protected readonly jobsError = computed(() => Boolean(this.failedJobsResource.error()));
   protected readonly retryingJobId = signal<string | null>(null);
   protected readonly retryingAll = signal(false);
@@ -118,6 +121,7 @@ export class DashboardPanelComponent {
   private readonly runningJobsResource = this.api.jobsResource(this.ctx.projectId, 'Running', this.runningJobsRequested);
   protected readonly runningJobs = computed(() => (this.runningJobsResource.hasValue() ? this.runningJobsResource.value() : []));
   protected readonly runningJobsLoading = this.runningJobsResource.isLoading;
+  protected readonly initialRunningJobsLoading = computed(() => this.runningJobsResource.status() === 'loading');
   protected readonly runningJobsError = computed(() => Boolean(this.runningJobsResource.error()));
   protected readonly forcingJobId = signal<string | null>(null);
   protected readonly forcingAll = signal(false);
@@ -129,6 +133,7 @@ export class DashboardPanelComponent {
   private readonly pendingByTypeResource = this.api.jobCountsByTypeResource(this.ctx.projectId, 'Pending', this.pendingByTypeRequested);
   protected readonly pendingByType = computed(() => (this.pendingByTypeResource.hasValue() ? this.pendingByTypeResource.value() : []));
   protected readonly pendingByTypeLoading = this.pendingByTypeResource.isLoading;
+  protected readonly initialPendingByTypeLoading = computed(() => this.pendingByTypeResource.status() === 'loading');
   protected readonly pendingByTypeError = computed(() => Boolean(this.pendingByTypeResource.error()));
   protected readonly cleaningUpPendingType = signal<JobType | null>(null);
   private lastPendingReloadMs = 0;
@@ -140,13 +145,14 @@ export class DashboardPanelComponent {
   protected readonly hookCount = computed(() => (this.hooksStatusResource.hasValue() ? this.hooksStatusResource.value()?.count ?? 0 : 0));
   protected readonly recentHooks = computed(() => (this.hooksStatusResource.hasValue() ? this.hooksStatusResource.value()?.recent ?? [] : []));
   protected readonly hooksLoading = this.hooksStatusResource.isLoading;
-  protected readonly initialHooksLoading = computed(() => this.hooksLoading() && !this.hooksStatusResource.hasValue());
+  protected readonly initialHooksLoading = computed(() => this.hooksStatusResource.status() === 'loading');
   protected readonly hooksError = computed(() => Boolean(this.hooksStatusResource.error()));
 
   private hideTimer?: ReturnType<typeof setTimeout>;
 
   constructor() {
-    const reconcileIntervalId = setInterval(() => this.pollTick.update((tick) => tick + 1), STATUS_RECONCILE_INTERVAL_MS);
+    // reload() rather than new request params, which would reset the value and blank the section.
+    const reconcileIntervalId = setInterval(() => this.statusResource.reload(), STATUS_RECONCILE_INTERVAL_MS);
     this.destroyRef.onDestroy(() => clearInterval(reconcileIntervalId));
 
     const clockIntervalId = setInterval(() => this.clockTick.update((tick) => tick + 1), UPTIME_TICK_MS);
@@ -162,17 +168,21 @@ export class DashboardPanelComponent {
       const runningCountChanged = this.status()?.jobsRunning !== counts.running;
       const pendingCountChanged = this.status()?.jobsPending !== counts.pending;
 
-      this.statusResource.update((current) =>
-        current
-          ? {
-              ...current,
-              jobsPending: counts.pending,
-              jobsRunning: counts.running,
-              jobsFailed: counts.failed,
-              jobsDone: counts.done,
-            }
-          : current,
-      );
+      // A local update() aborts an in-flight fetch, so patching before the first one lands would
+      // leave the section stuck on its loader.
+      if (this.statusResource.hasValue()) {
+        this.statusResource.update((current) =>
+          current
+            ? {
+                ...current,
+                jobsPending: counts.pending,
+                jobsRunning: counts.running,
+                jobsFailed: counts.failed,
+                jobsDone: counts.done,
+              }
+            : current,
+        );
+      }
 
       // Failed jobs table: the count push above tells us the Failed total moved, so refetch the
       // table itself to match -- only once it's been loaded at least once (tab visited), same
@@ -222,6 +232,11 @@ export class DashboardPanelComponent {
     // Project-scoped (ProjectContextService already joins/leaves this project's SignalR group for
     // the whole /projects/:id subtree) — patches the count/recent list in place, no refetch.
     this.signalr.hookInvoked$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((evt) => {
+      // Same in-flight-fetch abort hazard as the job-counts patch above.
+      if (!this.hooksStatusResource.hasValue()) {
+        return;
+      }
+
       this.hooksStatusResource.update((current) => {
         if (!current) {
           return current;
@@ -240,6 +255,7 @@ export class DashboardPanelComponent {
   }
 
   protected reindex(full: boolean): void {
+    this.reindexingFull.set(full);
     this.ctx.triggerIndex(full);
   }
 

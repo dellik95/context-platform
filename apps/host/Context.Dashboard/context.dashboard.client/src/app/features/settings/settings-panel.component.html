@@ -434,8 +434,10 @@
           color="primary"
           type="submit"
           [disabled]="saving() || settingsForm().invalid()"
+          [showProgress]="saving()"
         >
-          {{ saving() ? 'Saving…' : 'Save settings' }}
+          <mat-spinner progressIndicator diameter="18" />
+          Save settings
         </button>
         @if (settingsForm().invalid()) {
           <span class="save-bar__hint">
@@ -453,9 +455,15 @@
         project's context automatically.
       </p>
       <div class="card-actions">
-        <button mat-stroked-button [disabled]="installing()" (click)="installClaude()">
+        <button
+          mat-stroked-button
+          [disabled]="installing()"
+          [showProgress]="installing()"
+          (click)="installClaude()"
+        >
+          <mat-spinner progressIndicator diameter="18" />
           <mat-icon>extension</mat-icon>
-          {{ installing() ? 'Registering…' : 'Register Claude Code integration' }}
+          Register Claude Code integration
         </button>
       </div>
     </mat-card>
@@ -467,9 +475,16 @@
         Platform. Files on disk are never touched.
       </p>
       <div class="card-actions">
-        <button mat-stroked-button color="warn" [disabled]="deleting()" (click)="deleteProject()">
+        <button
+          mat-stroked-button
+          color="warn"
+          [disabled]="deleting()"
+          [showProgress]="deleting()"
+          (click)="deleteProject()"
+        >
+          <mat-spinner progressIndicator diameter="18" />
           <mat-icon>delete_forever</mat-icon>
-          {{ deleting() ? 'Deleting…' : 'Delete project' }}
+          Delete project
         </button>
       </div>
     </mat-card>

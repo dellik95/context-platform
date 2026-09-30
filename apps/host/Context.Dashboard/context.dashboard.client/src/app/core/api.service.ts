@@ -212,15 +212,11 @@ export class ApiService {
     return this.http.post<ClaudeInstallResponse>(`${this.base}/api/projects/${projectId}/claude/install`, {});
   }
 
-  /** `tick` is read only to retrigger the fetch — bump it (e.g. from a `setInterval`) to poll.
-   *  Job counts now arrive live over SignalR (see SignalrService.jobCountsChanged$); `tick` only
-   *  needs to move on a long interval as a reconciliation fallback for the rest of this DTO
-   *  (db/provider/mcp liveness, uptime baseline), which rarely changes outside a restart. */
-  systemStatusResource(tick: Signal<number>): HttpResourceRef<SystemStatusDto | undefined> {
-    return httpResource<SystemStatusDto>(() => {
-      tick();
-      return `${this.base}/api/system/status`;
-    });
+  /** Job counts arrive live over SignalR (see SignalrService.jobCountsChanged$); `reload()` it on a
+   *  long interval as a reconciliation fallback for the rest of this DTO (db/provider/mcp liveness,
+   *  uptime baseline), which rarely changes outside a restart. */
+  systemStatusResource(): HttpResourceRef<SystemStatusDto | undefined> {
+    return httpResource<SystemStatusDto>(() => `${this.base}/api/system/status`);
   }
 
   browseDirectoryResource(path: Signal<string | undefined>): HttpResourceRef<BrowseDirectoryResponse | undefined> {

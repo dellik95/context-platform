@@ -11,6 +11,7 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { MatTabChangeEvent, MatTabsModule } from '@angular/material/tabs';
 import { MatTooltipModule } from '@angular/material/tooltip';
@@ -36,6 +37,7 @@ type DetailState = MemoryDetail | 'loading' | 'error';
     MatCheckboxModule,
     MatDialogModule,
     MatProgressBarModule,
+    MatProgressSpinnerModule,
     MatTabsModule,
     MatTooltipModule,
   ],
@@ -64,7 +66,8 @@ export class MemoriesPanelComponent {
   // Gates the whole list being replaced by a spinner -- true only on the very first load for the
   // current query. The SignalR-triggered reload below (a memory just got extracted) keeps the
   // existing results visible while it refetches instead of blanking the panel.
-  protected readonly initialLoading = computed(() => this.loading() && !this.resource.hasValue());
+  protected readonly initialLoading = computed(() => this.resource.status() === 'loading');
+  protected readonly reloading = computed(() => this.resource.status() === 'reloading');
   protected readonly deletingId = signal<string | null>(null);
   protected readonly details = signal<Record<string, DetailState>>({});
 

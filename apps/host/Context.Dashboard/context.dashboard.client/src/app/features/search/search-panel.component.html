@@ -14,7 +14,14 @@
           placeholder="e.g. authentication middleware"
         />
       </mat-form-field>
-      <button mat-flat-button color="primary" [disabled]="loading() || !searchForm.query().value().trim()" (click)="submitSearch()">
+      <button
+        mat-flat-button
+        color="primary"
+        [disabled]="loading() || !searchForm.query().value().trim()"
+        [showProgress]="loading()"
+        (click)="submitSearch()"
+      >
+        <mat-spinner progressIndicator diameter="18" />
         <mat-icon>search</mat-icon>
         Search
       </button>

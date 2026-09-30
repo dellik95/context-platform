@@ -2,16 +2,19 @@
 // container — header+tabs previously scrolled away with the tab content because nothing here
 // pinned them. `sticky` keeps them docked to the top of that same scroll container (simpler and
 // lower-risk than splitting .shell-content into nested independent scroll regions) as long as
-// both carry an opaque background, since content scrolls *underneath* them, not away from them.
-.project-header {
+// they carry an opaque background, since content scrolls *underneath* them, not away from them.
+.project-top {
   position: sticky;
   top: 0;
   z-index: 2;
+  background: var(--mat-sys-surface-container-low, #f6f7fa);
+}
+
+.project-header {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 20px 32px 0;
-  background: var(--mat-sys-surface-container-low, #f6f7fa);
 
   h1 {
     margin: 0;
@@ -26,10 +29,14 @@
 }
 
 .project-tabs {
-  position: sticky;
-  top: 52px; // sits directly under .project-header's own height
-  z-index: 2;
   padding: 0 24px;
   border-bottom: 1px solid var(--mat-sys-outline-variant);
-  background: var(--mat-sys-surface-container-low, #f6f7fa);
+}
+
+// Hangs just below the tab bar, over the page's top padding, so showing it never shifts the page.
+.nav-progress {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
 }

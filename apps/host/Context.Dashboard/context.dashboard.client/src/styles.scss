@@ -79,6 +79,23 @@ body {
   color: var(--mat-sys-on-surface-variant);
 }
 
+// Compact indicator for a reload that keeps the current content on screen; a first load replaces
+// the content with a full-width bar instead.
+.inline-progress {
+  flex: 1;
+  max-width: 120px;
+}
+
+.page-header .inline-progress {
+  margin-right: auto;
+}
+
+// Every busy button is also disabled, and a disabled filled button's pale container would swallow
+// the on-primary spinner Material gives it by default.
+.mat-mdc-unelevated-button.mat-mdc-button-disabled .mat-mdc-button-progress-indicator-container {
+  --mat-progress-spinner-active-indicator-color: var(--mat-sys-primary);
+}
+
 // MatTooltip renders into a cdk-overlay-container appended directly to <body>, outside every
 // component's view-encapsulation boundary -- a matTooltipClass has to be styled globally here,
 // a component-scoped rule of the same name would never reach it. Widens the System tab's Failed

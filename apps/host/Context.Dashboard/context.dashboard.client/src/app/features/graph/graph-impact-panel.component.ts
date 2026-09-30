@@ -12,6 +12,7 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { debounceTime } from 'rxjs';
 import { Network, type Edge as VisEdge, type Node as VisNode, type Options as VisOptions } from 'vis-network/standalone';
@@ -123,6 +124,7 @@ function shortNodeLabel(label: string): string {
     MatIconModule,
     MatInputModule,
     MatProgressBarModule,
+    MatProgressSpinnerModule,
   ],
   templateUrl: './graph-impact-panel.component.html',
   styleUrl: './graph-impact-panel.component.scss',

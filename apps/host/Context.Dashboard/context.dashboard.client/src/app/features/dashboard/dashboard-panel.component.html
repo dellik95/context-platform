@@ -7,7 +7,14 @@
       </div>
       <mat-progress-bar mode="determinate" [value]="reindexPercent(progress)" />
       @if (!progress.completed) {
-        <button mat-button color="warn" (click)="cancelIndex()">
+        <button
+          mat-button
+          color="warn"
+          [disabled]="ctx.cancelling()"
+          [showProgress]="ctx.cancelling()"
+          (click)="cancelIndex()"
+        >
+          <mat-spinner progressIndicator diameter="18" />
           <mat-icon>stop_circle</mat-icon>
           Stop indexing
         </button>
@@ -49,11 +56,24 @@
         <dd>{{ projectStatus.project.createdAt | date: 'medium' }}</dd>
       </dl>
       <div class="actions">
-        <button mat-stroked-button [disabled]="ctx.reindexing()" (click)="reindex(false)">
+        <button
+          mat-stroked-button
+          [disabled]="ctx.reindexing()"
+          [showProgress]="ctx.reindexing() && !reindexingFull()"
+          (click)="reindex(false)"
+        >
+          <mat-spinner progressIndicator diameter="18" />
           <mat-icon>sync</mat-icon>
           Reindex changed files
         </button>
-        <button mat-flat-button color="primary" [disabled]="ctx.reindexing()" (click)="reindex(true)">
+        <button
+          mat-flat-button
+          color="primary"
+          [disabled]="ctx.reindexing()"
+          [showProgress]="ctx.reindexing() && reindexingFull()"
+          (click)="reindex(true)"
+        >
+          <mat-spinner progressIndicator diameter="18" />
           <mat-icon>refresh</mat-icon>
           Full reindex
         </button>
@@ -111,8 +131,10 @@
             color="warn"
             (click)="cleanupPending()"
             [disabled]="cleaningUpPending()"
+            [showProgress]="cleaningUpPending()"
             matTooltip="Delete every currently Pending job (discards queued work that hasn't run yet)"
           >
+            <mat-spinner progressIndicator diameter="18" />
             <mat-icon>delete_forever</mat-icon>
           </button>
         }
@@ -127,8 +149,10 @@
             class="stat-card-action"
             (click)="forceAllRunning()"
             [disabled]="forcingAll()"
+            [showProgress]="forcingAll()"
             matTooltip="Cancel and restart every Running job now, outside the per-project worker limit"
           >
+            <mat-spinner progressIndicator diameter="18" />
             <mat-icon>bolt</mat-icon>
           </button>
         }
@@ -147,8 +171,10 @@
             class="stat-card-action"
             (click)="cleanupCompleted()"
             [disabled]="cleaningUpDone()"
+            [showProgress]="cleaningUpDone()"
             matTooltip="Remove finished (Done) jobs from the queue"
           >
+            <mat-spinner progressIndicator diameter="18" />
             <mat-icon>delete_sweep</mat-icon>
           </button>
         }
@@ -175,7 +201,15 @@
         Refresh
       </button>
       @if (failedJobs().length > 0) {
-        <button mat-stroked-button type="button" color="primary" (click)="retryAllFailed()" [disabled]="retryingAll()">
+        <button
+          mat-stroked-button
+          type="button"
+          color="primary"
+          (click)="retryAllFailed()"
+          [disabled]="retryingAll()"
+          [showProgress]="retryingAll()"
+        >
+          <mat-spinner progressIndicator diameter="18" />
           <mat-icon>replay</mat-icon>
           Retry all
         </button>
@@ -225,7 +259,9 @@
                     color="primary"
                     (click)="retryJob(job)"
                     [disabled]="retryingJobId() === job.id"
+                    [showProgress]="retryingJobId() === job.id"
                   >
+                    <mat-spinner progressIndicator diameter="18" />
                     Retry
                   </button>
                 </td>
@@ -253,22 +289,24 @@
         <mat-icon>refresh</mat-icon>
         Refresh
       </button>
-      @if (pendingByTypeLoading()) {
+      @if (pendingByTypeLoading() && !initialPendingByTypeLoading()) {
         <mat-progress-bar mode="indeterminate" class="inline-progress" />
       }
     </div>
 
-    @if (pendingByTypeError()) {
+    @if (initialPendingByTypeLoading()) {
+      <mat-progress-bar mode="indeterminate" />
+    } @else if (pendingByTypeError()) {
       <div class="empty-state">
         <mat-icon>cloud_off</mat-icon>
         <p>Could not load pending jobs — is Context.Host running?</p>
       </div>
-    } @else if (pendingByType().length === 0 && !pendingByTypeLoading()) {
+    } @else if (pendingByType().length === 0) {
       <div class="empty-state">
         <mat-icon>check_circle</mat-icon>
         <p>No pending jobs.</p>
       </div>
-    } @else if (pendingByType().length > 0) {
+    } @else {
       <div class="jobs-table-wrap">
         <table class="jobs-table">
           <thead>
@@ -290,13 +328,11 @@
                     color="warn"
                     (click)="cleanupPendingOfType(row.type, row.count)"
                     [disabled]="cleaningUpPendingType() !== null"
+                    [showProgress]="cleaningUpPendingType() === row.type"
                     matTooltip="Delete every Pending job of this type"
                   >
-                    @if (cleaningUpPendingType() === row.type) {
-                      Deleting…
-                    } @else {
-                      Delete
-                    }
+                    <mat-spinner progressIndicator diameter="18" />
+                    Delete
                   </button>
                 </td>
               </tr>
@@ -324,27 +360,37 @@
         Refresh
       </button>
       @if (runningJobs().length > 0) {
-        <button mat-stroked-button type="button" color="warn" (click)="forceAllRunning()" [disabled]="forcingAll()">
+        <button
+          mat-stroked-button
+          type="button"
+          color="warn"
+          (click)="forceAllRunning()"
+          [disabled]="forcingAll()"
+          [showProgress]="forcingAll()"
+        >
+          <mat-spinner progressIndicator diameter="18" />
           <mat-icon>bolt</mat-icon>
           Force all
         </button>
       }
-      @if (runningJobsLoading()) {
+      @if (runningJobsLoading() && !initialRunningJobsLoading()) {
         <mat-progress-bar mode="indeterminate" class="inline-progress" />
       }
     </div>
 
-    @if (runningJobsError()) {
+    @if (initialRunningJobsLoading()) {
+      <mat-progress-bar mode="indeterminate" />
+    } @else if (runningJobsError()) {
       <div class="empty-state">
         <mat-icon>cloud_off</mat-icon>
         <p>Could not load running jobs — is Context.Host running?</p>
       </div>
-    } @else if (runningJobs().length === 0 && !runningJobsLoading()) {
+    } @else if (runningJobs().length === 0) {
       <div class="empty-state">
         <mat-icon>check_circle</mat-icon>
         <p>No running jobs.</p>
       </div>
-    } @else if (runningJobs().length > 0) {
+    } @else {
       <div class="jobs-table-wrap">
         <table class="jobs-table">
           <thead>
@@ -370,8 +416,10 @@
                     color="warn"
                     (click)="forceJob(job)"
                     [disabled]="forcingJobId() === job.id"
+                    [showProgress]="forcingJobId() === job.id"
                     matTooltip="Cancel this attempt and restart it now as a fresh attempt"
                   >
+                    <mat-spinner progressIndicator diameter="18" />
                     Force
                   </button>
                 </td>

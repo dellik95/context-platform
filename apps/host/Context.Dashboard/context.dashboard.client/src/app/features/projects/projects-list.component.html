@@ -23,8 +23,15 @@
         </mat-form-field>
         <div class="create-actions">
           <button mat-button type="button" (click)="showCreateForm.set(false)">Cancel</button>
-          <button mat-flat-button color="primary" type="submit" [disabled]="createForm().invalid() || creating()">
-            {{ creating() ? 'Creating…' : 'Create' }}
+          <button
+            mat-flat-button
+            color="primary"
+            type="submit"
+            [disabled]="createForm().invalid() || creating()"
+            [showProgress]="creating()"
+          >
+            <mat-spinner progressIndicator diameter="18" />
+            Create
           </button>
         </div>
       </form>
@@ -50,8 +57,10 @@
             color="warn"
             matTooltip="Delete project"
             [disabled]="deletingId() === project.id"
+            [showProgress]="deletingId() === project.id"
             (click)="deleteProject(project, $event)"
           >
+            <mat-spinner progressIndicator diameter="18" />
             <mat-icon>delete</mat-icon>
           </button>
         </a>

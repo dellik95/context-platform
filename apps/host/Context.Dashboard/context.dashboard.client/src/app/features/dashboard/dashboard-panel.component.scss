@@ -192,14 +192,6 @@
   padding: 12px 0 4px;
 }
 
-// Shown next to the Refresh button during a background reload that already has content
-// to keep displaying underneath -- a compact indicator instead of the full-panel spinner that
-// initialJobsLoading() reserves for the true first load.
-.inline-progress {
-  flex: 1;
-  max-width: 120px;
-}
-
 // Wide tables (Type/Attempts/Last error/Created/Retry) can outgrow a narrow viewport -- scroll
 // the table itself rather than letting it push the page wider.
 .jobs-table-wrap {

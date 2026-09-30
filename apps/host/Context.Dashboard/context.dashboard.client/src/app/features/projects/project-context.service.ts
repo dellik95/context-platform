@@ -22,6 +22,7 @@ export class ProjectContextService implements OnDestroy {
 
   private readonly _projectId = signal<string>('');
   private readonly _reindexing = signal(false);
+  private readonly _cancelling = signal(false);
   private readonly _reindexProgress = signal<ReindexProgressEvent | null>(null);
 
   readonly projectId = this._projectId.asReadonly();
@@ -33,6 +34,7 @@ export class ProjectContextService implements OnDestroy {
   readonly projectName = computed(() => this.status()?.project.name ?? '');
   /** True from the moment a reindex is triggered until its ReindexProgress reports completed. */
   readonly reindexing = this._reindexing.asReadonly();
+  readonly cancelling = this._cancelling.asReadonly();
   readonly reindexProgress = this._reindexProgress.asReadonly();
 
   private readonly subscriptions = [
@@ -114,9 +116,14 @@ export class ProjectContextService implements OnDestroy {
    * (e.g. a run that died without sending its final event) and `onNotRunning` should clear it.
    */
   cancelIndex(onNotRunning?: () => void): void {
+    this._cancelling.set(true);
     this.api.cancelIndex(this._projectId()).subscribe({
-      next: () => this.snackBar.open('Cancelling reindex…', 'Dismiss', { duration: 3000 }),
+      next: () => {
+        this._cancelling.set(false);
+        this.snackBar.open('Cancelling reindex…', 'Dismiss', { duration: 3000 });
+      },
       error: (err: { status?: number }) => {
+        this._cancelling.set(false);
         if (err?.status === 404) {
           this._reindexing.set(false);
           this._reindexProgress.set(null);

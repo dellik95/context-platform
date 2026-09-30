@@ -1,6 +1,9 @@
 <div class="page">
   <header class="page-header">
     <h1>Memories</h1>
+    @if (reloading()) {
+      <mat-progress-bar mode="indeterminate" class="inline-progress" />
+    }
     <button mat-stroked-button type="button" (click)="openConsolidation()">
       <mat-icon>merge_type</mat-icon>
       Consolidation
@@ -25,7 +28,16 @@
         Include superseded
       </mat-checkbox>
 
-      <button mat-flat-button color="primary" type="submit" [disabled]="loading()">Search</button>
+      <button
+        mat-flat-button
+        color="primary"
+        type="submit"
+        [disabled]="loading()"
+        [showProgress]="initialLoading()"
+      >
+        <mat-spinner progressIndicator diameter="18" />
+        Search
+      </button>
     </form>
   </mat-card>
 
@@ -49,8 +61,10 @@
               mat-icon-button
               matTooltip="Delete this memory"
               [disabled]="deletingId() === memory.id"
+              [showProgress]="deletingId() === memory.id"
               (click)="deleteMemory(memory)"
             >
+              <mat-spinner progressIndicator diameter="18" />
               <mat-icon>delete_outline</mat-icon>
             </button>
           </div>

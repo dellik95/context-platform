@@ -100,11 +100,10 @@ export class SessionsPanelComponent {
 
   private readonly sessionsResource = this.api.sessionsResource(this.ctx.projectId);
   protected readonly sessions = computed(() => (this.sessionsResource.hasValue() ? this.sessionsResource.value() : []));
-  protected readonly loading = this.sessionsResource.isLoading;
   // Gates the whole list being replaced by a spinner -- true only on the very first load. The
   // SignalR-triggered reload below (a new/updated session summary) keeps the existing list visible
-  // while it refetches instead of blanking the panel, since sessionsResource already has a value.
-  protected readonly initialLoading = computed(() => this.loading() && !this.sessionsResource.hasValue());
+  // while it refetches instead of blanking the panel.
+  protected readonly initialLoading = computed(() => this.sessionsResource.status() === 'loading');
 
   private readonly detailResource = this.api.sessionDetailResource(this.selectedId);
   protected readonly detail = computed(() => (this.detailResource.hasValue() ? this.detailResource.value() : null));
@@ -116,6 +115,15 @@ export class SessionsPanelComponent {
   private readonly summaryChunksResource = this.api.sessionSummaryChunksResource(this.selectedId);
   protected readonly summaryChunks = computed(() =>
     this.summaryChunksResource.hasValue() ? this.summaryChunksResource.value() : [],
+  );
+
+  // Anything fetching behind content that's already on screen: a list/detail reload, or the
+  // history chunks still arriving after the detail they belong to.
+  protected readonly backgroundLoading = computed(
+    () =>
+      this.sessionsResource.status() === 'reloading' ||
+      this.detailResource.status() === 'reloading' ||
+      (this.summaryChunksResource.isLoading() && !this.initialDetailLoading()),
   );
 
   protected readonly sessionGroups = computed(() => groupSessionsByDay(dedupeSessions(this.sessions())));

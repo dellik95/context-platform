@@ -7,6 +7,7 @@ import { MatDialogModule } from '@angular/material/dialog';
 import { MatExpansionModule } from '@angular/material/expansion';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { ApiService } from '../../core/api.service';
@@ -30,6 +31,7 @@ import { ProjectContextService } from '../projects/project-context.service';
     MatExpansionModule,
     MatIconModule,
     MatProgressBarModule,
+    MatProgressSpinnerModule,
     MatTooltipModule,
   ],
   templateUrl: './consolidation-dialog.component.html',
@@ -50,9 +52,16 @@ export class ConsolidationDialogComponent {
   private readonly reportResource = this.api.reconsolidationReportResource(this.selectedReportId);
   protected readonly selected = computed(() => (this.reportResource.hasValue() ? this.reportResource.value() ?? null : null));
   protected readonly selectedLoading = this.reportResource.isLoading;
+  // Reloads keep the list and report on screen; a first load replaces them with a full bar instead.
+  protected readonly refreshing = computed(
+    () =>
+      (this.reportsLoading() && this.reports().length > 0) ||
+      (this.selectedLoading() && this.selected() !== null),
+  );
 
   protected readonly excluded = signal<ReadonlySet<number>>(new Set());
-  protected readonly busy = signal(false);
+  protected readonly busyAction = signal<'dryRun' | 'apply' | 'discard' | null>(null);
+  protected readonly busy = computed(() => this.busyAction() !== null);
 
   /** Report ids and statuses when a job was queued; null when nothing is awaited. */
   private readonly awaitedSignature = signal<string | null>(null);
@@ -98,15 +107,15 @@ export class ConsolidationDialogComponent {
   }
 
   protected dryRun(): void {
-    this.busy.set(true);
+    this.busyAction.set('dryRun');
     this.api.triggerReconsolidation(this.ctx.projectId(), true).subscribe({
       next: () => {
-        this.busy.set(false);
+        this.busyAction.set(null);
         this.awaitedSignature.set(this.signature());
         this.snackBar.open('Dry run queued. Its report appears here when the job finishes.', 'Dismiss', { duration: 4000 });
       },
       error: () => {
-        this.busy.set(false);
+        this.busyAction.set(null);
         this.snackBar.open('Failed to queue the dry run.', 'Dismiss');
       },
     });
@@ -139,15 +148,15 @@ export class ConsolidationDialogComponent {
       return;
     }
 
-    this.busy.set(true);
+    this.busyAction.set('apply');
     this.api.applyReconsolidation(reportId, [...this.excluded()]).subscribe({
       next: () => {
-        this.busy.set(false);
+        this.busyAction.set(null);
         this.awaitedSignature.set(this.signature());
         this.snackBar.open('Apply queued.', 'Dismiss', { duration: 3000 });
       },
       error: () => {
-        this.busy.set(false);
+        this.busyAction.set(null);
         this.snackBar.open('Failed to apply the report — it may no longer be pending.', 'Dismiss');
       },
     });
@@ -159,15 +168,15 @@ export class ConsolidationDialogComponent {
       return;
     }
 
-    this.busy.set(true);
+    this.busyAction.set('discard');
     this.api.discardReconsolidation(reportId).subscribe({
       next: () => {
-        this.busy.set(false);
+        this.busyAction.set(null);
         this.reportsResource.reload();
         this.reportResource.reload();
       },
       error: () => {
-        this.busy.set(false);
+        this.busyAction.set(null);
         this.snackBar.open('Failed to discard the report — it may no longer be pending.', 'Dismiss');
       },
     });
