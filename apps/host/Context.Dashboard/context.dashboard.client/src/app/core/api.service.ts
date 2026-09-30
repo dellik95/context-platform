@@ -16,6 +16,8 @@ import {
   IndexTriggerResponse,
   JobDto,
   JobStatus,
+  JobType,
+  JobTypeCountDto,
   LogTailDto,
   Memory,
   MemoryDetail,
@@ -237,6 +239,13 @@ export class ApiService {
     }, { defaultValue: [] });
   }
 
+  jobCountsByTypeResource(projectId: Signal<string>, status: JobStatus, enabled?: Signal<boolean>): HttpResourceRef<JobTypeCountDto[]> {
+    return httpResource<JobTypeCountDto[]>(() => {
+      const id = projectId();
+      return id && (enabled?.() ?? true) ? { url: `${this.base}/api/jobs/counts-by-type`, params: { status, projectId: id } } : undefined;
+    }, { defaultValue: [] });
+  }
+
   retryJob(id: string): Observable<void> {
     return this.http.post<void>(`${this.base}/api/jobs/${id}/retry`, {});
   }
@@ -253,8 +262,12 @@ export class ApiService {
     return this.http.post<ForceRunningJobsResponse>(`${this.base}/api/jobs/force-running?projectId=${projectId}`, {});
   }
 
-  cleanupJobs(projectId: string, status: 'Done' | 'Pending'): Observable<CleanupJobsResponse> {
-    return this.http.post<CleanupJobsResponse>(`${this.base}/api/jobs/cleanup?projectId=${projectId}&status=${status}`, {});
+  cleanupJobs(projectId: string, status: 'Done' | 'Pending', type?: JobType): Observable<CleanupJobsResponse> {
+    const params: Record<string, string> = { projectId, status };
+    if (type) {
+      params['type'] = type;
+    }
+    return this.http.post<CleanupJobsResponse>(`${this.base}/api/jobs/cleanup`, {}, { params });
   }
 
   hooksStatusResource(projectId: Signal<string>): HttpResourceRef<HookStatusDto | undefined> {

@@ -165,6 +165,13 @@ public class JobRepository(ContextDbContext db) : IJobRepository
             CountFor(JobStatus.Done));
     }
 
+    public async Task<IReadOnlyList<JobTypeCount>> CountByTypeAsync(JobStatus status, Guid projectId, CancellationToken ct) =>
+        await db.Jobs.AsNoTracking()
+            .Where(j => j.Status == status && j.ProjectId == projectId)
+            .GroupBy(j => j.Type)
+            .Select(g => new JobTypeCount(g.Key, g.Count()))
+            .ToListAsync(ct);
+
     /// <summary>Keeps one retention sweep's DELETE statements off SQLite's parameter limit.</summary>
     private const int RetentionDeleteBatchSize = 500;
 
@@ -207,8 +214,10 @@ public class JobRepository(ContextDbContext db) : IJobRepository
         return createdAt.Count == 0 ? null : createdAt.Max();
     }
 
-    public Task<int> DeleteByStatusAsync(JobStatus status, Guid? projectId, CancellationToken ct) =>
+    public Task<int> DeleteByStatusAsync(JobStatus status, Guid? projectId, JobType? type, CancellationToken ct) =>
         db.Jobs
-            .Where(j => j.Status == status && (projectId == null || j.ProjectId == projectId))
+            .Where(j => j.Status == status
+                && (projectId == null || j.ProjectId == projectId)
+                && (type == null || j.Type == type))
             .ExecuteDeleteAsync(ct);
 }

@@ -237,6 +237,76 @@
     }
   </mat-expansion-panel>
 
+  <mat-expansion-panel class="pending-jobs-panel" (opened)="loadPendingByType()">
+    <mat-expansion-panel-header>
+      <mat-panel-title>
+        <mat-icon>hourglass_empty</mat-icon>
+        Pending jobs by type
+        @if (pendingByType().length > 0) {
+          <span class="panel-count panel-count--neutral">{{ pendingByType().length }}</span>
+        }
+      </mat-panel-title>
+    </mat-expansion-panel-header>
+
+    <div class="panel-toolbar">
+      <button mat-stroked-button type="button" (click)="loadPendingByType()" [disabled]="pendingByTypeLoading()">
+        <mat-icon>refresh</mat-icon>
+        Refresh
+      </button>
+      @if (pendingByTypeLoading()) {
+        <mat-progress-bar mode="indeterminate" class="inline-progress" />
+      }
+    </div>
+
+    @if (pendingByTypeError()) {
+      <div class="empty-state">
+        <mat-icon>cloud_off</mat-icon>
+        <p>Could not load pending jobs — is Context.Host running?</p>
+      </div>
+    } @else if (pendingByType().length === 0 && !pendingByTypeLoading()) {
+      <div class="empty-state">
+        <mat-icon>check_circle</mat-icon>
+        <p>No pending jobs.</p>
+      </div>
+    } @else if (pendingByType().length > 0) {
+      <div class="jobs-table-wrap">
+        <table class="jobs-table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Pending</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of pendingByType(); track row.type) {
+              <tr>
+                <td>{{ row.type }}</td>
+                <td>{{ row.count }}</td>
+                <td class="retry-cell">
+                  <button
+                    mat-button
+                    type="button"
+                    color="warn"
+                    (click)="cleanupPendingOfType(row.type, row.count)"
+                    [disabled]="cleaningUpPendingType() !== null"
+                    matTooltip="Delete every Pending job of this type"
+                  >
+                    @if (cleaningUpPendingType() === row.type) {
+                      Deleting…
+                    } @else {
+                      Delete
+                    }
+                  </button>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </mat-expansion-panel>
+
   <mat-expansion-panel class="running-jobs-panel" (opened)="loadRunningJobs()">
     <mat-expansion-panel-header>
       <mat-panel-title>

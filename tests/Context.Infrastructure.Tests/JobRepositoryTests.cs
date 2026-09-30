@@ -1,5 +1,6 @@
 using Context.Domain.Entities;
 using Context.Domain.Enums;
+using Context.Infrastructure.Abstractions;
 using Context.Infrastructure.Repositories;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
@@ -136,6 +137,43 @@ public sealed class JobRepositoryTests : IDisposable
         var claimed = await new JobRepository(db).ForceClaimAsync(job.Id, JobStatus.Running, CancellationToken.None);
 
         claimed.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Pending_jobs_can_be_counted_and_deleted_by_type()
+    {
+        await MigrateAsync();
+        using var db = CreateContext();
+
+        var projectId = Guid.NewGuid();
+        Job ForProject(JobType type, JobStatus status = JobStatus.Pending)
+        {
+            var job = NewJob(status: status);
+            job.Type = type;
+            job.ProjectId = projectId;
+            return job;
+        }
+
+        db.Jobs.AddRange(
+            ForProject(JobType.EmbedChunk),
+            ForProject(JobType.EmbedChunk),
+            ForProject(JobType.EmbedChunk, JobStatus.Failed),
+            ForProject(JobType.IndexFile));
+        await db.SaveChangesAsync();
+
+        var repository = new JobRepository(db);
+
+        var counts = await repository.CountByTypeAsync(JobStatus.Pending, projectId, CancellationToken.None);
+        counts.Should().BeEquivalentTo([new JobTypeCount(JobType.EmbedChunk, 2), new JobTypeCount(JobType.IndexFile, 1)]);
+
+        var removed = await repository.DeleteByStatusAsync(JobStatus.Pending, projectId, JobType.EmbedChunk, CancellationToken.None);
+
+        removed.Should().Be(2);
+        var remaining = await db.Jobs.AsNoTracking().Select(j => new { j.Type, j.Status }).ToListAsync();
+        remaining.Should().BeEquivalentTo([
+            new { Type = JobType.EmbedChunk, Status = JobStatus.Failed },
+            new { Type = JobType.IndexFile, Status = JobStatus.Pending },
+        ]);
     }
 
     [Fact]

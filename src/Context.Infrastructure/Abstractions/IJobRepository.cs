@@ -42,13 +42,16 @@ public interface IJobRepository
     /// one way.</summary>
     Task<JobStatusCounts> CountByStatusAsync(Guid projectId, CancellationToken ct);
 
+    /// <summary>How many jobs of each <see cref="JobType"/> sit in <paramref name="status"/> for the project.</summary>
+    Task<IReadOnlyList<JobTypeCount>> CountByTypeAsync(JobStatus status, Guid projectId, CancellationToken ct);
+
     /// <summary>
-    /// Bulk-deletes every job row in <paramref name="status"/> (optionally scoped to one project),
-    /// returning how many were removed. Backs the System tab's "clean up job queue" action — a
+    /// Bulk-deletes every job row in <paramref name="status"/> (optionally scoped to one project and
+    /// to one <paramref name="type"/>), returning how many were removed. Backs the System tab's "clean up job queue" action — a
     /// long-running host accumulates one permanent <see cref="Job"/> row per completed EmbedChunk
     /// job with nothing left to act on, and this is the only way to shrink that table back down.
     /// </summary>
-    Task<int> DeleteByStatusAsync(JobStatus status, Guid? projectId, CancellationToken ct);
+    Task<int> DeleteByStatusAsync(JobStatus status, Guid? projectId, JobType? type, CancellationToken ct);
 
     /// <summary>
     /// Deletes terminal (<see cref="JobStatus.Done"/> / <see cref="JobStatus.Failed"/>) jobs that
@@ -69,3 +72,5 @@ public interface IJobRepository
 }
 
 public sealed record JobStatusCounts(int Pending, int Running, int Failed, int Done);
+
+public sealed record JobTypeCount(JobType Type, int Count);

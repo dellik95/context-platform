@@ -156,6 +156,7 @@
 // Rounds these to match the rest of the app's surfaces (see styles.scss's global .mat-mdc-card
 // override) -- mat-expansion-panel defaults to hard corners otherwise.
 .failed-jobs-panel,
+.pending-jobs-panel,
 .running-jobs-panel,
 .hooks-panel {
   border-radius: 14px !important;

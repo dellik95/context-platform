@@ -31,6 +31,7 @@ public static class JobsEndpoints
     {
         var group = app.MapGroup("").RequireBearerToken().RequireMatchingProjectId();
         group.MapGet("/api/jobs", ListAsync);
+        group.MapGet("/api/jobs/counts-by-type", CountsByTypeAsync);
         group.MapPost("/api/jobs/{id:guid}/retry", RetryAsync);
         group.MapPost("/api/jobs/retry-all", RetryAllAsync);
         group.MapPost("/api/jobs/{id:guid}/force", ForceAsync);
@@ -52,6 +53,15 @@ public static class JobsEndpoints
             .ListByStatusAsync(effectiveStatus, projectId ?? currentProject.ProjectId, ct)
             .ConfigureAwait(false);
         return Results.Ok(results.Take(effectiveLimit).Select(JobDto.FromEntity));
+    }
+
+    private static async Task<IResult> CountsByTypeAsync(
+        JobStatus? status, Guid? projectId, IJobRepository jobs, CurrentProjectAccessor currentProject, CancellationToken ct)
+    {
+        var counts = await jobs
+            .CountByTypeAsync(status ?? JobStatus.Pending, projectId ?? currentProject.ProjectId, ct)
+            .ConfigureAwait(false);
+        return Results.Ok(counts.OrderByDescending(c => c.Count));
     }
 
     private static async Task<IResult> RetryAsync(
@@ -173,14 +183,14 @@ public static class JobsEndpoints
 
     /// <summary>
     /// System tab "clean up job queue" — bulk-deletes every job in <paramref name="status"/>
-    /// (default <see cref="JobStatus.Done"/>, optionally scoped to one project). Pending is also
+    /// (default <see cref="JobStatus.Done"/>, optionally narrowed to one <paramref name="type"/>). Pending is also
     /// allowed: a backlog built up by a since-fixed bug (e.g. a bad embedding model config that
     /// queued thousands of doomed retries) has nothing worth keeping either — but unlike Done, a
     /// Pending row can still represent real, not-yet-attempted work, so the caller opts into it
     /// explicitly rather than it being bundled into the default cleanup.
     /// </summary>
     private static async Task<IResult> CleanupAsync(
-        JobStatus? status, Guid? projectId, IJobRepository jobs, IJobCountsNotifier jobCountsNotifier,
+        JobStatus? status, JobType? type, Guid? projectId, IJobRepository jobs, IJobCountsNotifier jobCountsNotifier,
         CurrentProjectAccessor currentProject, CancellationToken ct)
     {
         var effectiveStatus = status ?? JobStatus.Done;
@@ -193,7 +203,7 @@ public static class JobsEndpoints
         }
 
         var scopedProjectId = projectId ?? currentProject.ProjectId;
-        var removed = await jobs.DeleteByStatusAsync(effectiveStatus, scopedProjectId, ct).ConfigureAwait(false);
+        var removed = await jobs.DeleteByStatusAsync(effectiveStatus, scopedProjectId, type, ct).ConfigureAwait(false);
 
         // Same per-project counts push JobDispatcher does after every status change -- otherwise the
         // System tab's stat tiles stay stale (showing the pre-cleanup count) until its next slow
@@ -202,7 +212,7 @@ public static class JobsEndpoints
         await jobCountsNotifier.NotifyAsync(
             scopedProjectId, new JobCounts(counts.Pending, counts.Running, counts.Failed, counts.Done), ct).ConfigureAwait(false);
 
-        return Results.Ok(new { removed, status = effectiveStatus });
+        return Results.Ok(new { removed, status = effectiveStatus, type });
     }
 
     /// <summary>

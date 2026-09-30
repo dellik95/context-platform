@@ -412,6 +412,12 @@ export interface ForceRunningJobsResponse {
   total: number;
 }
 
+// Row of GET /api/jobs/counts-by-type.
+export interface JobTypeCountDto {
+  type: JobType;
+  count: number;
+}
+
 // Response of POST /api/jobs/cleanup.
 export interface CleanupJobsResponse {
   removed: number;

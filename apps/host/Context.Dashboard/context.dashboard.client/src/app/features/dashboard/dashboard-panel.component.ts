@@ -10,7 +10,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { ApiService } from '../../core/api.service';
-import { HookInvocationDto, JobDto, ReindexProgressEvent } from '../../core/models';
+import { HookInvocationDto, JobDto, JobType, ReindexProgressEvent } from '../../core/models';
 import { SignalrService } from '../../core/signalr.service';
 import { ProjectContextService } from '../projects/project-context.service';
 import { LogsDialogComponent } from './logs-dialog.component';
@@ -30,8 +30,8 @@ const UPTIME_TICK_MS = 1000;
 const PROGRESS_HIDE_DELAY_MS = 2000;
 const PROGRESS_IDLE_TIMEOUT_MS = 15000;
 
-// The Running count moves on every job transition, so an open Running panel refetches at most this often.
-const RUNNING_JOBS_RELOAD_MIN_MS = 3000;
+// Running/Pending counts move on every job transition, so an open Running or Pending panel refetches at most this often.
+const JOB_PANEL_RELOAD_MIN_MS = 3000;
 
 /**
  * Per-project Dashboard tab (CONTRACTS.md §12; merged with the former Overview tab): project-level
@@ -124,6 +124,15 @@ export class DashboardPanelComponent {
   private lastRunningReloadMs = 0;
   protected readonly cleaningUpPending = signal(false);
 
+  // Pending breakdown by job type: fetched once its panel is first opened, then refreshed on Pending count pushes.
+  private readonly pendingByTypeRequested = signal(false);
+  private readonly pendingByTypeResource = this.api.jobCountsByTypeResource(this.ctx.projectId, 'Pending', this.pendingByTypeRequested);
+  protected readonly pendingByType = computed(() => (this.pendingByTypeResource.hasValue() ? this.pendingByTypeResource.value() : []));
+  protected readonly pendingByTypeLoading = this.pendingByTypeResource.isLoading;
+  protected readonly pendingByTypeError = computed(() => Boolean(this.pendingByTypeResource.error()));
+  protected readonly cleaningUpPendingType = signal<JobType | null>(null);
+  private lastPendingReloadMs = 0;
+
   // Hook invocations: loaded once on tab mount, then kept live by the "HookInvoked" SignalR push
   // below (patched into the existing resource value in place — no refetch, same pattern as the
   // job-counts patch above).
@@ -151,6 +160,7 @@ export class DashboardPanelComponent {
     this.signalr.jobCountsChanged$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((counts) => {
       const failedCountChanged = this.status()?.jobsFailed !== counts.failed;
       const runningCountChanged = this.status()?.jobsRunning !== counts.running;
+      const pendingCountChanged = this.status()?.jobsPending !== counts.pending;
 
       this.statusResource.update((current) =>
         current
@@ -171,8 +181,12 @@ export class DashboardPanelComponent {
         this.failedJobsResource.reload();
       }
 
-      if (runningCountChanged && this.runningJobsRequested() && Date.now() - this.lastRunningReloadMs >= RUNNING_JOBS_RELOAD_MIN_MS) {
+      if (runningCountChanged && this.runningJobsRequested() && Date.now() - this.lastRunningReloadMs >= JOB_PANEL_RELOAD_MIN_MS) {
         this.loadRunningJobs();
+      }
+
+      if (pendingCountChanged && this.pendingByTypeRequested() && Date.now() - this.lastPendingReloadMs >= JOB_PANEL_RELOAD_MIN_MS) {
+        this.loadPendingByType();
       }
     });
 
@@ -282,6 +296,34 @@ export class DashboardPanelComponent {
       error: () => {
         this.retryingAll.set(false);
         this.snackBar.open('Failed to retry jobs.', 'Dismiss');
+      },
+    });
+  }
+
+  protected loadPendingByType(): void {
+    this.lastPendingReloadMs = Date.now();
+    if (this.pendingByTypeRequested()) {
+      this.pendingByTypeResource.reload();
+    } else {
+      this.pendingByTypeRequested.set(true);
+    }
+  }
+
+  protected cleanupPendingOfType(type: JobType, count: number): void {
+    if (!confirm(`Delete ${count} pending ${type} job(s)? This discards queued work that has not run yet.`)) {
+      return;
+    }
+
+    this.cleaningUpPendingType.set(type);
+    this.api.cleanupJobs(this.ctx.projectId(), 'Pending', type).subscribe({
+      next: (result) => {
+        this.cleaningUpPendingType.set(null);
+        this.loadPendingByType();
+        this.snackBar.open(`Removed ${result.removed} pending ${type} job(s) from the queue.`, 'Dismiss');
+      },
+      error: () => {
+        this.cleaningUpPendingType.set(null);
+        this.snackBar.open(`Failed to clear pending ${type} jobs.`, 'Dismiss');
       },
     });
   }
