@@ -12,6 +12,7 @@ using Context.Retrieval.Abstractions;
 using Context.Application.Settings;
 using FluentAssertions;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Moq;
 using DomainFile = Context.Domain.Entities.File;
 using DomainMemory = Context.Domain.Entities.Memory;
@@ -39,10 +40,10 @@ public sealed class ContextEngineTests
     private readonly Mock<IProjectSettingsService> _projectSettingsService = new();
     private readonly Mock<IMemoryConsolidator> _memoryConsolidator = new();
     private readonly Mock<IMemoryStore> _memoryStore = new();
-    private readonly Mock<IMemoryVectorIndex> _memoryVectorIndex = new();
     private readonly Mock<ISessionSummaryVectorIndex> _sessionSummaryVectorIndex = new();
     private readonly Mock<IProviderResolver> _providerResolver = new();
     private readonly Mock<IEmbeddingGenerator<string, Embedding<float>>> _embeddingGenerator = new();
+    private readonly Mock<ILogger<ContextEngine>> _logger = new();
     private readonly SessionDeliveryCache _deliveryCache = new();
     private readonly ContextEngine _sut;
 
@@ -65,9 +66,9 @@ public sealed class ContextEngineTests
             _projectSettingsService.Object,
             _memoryConsolidator.Object,
             _memoryStore.Object,
-            _memoryVectorIndex.Object,
             _sessionSummaryVectorIndex.Object,
-            _providerResolver.Object);
+            _providerResolver.Object,
+            _logger.Object);
 
         // Neutral defaults so tests only need to configure what they actually exercise.
         _symbolRepository.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
@@ -94,16 +95,36 @@ public sealed class ContextEngineTests
         _searchEngine.Setup(s => s.SearchAsync(It.IsAny<SearchQuery>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<SearchHit>)[]);
 
-        // Semantic memory search always resolves a provider; default it to no hits so tests exercise
-        // lexical ranking unless they configure the vector index.
+        // Memory search always embeds the query; with no stored memory embeddings it ranks lexically
+        // unless a test sets up similarities.
         _embeddingGenerator.Setup(g => g.GenerateAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<EmbeddingGenerationOptions>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new GeneratedEmbeddings<Embedding<float>>([new Embedding<float>(new float[] { 0f })]));
+            .ReturnsAsync(new GeneratedEmbeddings<Embedding<float>>([new Embedding<float>(QueryVector)]));
         _providerResolver.Setup(p => p.GetEmbeddingGeneratorAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(_embeddingGenerator.Object);
-        _memoryVectorIndex.Setup(v => v.SearchAsync(
-                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<int>(), It.IsAny<CancellationToken>(), It.IsAny<string?>()))
-            .ReturnsAsync((IReadOnlyList<(Guid MemoryId, double Score)>)[]);
+        _memoryStore.Setup(s => s.GetEmbeddingsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, MemoryVector>());
     }
+
+    // The mocked generator reports no metadata, so its provider/model key is "unknown".
+    private const string CurrentModelKey = "unknown";
+    private static readonly float[] QueryVector = [1f, 0f];
+
+    /// <summary>Stores an embedding per memory at exactly the given cosine similarity to <see cref="QueryVector"/>.</summary>
+    private void SetupSimilarities(params (DomainMemory Memory, double Similarity)[] similarities) =>
+        SetupEmbeddings([.. similarities.Select(s => (s.Memory, s.Similarity, CurrentModelKey))]);
+
+    private void SetupEmbeddings(params (DomainMemory Memory, double Similarity, string ModelKey)[] embeddings) =>
+        _memoryStore.Setup(s => s.GetEmbeddingsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyCollection<Guid> ids, CancellationToken _) => embeddings
+                .Where(e => ids.Contains(e.Memory.Id))
+                .ToDictionary(
+                    e => e.Memory.Id,
+                    e => new MemoryVector(e.ModelKey, [(float)e.Similarity, (float)Math.Sqrt(1 - (e.Similarity * e.Similarity))])));
+
+    private void VerifyWarnings(Times times) =>
+        _logger.Verify(
+            l => l.Log(LogLevel.Warning, It.IsAny<EventId>(), It.IsAny<It.IsAnyType>(), It.IsAny<Exception?>(), It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            times);
 
     private static DomainMemory MakeMemory(
         Guid projectId, MemoryType type, string title, string body,
@@ -254,7 +275,7 @@ public sealed class ContextEngineTests
     }
 
     [Fact]
-    public async Task SearchContextAsync_matches_memories_through_entities_and_the_vector_index()
+    public async Task SearchContextAsync_matches_memories_through_entities_and_semantic_similarity()
     {
         var projectId = Guid.NewGuid();
         var byEntity = MakeMemory(projectId, MemoryType.Decision, "Retry budget", "Three attempts then dead-letter");
@@ -264,9 +285,7 @@ public sealed class ContextEngineTests
 
         _memoryRepository.Setup(r => r.ListLiveEntitiesByKeysAsync(projectId, It.Is<IReadOnlyCollection<string>>(k => k.Contains("ticket:phun-123")), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<MemoryEntity>)[new MemoryEntity { ProjectId = projectId, MemoryId = byEntity.Id, Key = "ticket:phun-123", Display = "PHUN-123" }]);
-        _memoryVectorIndex.Setup(v => v.SearchAsync(
-                projectId, It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<int>(), It.IsAny<CancellationToken>(), It.IsAny<string?>()))
-            .ReturnsAsync((IReadOnlyList<(Guid MemoryId, double Score)>)[(bySemantics.Id, 0.7)]);
+        SetupSimilarities((byEntity, 0.2), (bySemantics, 0.7), (unrelated, 0.3));
 
         var pack = await _sut.SearchContextAsync(new SearchQuery(projectId, "PHUN-123", null, TokenBudget: 5000), CancellationToken.None);
 
@@ -723,17 +742,102 @@ public sealed class ContextEngineTests
     }
 
     [Fact]
-    public async Task SearchMemoryAsync_falls_back_to_lexical_matching_when_embedding_fails()
+    public async Task SearchMemoryAsync_falls_back_to_lexical_matching_and_warns_when_embedding_fails()
     {
         var projectId = Guid.NewGuid();
         var match = MakeMemory(projectId, MemoryType.Fact, "Migrations", "EF Core migrations run on startup");
-        SetupLiveMemories(projectId, match);
+        var partial = MakeMemory(projectId, MemoryType.Fact, "Startup", "The host warms caches on startup");
+        var other = MakeMemory(projectId, MemoryType.Fact, "Dashboard theme", "Dark by default");
+        SetupLiveMemories(projectId, partial, match, other);
+        SetupSimilarities((match, 0.9), (partial, 0.9), (other, 0.9));
         _providerResolver.Setup(p => p.GetEmbeddingGeneratorAsync(projectId, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("ollama down"));
 
-        var result = await _sut.SearchMemoryAsync(projectId, "migrations", includeSuperseded: false, CancellationToken.None);
+        var result = await _sut.SearchMemoryAsync(projectId, "migrations on startup", includeSuperseded: false, CancellationToken.None);
 
-        result.Should().ContainSingle().Which.Should().BeSameAs(match);
+        result.Should().Equal(match, partial);
+        VerifyWarnings(Times.Once());
+    }
+
+    [Fact]
+    public async Task SearchMemoryAsync_ranks_by_semantic_similarity_above_relevance_and_type()
+    {
+        var projectId = Guid.NewGuid();
+        var answer = MakeMemory(projectId, MemoryType.Fact, "Log scrubbing", "SecretRedactingEmbeddingGeneratorDecorator strips tokens before logging",
+            confidence: 0.3, lastReinforcedAt: DateTimeOffset.UtcNow.AddDays(-120));
+        var related = MakeMemory(projectId, MemoryType.Decision, "Provider keys", "API keys live in user secrets", confidence: 0.95, pinned: true);
+        var unrelated = MakeMemory(projectId, MemoryType.Architecture, "Dashboard layout", "Panels are lazy-loaded routes", confidence: 0.95, pinned: true);
+        SetupLiveMemories(projectId, related, unrelated, answer);
+        SetupSimilarities((answer, 0.78), (related, 0.61), (unrelated, 0.32));
+
+        var result = await _sut.SearchMemoryAsync(projectId, "how do we keep credentials out of the logs", includeSuperseded: false, CancellationToken.None);
+
+        result.Should().Equal(answer, related);
+        VerifyWarnings(Times.Never());
+    }
+
+    [Fact]
+    public async Task SearchMemoryAsync_admits_a_semantically_weak_memory_only_on_a_strong_lexical_or_entity_match()
+    {
+        var projectId = Guid.NewGuid();
+        var semantic = MakeMemory(projectId, MemoryType.Behavior, "Delivery attempts", "Failed deliveries back off exponentially");
+        var everyTerm = MakeMemory(projectId, MemoryType.Fact, "Webhook retry budget", "Configured per tenant under PAY-231");
+        var someTerms = MakeMemory(projectId, MemoryType.Fact, "Retry button", "The dashboard can retry a failed job");
+        var byEntity = MakeMemory(projectId, MemoryType.Fact, "Ticket", "Tracked separately");
+        SetupLiveMemories(projectId, someTerms, byEntity, everyTerm, semantic);
+        SetupSimilarities((semantic, 0.72), (everyTerm, 0.35), (someTerms, 0.40), (byEntity, 0.10));
+        _memoryRepository.Setup(r => r.ListLiveEntitiesByKeysAsync(projectId, It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<MemoryEntity>)[new MemoryEntity { ProjectId = projectId, MemoryId = byEntity.Id, Key = "ticket:pay-231", Display = "PAY-231" }]);
+
+        var result = await _sut.SearchMemoryAsync(projectId, "webhook retry budget PAY-231", includeSuperseded: false, CancellationToken.None);
+
+        result.Should().Equal(semantic, everyTerm, byEntity);
+    }
+
+    [Fact]
+    public async Task SearchMemoryAsync_lets_lexical_matches_reorder_close_semantic_hits()
+    {
+        var projectId = Guid.NewGuid();
+        var named = MakeMemory(projectId, MemoryType.Fact, "Stale job requeue", "JobDispatcher requeues Running jobs at startup");
+        var closer = MakeMemory(projectId, MemoryType.Fact, "Hung jobs", "ForceRun cancels a hung job and reruns it");
+        SetupLiveMemories(projectId, closer, named);
+        SetupSimilarities((named, 0.62), (closer, 0.66));
+
+        var result = await _sut.SearchMemoryAsync(projectId, "requeue stale job", includeSuperseded: false, CancellationToken.None);
+
+        result.Should().Equal(named, closer);
+    }
+
+    [Fact]
+    public async Task SearchMemoryAsync_ignores_embeddings_from_another_model()
+    {
+        var projectId = Guid.NewGuid();
+        var current = MakeMemory(projectId, MemoryType.Fact, "Backoff", "Exponential with jitter");
+        var stale = MakeMemory(projectId, MemoryType.Fact, "Old model", "Embedded before the model changed");
+        SetupLiveMemories(projectId, current, stale);
+        SetupEmbeddings((current, 0.7, CurrentModelKey), (stale, 0.99, "ollama:old-model"));
+
+        var result = await _sut.SearchMemoryAsync(projectId, "how are retries spaced out", includeSuperseded: false, CancellationToken.None);
+
+        result.Should().Equal(current);
+    }
+
+    [Fact]
+    public async Task SearchContextAsync_ranks_historical_notes_like_memory_search()
+    {
+        var projectId = Guid.NewGuid();
+        var answer = MakeMemory(projectId, MemoryType.Fact, "Log scrubbing", "Tokens are stripped before logging", confidence: 0.3);
+        var related = MakeMemory(projectId, MemoryType.Decision, "Provider keys", "API keys live in user secrets", confidence: 0.95, pinned: true);
+        var unrelated = MakeMemory(projectId, MemoryType.Architecture, "Dashboard layout", "Panels are lazy-loaded routes", confidence: 0.95, pinned: true);
+        SetupLiveMemories(projectId, related, unrelated, answer);
+        SetupSimilarities((answer, 0.78), (related, 0.61), (unrelated, 0.32));
+
+        var pack = await _sut.SearchContextAsync(
+            new SearchQuery(projectId, "how do we keep credentials out of the logs", null, TokenBudget: 5000), CancellationToken.None);
+
+        pack.HistoricalNotes.Should().HaveCount(2);
+        pack.HistoricalNotes[0].Should().Contain(answer.Title);
+        pack.HistoricalNotes[1].Should().Contain(related.Title);
     }
 
     [Fact]

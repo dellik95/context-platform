@@ -121,12 +121,15 @@ public sealed class ContextMcpTools(
     }
 
     [McpServerTool(Name = "memory_search")]
-    [Description("Searches the project's knowledge base: durable memories of how the system works (architecture, " +
-        "component behavior, decisions and their reasons, constraints, configuration, gotchas, procedures, open issues). " +
-        "Each memory carries a short reusable Topic tag (e.g. \"Auth middleware\") naming " +
-        "the feature/subsystem it's about, so memories on the same subject from different sessions can be found together via the topic filter.")]
+    [Description("Semantic search over the project's knowledge base: durable memories of how the system works " +
+        "(architecture, component behavior, decisions and their reasons, constraints, configuration, gotchas, procedures, " +
+        "open issues), ranked by meaning rather than keywords. Ask in natural language, the way you would ask a colleague " +
+        "(\"how are failed jobs retried?\"); a paraphrase finds a memory that shares none of its words, and exact names " +
+        "of classes, files or tickets also match directly. Each memory carries a short reusable Topic tag (e.g. " +
+        "\"Auth middleware\") naming the feature/subsystem it's about, so memories on the same subject from different " +
+        "sessions can be found together via the topic filter.")]
     public async Task<IReadOnlyList<Context.Domain.Entities.Memory>> MemorySearchAsync(
-        [Description("Search query — matched by text, by the files/symbols/tickets it names, and by semantic similarity, so a paraphrase with no shared words can still surface a relevant memory.")] string query,
+        [Description("What you want to know, in natural language. Ranked by semantic similarity; files, symbols and tickets it names boost exact matches.")] string query,
         [Description("Include superseded and obsolete memories.")] bool includeSuperseded = false,
         [Description("Optional exact-match filter on the memory's Topic tag, e.g. \"Auth middleware\".")] string? topic = null,
         [Description("Maximum memories to return.")] int limit = DefaultMemorySearchLimit,

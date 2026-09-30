@@ -11,6 +11,9 @@ public static class ProviderMetadataExtensions
     public static string? GetModelId(this IEmbeddingGenerator<string, Embedding<float>> generator) =>
         generator.GetService<EmbeddingGeneratorMetadata>()?.DefaultModelId;
 
+    public static bool IsNoOp(this IEmbeddingGenerator<string, Embedding<float>> generator) =>
+        string.Equals(generator.GetProviderName(), "noop", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// Cache/vector-index partition key. Bare <see cref="GetProviderName"/> alone collides across
     /// different models under the same provider (e.g. switching Ollama's embedding model from

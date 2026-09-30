@@ -19,6 +19,7 @@ using Context.Retrieval.Abstractions;
 using Context.Retrieval.Scoring;
 using Context.Shared;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using DomainFile = Context.Domain.Entities.File;
 
 namespace Context.Application;
@@ -55,22 +56,23 @@ public sealed class ContextEngine(
     IProjectSettingsService projectSettingsService,
     IMemoryConsolidator memoryConsolidator,
     IMemoryStore memoryStore,
-    IMemoryVectorIndex memoryVectorIndex,
     ISessionSummaryVectorIndex sessionSummaryVectorIndex,
-    IProviderResolver providerResolver) : IContextEngine
+    IProviderResolver providerResolver,
+    ILogger<ContextEngine>? logger = null) : IContextEngine
 {
     private const int SummaryCharLimit = 800;
     private const int ExplicitRememberTitleCharLimit = 80;
 
-    private const double MatchWeight = 0.5;
-    private const double RelevanceWeight = 0.3;
-    private const double TypeBonusWeight = 0.2;
     private const int SemanticSearchLimit = 50;
-    private const int MemorySemanticSearchLimit = 20;
-
-    // Nearest neighbours always come back, however unrelated; below this they would outrank weak lexical hits.
-    private const double MemorySemanticMinSimilarity = 0.60;
     private const int MaxMemoryNotesPerSectionCap = 200;
+
+    // Calibrated on qwen3-embedding:4b against a live project's memories: paraphrased questions scored
+    // 0.54-0.80 against the memory answering them, unrelated questions at most 0.46 against any memory.
+    private const double MemorySemanticMinSimilarity = 0.50;
+    private const double MemoryLexicalBoost = 0.10;
+    private const double MemoryEntityBoost = 0.10;
+    private const double MemoryRelevanceTieBreak = 0.03;
+    private const double MemoryTypeTieBreak = 0.02;
 
     // Same pattern as EmbeddingLookupAdapter.InteractiveOptions / MemoryConsolidator.InteractiveOptions:
     // flags a live memory_search query so OllamaEmbeddingGeneratorDecorator skips the concurrency
@@ -122,8 +124,10 @@ public sealed class ContextEngine(
     }
 
     /// <summary>
-    /// Memory search. Candidates are lexical, semantic and entity matches (every memory in the
-    /// filtered pool when the query names no subject).
+    /// Semantic memory search. For a query naming a subject, a memory qualifies by embedding similarity of
+    /// at least <see cref="MemorySemanticMinSimilarity"/>, an exact entity match or containing every query
+    /// term, and ranks by similarity with lexical and entity matches as boosts; without usable embeddings
+    /// the match is lexical. Relevance and type only break ties, and alone order a query naming no subject.
     /// </summary>
     public async Task<IReadOnlyList<Context.Domain.Entities.Memory>> SearchMemoryAsync(
         Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null)
@@ -139,7 +143,7 @@ public sealed class ContextEngine(
         }
 
         var parsed = MemoryQuery.Parse(query);
-        var matches = await MatchAsync(projectId, parsed, pool, topicFilter, ct).ConfigureAwait(false);
+        var matches = await MatchAsync(projectId, parsed, pool, ct).ConfigureAwait(false);
         var now = DateTimeOffset.UtcNow;
 
         return [.. pool
@@ -147,10 +151,9 @@ public sealed class ContextEngine(
             .OrderByDescending(m => Score(m, matches.GetValueOrDefault(m.Id), now))];
     }
 
-    /// <summary>Best of lexical, entity and semantic match per memory of <paramref name="pool"/>;
-    /// only memories with a positive match appear. Empty when the query names no subject.</summary>
+    /// <summary>Match score of each qualifying memory of <paramref name="pool"/>; empty when the query names no subject.</summary>
     private async Task<Dictionary<Guid, double>> MatchAsync(
-        Guid projectId, MemoryQuery query, IReadOnlyList<Context.Domain.Entities.Memory> pool, string? topic, CancellationToken ct)
+        Guid projectId, MemoryQuery query, IReadOnlyList<Context.Domain.Entities.Memory> pool, CancellationToken ct)
     {
         var matches = new Dictionary<Guid, double>();
         if (!query.HasSubject)
@@ -158,69 +161,92 @@ public sealed class ContextEngine(
             return matches;
         }
 
-        var poolIds = pool.Select(m => m.Id).ToHashSet();
-
-        void Offer(Guid id, double score)
-        {
-            score = Math.Min(1.0, score);
-            if (score > 0 && poolIds.Contains(id) && (!matches.TryGetValue(id, out var current) || score > current))
-            {
-                matches[id] = score;
-            }
-        }
-
+        var entities = await EntityMatchesAsync(projectId, query, ct).ConfigureAwait(false);
+        var similarities = await SemanticSimilaritiesAsync(projectId, query.Text, pool, ct).ConfigureAwait(false);
         foreach (var memory in pool)
         {
-            Offer(memory.Id, query.LexicalMatch(memory));
-        }
-
-        if (query.EntityKeys.Count > 0)
-        {
-            var entities = await memoryRepository.ListLiveEntitiesByKeysAsync(projectId, [.. query.EntityKeys], ct).ConfigureAwait(false);
-            foreach (var group in entities.GroupBy(e => e.MemoryId))
+            var lexical = query.LexicalMatch(memory);
+            var entity = entities.GetValueOrDefault(memory.Id);
+            if (similarities is null)
             {
-                Offer(group.Key, (double)group.Select(e => e.Key).Distinct(StringComparer.Ordinal).Count() / query.EntityKeys.Count);
+                if (lexical > 0 || entity > 0)
+                {
+                    matches[memory.Id] = Math.Max(lexical, entity);
+                }
+
+                continue;
             }
-        }
 
-        foreach (var (id, similarity) in await SemanticSearchAsync(projectId, query.Text, topic, ct).ConfigureAwait(false))
-        {
-            if (similarity >= MemorySemanticMinSimilarity)
+            var similarity = similarities.GetValueOrDefault(memory.Id);
+            if (similarity >= MemorySemanticMinSimilarity || entity > 0 || lexical >= 1)
             {
-                Offer(id, similarity);
+                matches[memory.Id] = similarity + (MemoryLexicalBoost * lexical) + (MemoryEntityBoost * entity);
             }
         }
 
         return matches;
     }
 
-    /// <summary>Cosine similarity of the query to indexed memories for the current embedding model.
-    /// Embedding failures leave memory search lexical-only instead of failing it.</summary>
-    private async Task<IReadOnlyList<(Guid MemoryId, double Score)>> SemanticSearchAsync(Guid projectId, string query, string? topic, CancellationToken ct)
+    /// <summary>Share of the query's strong entity keys each live memory carries.</summary>
+    private async Task<Dictionary<Guid, double>> EntityMatchesAsync(Guid projectId, MemoryQuery query, CancellationToken ct)
     {
-        try
-        {
-            var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
-            var embeddingResult = await embeddingGenerator.GenerateAsync(query, InteractiveEmbeddingOptions, ct).ConfigureAwait(false);
-
-            return await memoryVectorIndex.SearchAsync(
-                projectId, embeddingGenerator.GetProviderModelKey(), embeddingResult.Vector.ToArray(), MemorySemanticSearchLimit, ct, topic)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch
+        if (query.EntityKeys.Count == 0)
         {
             return [];
         }
+
+        var entities = await memoryRepository.ListLiveEntitiesByKeysAsync(projectId, [.. query.EntityKeys], ct).ConfigureAwait(false);
+        return entities
+            .GroupBy(e => e.MemoryId)
+            .ToDictionary(g => g.Key, g => (double)g.Select(e => e.Key).Distinct(StringComparer.Ordinal).Count() / query.EntityKeys.Count);
+    }
+
+    /// <summary>
+    /// Cosine similarity of the query to every memory of <paramref name="pool"/> whose stored embedding
+    /// comes from the current model, or null when similarity cannot rank the pool: a no-op or failing
+    /// embedding provider, or no memory embedded by the current model yet.
+    /// </summary>
+    private async Task<Dictionary<Guid, double>?> SemanticSimilaritiesAsync(
+        Guid projectId, string query, IReadOnlyList<Context.Domain.Entities.Memory> pool, CancellationToken ct)
+    {
+        IEmbeddingGenerator<string, Embedding<float>> generator;
+        float[] queryVector;
+        try
+        {
+            generator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
+            if (generator.IsNoOp())
+            {
+                return null;
+            }
+
+            queryVector = (await generator.GenerateAsync(query, InteractiveEmbeddingOptions, ct).ConfigureAwait(false)).Vector.ToArray();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogWarning(ex, "Embedding a memory query failed for project {ProjectId}; memory search falls back to lexical matching.", projectId);
+            return null;
+        }
+
+        var modelKey = generator.GetProviderModelKey();
+        var embeddings = await memoryStore.GetEmbeddingsAsync([.. pool.Select(m => m.Id)], ct).ConfigureAwait(false);
+        var similarities = embeddings
+            .Where(e => e.Value.ModelKey == modelKey)
+            .ToDictionary(e => e.Key, e => CosineSimilarity.Compute(queryVector, e.Value.Vector));
+        if (similarities.Count == 0)
+        {
+            logger?.LogWarning(
+                "No memory of project {ProjectId} is embedded by {ModelKey}; memory search falls back to lexical matching until embeddings are recreated.",
+                projectId, modelKey);
+            return null;
+        }
+
+        return similarities;
     }
 
     private static double Score(Context.Domain.Entities.Memory memory, double match, DateTimeOffset now) =>
-        (MatchWeight * match)
-        + (RelevanceWeight * DecayCalculator.ComputeRelevanceMultiplier(memory.Confidence, memory.LastReinforcedAt, memory.Pinned, memory.Tier, now))
-        + (TypeBonusWeight * HybridScorer.NormalizedMemoryTypeBonus(memory.Type));
+        match
+        + (MemoryRelevanceTieBreak * DecayCalculator.ComputeRelevanceMultiplier(memory.Confidence, memory.LastReinforcedAt, memory.Pinned, memory.Tier, now))
+        + (MemoryTypeTieBreak * HybridScorer.NormalizedMemoryTypeBonus(memory.Type));
 
     private static IReadOnlyDictionary<Guid, double> NormalizeSemanticScores(Dictionary<Guid, double> raw)
     {
@@ -515,9 +541,10 @@ public sealed class ContextEngine(
     }
 
     /// <summary>
-    /// Query-aware memory sections for a pack. Historical notes hold matching non-issue memories
-    /// (Active before Contested); open issues hold matching issues, or every live issue for a
-    /// pending-work query. A query naming no subject gets the top memories by relevance.
+    /// Query-aware memory sections for a pack, ranked like <see cref="SearchMemoryAsync"/>. Historical
+    /// notes hold matching non-issue memories (Active before Contested); open issues hold matching
+    /// issues, or every live issue for a pending-work query. A query naming no subject gets the top
+    /// memories by relevance.
     /// </summary>
     private async Task<(IReadOnlyList<string> HistoricalNotes, IReadOnlyList<string> OpenIssues)> BuildMemorySectionsAsync(
         SearchQuery query, CancellationToken ct)
@@ -532,7 +559,7 @@ public sealed class ContextEngine(
         var maxNotes = Math.Clamp(settings.MaxMemoryNotesPerSection, 1, MaxMemoryNotesPerSectionCap);
 
         var parsed = MemoryQuery.Parse(query.Text);
-        var matches = await MatchAsync(query.ProjectId, parsed, memories, topic: null, ct).ConfigureAwait(false);
+        var matches = await MatchAsync(query.ProjectId, parsed, memories, ct).ConfigureAwait(false);
         var now = DateTimeOffset.UtcNow;
 
         bool IsCandidate(Context.Domain.Entities.Memory m) => !parsed.HasSubject || matches.ContainsKey(m.Id);

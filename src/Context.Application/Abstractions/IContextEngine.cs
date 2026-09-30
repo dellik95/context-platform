@@ -13,9 +13,10 @@ public interface IContextEngine
     Task<Context.Graph.Abstractions.ImpactSet> GraphImpactAsync(Guid symbolId, int maxHops, CancellationToken ct);
 
     /// <summary>
-    /// Memory search, best first. <paramref name="topic"/> restricts to memories with that exact topic
-    /// (case-insensitive); <paramref name="includeSuperseded"/> adds every non-live status. A blank
-    /// query lists the pool.
+    /// Semantic search over the knowledge base, best first: ranked by embedding similarity to the query,
+    /// with lexical and entity matches as boosts. <paramref name="topic"/> restricts to memories with that
+    /// exact topic (case-insensitive); <paramref name="includeSuperseded"/> adds every non-live status. A
+    /// blank query lists the pool by relevance.
     /// </summary>
     Task<IReadOnlyList<Context.Domain.Entities.Memory>> SearchMemoryAsync(
         Guid projectId, string query, bool includeSuperseded, CancellationToken ct, string? topic = null);

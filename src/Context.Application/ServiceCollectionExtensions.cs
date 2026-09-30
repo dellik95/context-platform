@@ -117,9 +117,8 @@ public static class ServiceCollectionExtensions
             new SqliteChunkVectorIndex(dbPath, sp.GetRequiredService<IDbContextFactory<ContextDbContext>>()));
 
         // Same seam/lifetime reasoning as IChunkVectorIndex above, applied to Memory so
-        // memory_search can rank by semantic similarity instead of only substring matching
-        // (consumed by the Scoped MemoryStoreAdapter on the write side and by the Scoped
-        // ContextEngine on the read side, both fine to depend on a singleton).
+        // consolidation finds a candidate's nearest live neighbours (consumed by the Scoped
+        // MemoryStoreAdapter, fine to depend on a singleton).
         services.AddSingleton<IMemoryVectorIndex>(sp =>
             new SqliteMemoryVectorIndex(dbPath, sp.GetRequiredService<IDbContextFactory<ContextDbContext>>()));
 

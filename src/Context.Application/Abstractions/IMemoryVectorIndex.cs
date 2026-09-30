@@ -1,11 +1,10 @@
 namespace Context.Application.Abstractions;
 
 /// <summary>
-/// Nearest-neighbor vector search over memory embeddings, backed by sqlite-vec -- the same pattern
-/// <see cref="IChunkVectorIndex"/> uses for <c>Chunk</c>, applied to <c>Memory</c> so <c>memory_search</c>
-/// can rank by semantic similarity to the query instead of only substring-matching Title/Body (see
-/// <see cref="Context.Application.Adapters.SqliteMemoryVectorIndex"/>). One underlying collection per
-/// embedding provider, same reasoning as <see cref="IChunkVectorIndex"/>.
+/// Nearest-neighbor vector search over live memory embeddings, backed by sqlite-vec -- the same pattern
+/// <see cref="IChunkVectorIndex"/> uses for <c>Chunk</c>, applied to <c>Memory</c> so consolidation finds a
+/// candidate's nearest live neighbours (see <see cref="Context.Application.Adapters.SqliteMemoryVectorIndex"/>).
+/// One underlying collection per embedding provider, same reasoning as <see cref="IChunkVectorIndex"/>.
 /// </summary>
 /// <remarks>Records carry <c>Topic</c> so topic-scoped searches filter during the ANN pass instead of
 /// after the top-K cut.</remarks>
