@@ -202,7 +202,13 @@ public class MemoryEmbedding
     public int Dim { get; set; }
 }
 
-public enum JobType { IndexFile, DeleteFile, ParseFile, ResolveRelations, UpdateGraph, EmbedChunk, SummarizeSession, ExtractMemory, DecayMemory, BackupDb }
+// Values are explicit and permanent (the column is an int); 1, 2 and 11 are retired and never reused.
+public enum JobType
+{
+    IndexFile = 0, ResolveRelations = 3, UpdateGraph = 4, EmbedChunk = 5, SummarizeSession = 6, ExtractMemory = 7,
+    DecayMemory = 8, BackupDb = 9, RecreateEmbeddings = 10, ReconsolidateMemory = 12,
+    ProcessHook = 13, RememberMemory = 14, ForgetMemory = 15, ReindexProject = 16, RepairVectors = 17,
+}
 public enum JobStatus { Pending, Running, Done, Failed }
 
 public class Job
@@ -210,6 +216,10 @@ public class Job
     public Guid Id { get; set; }
     public JobType Type { get; set; }
     public Guid? ProjectId { get; set; }                 // null for host-wide maintenance jobs (DecayMemory, BackupDb)
+    // Retry budget and backoff cap come from JobRetryPolicy per type (ProcessHook/ForgetMemory 6, RememberMemory 10, EmbedChunk 5, RepairVectors 8, rest 3);
+    // a handler may throw JobDeferredException to wait without spending an attempt. Pending jobs that hold data
+    // nobody else has (ProcessHook, RememberMemory, ForgetMemory, ExtractMemory, SummarizeSession, ReconsolidateMemory)
+    // are never removed by the bulk Pending cleanup.
     public required string PayloadJson { get; set; }
     public JobStatus Status { get; set; } = JobStatus.Pending;
     public int Priority { get; set; }

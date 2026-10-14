@@ -388,6 +388,16 @@ public async Task<Memory> RememberExplicitlyAsync(Guid projectId, string content
 }
 ```
 
+> **Update (job-based writes).** As built, `memory_remember` and `memory_forget` no longer do their work inside the tool
+> call. They return `{ status: "saving" | "deleting" | "not_found", jobId }` as soon as a `RememberMemory` /
+> `ForgetMemory` job is durably queued; the embedding, judging and consolidation run in the job, which retries while the
+> embedding provider is down (up to 10 attempts for `RememberMemory`). No memory id is returned and `jobId` is not one.
+> The consolidator described below now also merges more than two memories at once and never cuts text: past the
+> per-project body/fact limits (settings `MergedMemoryMaxBodyChars` / `MergedMemoryMaxFacts`, online merge limit
+> `OnlineMergeMaxSources`) the new memory stays separate, and a model-written merge that drops a fact or a concrete name
+> falls back to a lossless concatenation. Reconsolidation group size, cluster similarity and source excerpt size are
+> settings too, and periodic reconsolidation defaults to every six hours.
+
 ```csharp
 // ContextMcpTools.cs — one new tool, same thin-wrapper shape as every other tool in this file
 [McpServerTool(Name = "memory_remember")]
