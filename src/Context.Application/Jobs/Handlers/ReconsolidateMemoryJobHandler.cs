@@ -11,8 +11,8 @@ namespace Context.Application.Jobs.Handlers;
 /// Runs batch reconsolidation for one project. A dry run stores the plan as a Pending report; a
 /// payload with a report id applies that reviewed report, which the apply endpoint has already claimed
 /// (Applying), resolving contradictions the code settles; a scheduled run plans and applies at once,
-/// only flagging contradictions. An apply ends Applied, or Failed when it throws or, found at startup,
-/// when no queued job will resume it.
+/// only flagging contradictions. An apply ends Applied, or Failed when its last attempt throws or, found at
+/// startup, when no queued job will resume it. A Failed report is applied again when its job is requeued.
 /// </summary>
 public sealed class ReconsolidateMemoryJobHandler(
     MemoryReconsolidator reconsolidator,
@@ -72,16 +72,25 @@ public sealed class ReconsolidateMemoryJobHandler(
                 throw new InvalidOperationException($"Job {job.Id}: reconsolidation report {reportId} not found for project {payload.ProjectId}.");
             }
 
-            // Applying is also what a crashed attempt leaves behind; re-applying is safe because every
-            // group re-validates its sources and skips what already changed.
-            if (stored.Status != ConsolidationReportStatus.Applying)
+            // Applying is also what a crashed or failed attempt leaves behind, and Failed is what a requeue of a
+            // permanently failed job finds; re-applying is safe because every group re-validates its sources
+            // and skips what already changed.
+            var status = stored.Status;
+            if (status == ConsolidationReportStatus.Failed
+                && await memories.SetReportStatusAsync(reportId, ConsolidationReportStatus.Failed, ConsolidationReportStatus.Applying, null, null, ct).ConfigureAwait(false))
             {
-                logger?.LogInformation("Reconsolidation report {ReportId} is {Status}; nothing to apply.", reportId, stored.Status);
+                status = ConsolidationReportStatus.Applying;
+            }
+
+            if (status != ConsolidationReportStatus.Applying)
+            {
+                logger?.LogInformation("Reconsolidation report {ReportId} is {Status}; nothing to apply.", reportId, status);
                 return;
             }
 
             await ApplyAsync(
-                reportId, payload.ProjectId, ReconsolidationReport.FromJson(stored.ReportJson), new ReconsolidationApplyOptions(excluded, ResolveContradictions: true), ct)
+                job, reportId, payload.ProjectId, ReconsolidationReport.FromJson(stored.ReportJson),
+                new ReconsolidationApplyOptions(excluded, ResolveContradictions: true), retryResumesReport: true, ct)
                 .ConfigureAwait(false);
             return;
         }
@@ -106,10 +115,16 @@ public sealed class ReconsolidateMemoryJobHandler(
             return;
         }
 
-        await ApplyAsync(report.Id, payload.ProjectId, plan, new ReconsolidationApplyOptions(excluded, ResolveContradictions: false), ct).ConfigureAwait(false);
+        await ApplyAsync(
+            job, report.Id, payload.ProjectId, plan, new ReconsolidationApplyOptions(excluded, ResolveContradictions: false), retryResumesReport: false, ct)
+            .ConfigureAwait(false);
     }
 
-    private async Task ApplyAsync(Guid reportId, Guid projectId, ReconsolidationReport plan, ReconsolidationApplyOptions options, CancellationToken ct)
+    /// <param name="retryResumesReport">True for a reviewed report: the retry names it and applies it again, so a
+    /// failure leaves it Applying until the last attempt. A scheduled run re-plans on retry into a new report, so
+    /// the report it created is closed as Failed at once instead of being stranded Applying.</param>
+    private async Task ApplyAsync(
+        Job job, Guid reportId, Guid projectId, ReconsolidationReport plan, ReconsolidationApplyOptions options, bool retryResumesReport, CancellationToken ct)
     {
         ReconsolidationReport applied;
         try
@@ -119,8 +134,12 @@ public sealed class ReconsolidateMemoryJobHandler(
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // A cancelled apply stays Applying so the re-run after a restart resumes it.
-            await memories.SetReportStatusAsync(
-                reportId, ConsolidationReportStatus.Applying, ConsolidationReportStatus.Failed, null, null, CancellationToken.None).ConfigureAwait(false);
+            if (!retryResumesReport || job.Attempts >= JobRetryPolicy.For(job.Type).MaxAttempts)
+            {
+                await memories.SetReportStatusAsync(
+                    reportId, ConsolidationReportStatus.Applying, ConsolidationReportStatus.Failed, null, null, CancellationToken.None).ConfigureAwait(false);
+            }
+
             throw;
         }
 

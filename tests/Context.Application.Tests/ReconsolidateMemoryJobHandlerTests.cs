@@ -101,21 +101,62 @@ public sealed class ReconsolidateMemoryJobHandlerTests : IDisposable
     }
 
     [Fact]
-    public async Task An_apply_that_throws_marks_the_report_failed_so_it_is_not_applied_again()
+    public async Task An_apply_that_throws_before_the_last_attempt_keeps_the_report_applying_so_the_retry_applies_it()
     {
         await using var fixture = await CreateFixtureAsync();
         var (first, second) = await SeedDuplicatesAsync(fixture);
         await fixture.Sut.HandleAsync(MakeJob(new ReconsolidateMemoryPayload(_projectId)), CancellationToken.None);
         var claimed = await ClaimPendingReportAsync(fixture);
         fixture.Embeddings.Fail = true;
-        var job = MakeJob(new ReconsolidateMemoryPayload(_projectId, DryRun: false, ReportId: claimed.Id));
+        var payload = new ReconsolidateMemoryPayload(_projectId, DryRun: false, ReportId: claimed.Id);
 
-        await fixture.Invoking(f => f.Sut.HandleAsync(job, CancellationToken.None)).Should().ThrowAsync<InvalidOperationException>();
+        await fixture.Invoking(f => f.Sut.HandleAsync(MakeJob(payload, attempts: 1), CancellationToken.None)).Should().ThrowAsync<InvalidOperationException>();
+
+        (await fixture.Memories.GetReportAsync(claimed.Id, CancellationToken.None))!.Status.Should().Be(ConsolidationReportStatus.Applying);
+        (await LiveAsync(fixture)).Select(m => m.Id).Should().BeEquivalentTo(new[] { first.Id, second.Id });
+
+        fixture.Embeddings.Fail = false;
+        await fixture.Sut.HandleAsync(MakeJob(payload, attempts: 2), CancellationToken.None);
+
+        (await fixture.Memories.GetReportAsync(claimed.Id, CancellationToken.None))!.Status.Should().Be(ConsolidationReportStatus.Applied);
+        (await LiveAsync(fixture)).Should().ContainSingle("the retry applied the report instead of finding nothing to do");
+    }
+
+    [Fact]
+    public async Task An_apply_that_throws_on_the_last_attempt_marks_the_report_failed_and_a_requeue_applies_it_again()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var (first, second) = await SeedDuplicatesAsync(fixture);
+        await fixture.Sut.HandleAsync(MakeJob(new ReconsolidateMemoryPayload(_projectId)), CancellationToken.None);
+        var claimed = await ClaimPendingReportAsync(fixture);
+        fixture.Embeddings.Fail = true;
+        var payload = new ReconsolidateMemoryPayload(_projectId, DryRun: false, ReportId: claimed.Id);
+        var lastAttempt = JobRetryPolicy.For(JobType.ReconsolidateMemory).MaxAttempts;
+
+        await fixture.Invoking(f => f.Sut.HandleAsync(MakeJob(payload, attempts: lastAttempt), CancellationToken.None)).Should().ThrowAsync<InvalidOperationException>();
 
         (await fixture.Memories.GetReportAsync(claimed.Id, CancellationToken.None))!.Status.Should().Be(ConsolidationReportStatus.Failed);
-        fixture.Embeddings.Fail = false;
-        await fixture.Sut.HandleAsync(job, CancellationToken.None);
         (await LiveAsync(fixture)).Select(m => m.Id).Should().BeEquivalentTo(new[] { first.Id, second.Id });
+
+        fixture.Embeddings.Fail = false;
+        await fixture.Sut.HandleAsync(MakeJob(payload, attempts: 1), CancellationToken.None);
+
+        (await fixture.Memories.GetReportAsync(claimed.Id, CancellationToken.None))!.Status.Should().Be(ConsolidationReportStatus.Applied);
+        (await LiveAsync(fixture)).Should().ContainSingle("a manual retry of the failed job applies the Failed report");
+    }
+
+    [Fact]
+    public async Task A_scheduled_run_that_throws_closes_its_own_report_because_the_retry_plans_a_new_one()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedDuplicatesAsync(fixture);
+        fixture.Embeddings.Fail = true;
+
+        await fixture.Invoking(f => f.Sut.HandleAsync(MakeJob(new ReconsolidateMemoryPayload(_projectId, DryRun: false), attempts: 1), CancellationToken.None))
+            .Should().ThrowAsync<InvalidOperationException>();
+
+        var report = (await fixture.Memories.ListReportsAsync(_projectId, CancellationToken.None)).Single();
+        report.Status.Should().Be(ConsolidationReportStatus.Failed, "it would otherwise stay Applying with no job to resume it");
     }
 
     [Fact]
@@ -269,12 +310,13 @@ public sealed class ReconsolidateMemoryJobHandlerTests : IDisposable
         return new Fixture(db, vectorIndex, memories, store, embeddings, new ReconsolidateMemoryJobHandler(reconsolidator, memories));
     }
 
-    private Job MakeJob(ReconsolidateMemoryPayload payload) => new()
+    private Job MakeJob(ReconsolidateMemoryPayload payload, int attempts = 0) => new()
     {
         Id = Guid.NewGuid(),
         Type = JobType.ReconsolidateMemory,
         ProjectId = _projectId,
         PayloadJson = JsonSerializer.Serialize(payload),
+        Attempts = attempts,
         CreatedAt = DateTimeOffset.UtcNow,
     };
 

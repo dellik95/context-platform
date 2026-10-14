@@ -74,6 +74,7 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         await AssertPendingCleanupKeepsUserDataJobsAsync(client, project);
         await AssertMemoryDeleteIsQueuedThenAppliedAsync(client, project);
         await AssertConsolidationReportsCanBeDeletedAsync(client, project);
+        await AssertApplyClaimsTheReportAndRunsItsJobAsync(client, project);
         await AssertHubJoinIsScopedToTheTokensProjectAsync(project);
         await AssertHookAuthAsync(client);
         await AssertPostedHookIsProcessedByItsJobAsync(client, project);
@@ -471,6 +472,53 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
             }
 
             DateTimeOffset.UtcNow.Should().BeBefore(deadline, "the ProcessHook job should have recorded the event by now");
+            await Task.Delay(100);
+        }
+    }
+
+    /// <summary>Applying a Pending report claims it and queues its job together; the job then settles it, and a second apply conflicts.</summary>
+    private async Task AssertApplyClaimsTheReportAndRunsItsJobAsync(HttpClient client, ProjectDto project)
+    {
+        Guid reportId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ContextDbContext>();
+            var report = new MemoryConsolidationReport
+            {
+                Id = Guid.NewGuid(),
+                ProjectId = project.Id,
+                CreatedAt = DateTimeOffset.UtcNow,
+                Status = ConsolidationReportStatus.Pending,
+                ReportJson = new Context.Memory.Consolidation.ReconsolidationReport(
+                    [], [], 0, new Context.Memory.Consolidation.ReconsolidationStats(0, 0, 0, 0, 0, 0, 0, 0, false)).ToJson(),
+            };
+            db.MemoryConsolidationReports.Add(report);
+            await db.SaveChangesAsync();
+            reportId = report.Id;
+        }
+
+        using (var apply = CreateAuthorizedRequest(HttpMethod.Post, $"/api/memories/reconsolidation/reports/{reportId}/apply", project.Token!, new { }))
+        {
+            (await client.SendAsync(apply)).StatusCode.Should().Be(HttpStatusCode.Accepted);
+        }
+
+        using (var again = CreateAuthorizedRequest(HttpMethod.Post, $"/api/memories/reconsolidation/reports/{reportId}/apply", project.Token!, new { }))
+        {
+            (await client.SendAsync(again)).StatusCode.Should().Be(HttpStatusCode.Conflict, "the report was already claimed");
+        }
+
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
+        while (true)
+        {
+            using var scope = _factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ContextDbContext>();
+            var status = (await db.MemoryConsolidationReports.AsNoTracking().SingleAsync(r => r.Id == reportId)).Status;
+            if (status == ConsolidationReportStatus.Applied)
+            {
+                break;
+            }
+
+            DateTimeOffset.UtcNow.Should().BeBefore(deadline, "the queued ReconsolidateMemory job should have applied the report; last status {0}", status);
             await Task.Delay(100);
         }
     }

@@ -65,15 +65,15 @@ public sealed class MemoryReconsolidationScheduler(
             return;
         }
 
-        await settingsService.UpdateAsync(projectId, settings with { LastMemoryReconsolidationScheduledAt = now }, ct).ConfigureAwait(false);
-
         var live = await memories.ListByProjectAsync(projectId, includeSuperseded: false, ct).ConfigureAwait(false);
-        if (!live.Any(m => last is null || m.LastReinforcedAt > last.Value))
+        if (live.Any(m => last is null || m.LastReinforcedAt > last.Value))
         {
-            return;
+            await jobQueue.EnqueueAsync(
+                JobType.ReconsolidateMemory, new ReconsolidateMemoryPayload(projectId, DryRun: false), projectId, JobPriority.Session, ct).ConfigureAwait(false);
         }
 
-        await jobQueue.EnqueueAsync(
-            JobType.ReconsolidateMemory, new ReconsolidateMemoryPayload(projectId, DryRun: false), projectId, JobPriority.Session, ct).ConfigureAwait(false);
+        // Stamped only once the job is queued: a failed enqueue is then retried by the next poll instead of
+        // being skipped for a whole interval.
+        await settingsService.UpdateAsync(projectId, settings with { LastMemoryReconsolidationScheduledAt = now }, ct).ConfigureAwait(false);
     }
 }

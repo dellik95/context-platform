@@ -118,4 +118,32 @@ public class MemoryReconsolidationSchedulerTests
         VerifyStamped(Times.Once());
         VerifyEnqueued(Times.Once());
     }
+
+    [Fact]
+    public async Task PollOnceAsync_does_not_stamp_the_run_when_the_enqueue_fails_so_the_next_poll_retries_it()
+    {
+        Settings(60, null);
+        LiveMemories((MemoryType.Fact, DateTimeOffset.UtcNow.AddDays(-30)));
+        _jobQueue
+            .Setup(q => q.EnqueueAsync(It.IsAny<JobType>(), It.IsAny<object>(), It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("database is locked"));
+
+        await CreateSut().PollOnceAsync(CancellationToken.None);
+
+        VerifyStamped(Times.Never());
+    }
+
+    [Fact]
+    public async Task PollOnceAsync_stamps_a_due_run_with_no_new_knowledge_without_enqueueing()
+    {
+        var last = DateTimeOffset.UtcNow.AddHours(-2);
+        Settings(60, last);
+        LiveMemories((MemoryType.Fact, last.AddMinutes(-30)));
+
+        await CreateSut().PollOnceAsync(CancellationToken.None);
+
+        VerifyStamped(Times.Once());
+        VerifyEnqueued(Times.Never());
+    }
 }
+

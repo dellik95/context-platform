@@ -54,7 +54,7 @@ public static class MemoryReconsolidationEndpoints
     }
 
     private static async Task<IResult> ApplyAsync(
-        Guid id, ApplyReconsolidationRequest? request, IMemoryRepository memories, IJobQueue jobQueue,
+        Guid id, ApplyReconsolidationRequest? request, IMemoryRepository memories, IUnitOfWork unitOfWork, IJobRepository jobs, IJobQueue jobQueue,
         CurrentProjectAccessor currentProject, CancellationToken ct)
     {
         var report = await FindAsync(id, memories, currentProject, ct).ConfigureAwait(false);
@@ -63,24 +63,30 @@ public static class MemoryReconsolidationEndpoints
             return Results.NotFound();
         }
 
-        if (!await memories.SetReportStatusAsync(id, ConsolidationReportStatus.Pending, ConsolidationReportStatus.Applying, null, null, ct).ConfigureAwait(false))
+        // Claiming the report and inserting its job commit together: a failed insert leaves the report Pending.
+        var job = JobFactory.Create(
+            JobType.ReconsolidateMemory,
+            new ReconsolidateMemoryPayload(report.ProjectId, DryRun: false, ReportId: id, ExcludeGroups: request?.ExcludeGroups),
+            report.ProjectId,
+            JobPriority.Session);
+        var claimed = await unitOfWork.InTransactionAsync(async () =>
+        {
+            if (!await memories.SetReportStatusAsync(id, ConsolidationReportStatus.Pending, ConsolidationReportStatus.Applying, null, null, ct).ConfigureAwait(false))
+            {
+                return false;
+            }
+
+            await jobs.EnqueueAsync(job, ct).ConfigureAwait(false);
+            return true;
+        }, ct).ConfigureAwait(false);
+
+        if (!claimed)
         {
             return Results.Conflict(new { message = $"Report '{id}' is no longer Pending; only a Pending report can be applied." });
         }
 
-        var payload = new ReconsolidateMemoryPayload(report.ProjectId, DryRun: false, ReportId: id, ExcludeGroups: request?.ExcludeGroups);
-        Guid jobId;
-        try
-        {
-            jobId = await jobQueue.EnqueueAsync(JobType.ReconsolidateMemory, payload, report.ProjectId, JobPriority.Session, ct).ConfigureAwait(false);
-        }
-        catch
-        {
-            await memories.SetReportStatusAsync(id, ConsolidationReportStatus.Applying, ConsolidationReportStatus.Pending, null, null, CancellationToken.None).ConfigureAwait(false);
-            throw;
-        }
-
-        return Results.Accepted(value: new ReconsolidationTriggerResponse(report.ProjectId, jobId, false, id, "queued"));
+        await jobQueue.WakeAsync(report.ProjectId, ct).ConfigureAwait(false);
+        return Results.Accepted(value: new ReconsolidationTriggerResponse(report.ProjectId, job.Id, false, id, "queued"));
     }
 
     private static async Task<IResult> DiscardAsync(
