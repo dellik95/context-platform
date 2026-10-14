@@ -117,8 +117,9 @@ export class ApiService {
     return this.http.get<MemoryDetail>(`${this.base}/api/memories/${id}`);
   }
 
-  deleteMemory(id: string): Observable<void> {
-    return this.http.delete<void>(`${this.base}/api/memories/${id}`);
+  /** Queues the delete (202); the memory disappears once the job runs, announced by a MemoryChanged push. */
+  deleteMemory(id: string): Observable<{ jobId: string; status: string }> {
+    return this.http.delete<{ jobId: string; status: string }>(`${this.base}/api/memories/${id}`);
   }
 
   /** Queues a reconsolidation job; a dry run only stores a Pending report to review. */

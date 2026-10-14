@@ -192,7 +192,7 @@ export class MemoriesPanelComponent {
       next: () => {
         this.resource.update((current) => (current ?? []).filter((m) => m.id !== memory.id));
         this.deletingId.set(null);
-        this.snackBar.open('Memory deleted.', 'Dismiss', { duration: 3000 });
+        this.snackBar.open('Memory is being deleted.', 'Dismiss', { duration: 3000 });
       },
       error: () => {
         this.deletingId.set(null);

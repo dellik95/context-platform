@@ -291,6 +291,18 @@ public sealed class ContextEngine(
         return await MemoryContests.ForgetAsync(memoryStore, memoryId, ct).ConfigureAwait(false);
     }
 
+    public async Task<Guid?> RequestForgetAsync(Guid projectId, Guid memoryId, CancellationToken ct)
+    {
+        var memory = await memoryRepository.GetByIdAsync(memoryId, ct).ConfigureAwait(false);
+        if (memory is null || memory.ProjectId != projectId)
+        {
+            return null;
+        }
+
+        return await jobQueue.EnqueueAsync(
+            JobType.ForgetMemory, new ForgetMemoryPayload(memoryId), projectId, JobPriority.Session, ct).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Hybrid lexical + semantic search over <see cref="SessionSummaryChunk"/>s: a lexical substring
     /// hit counts as a maximal match, a semantic-only hit uses its min-max-normalized cosine
@@ -505,9 +517,44 @@ public sealed class ContextEngine(
         IReadOnlyList<string>? filesRead = null,
         IReadOnlyList<string>? filesModified = null)
     {
+        var candidate = BuildExplicitCandidate(content, type, title, topic, facts, concepts, filesRead, filesModified);
+
+        var result = await memoryConsolidator.ConsolidateAsync(projectId, sessionId: null, candidate, isInteractive: true, ct).ConfigureAwait(false);
+        return result.Memory;
+    }
+
+    public async Task<Guid> RequestRememberAsync(
+        Guid projectId,
+        string content,
+        MemoryType? type,
+        CancellationToken ct,
+        string? title = null,
+        string? topic = null,
+        IReadOnlyList<string>? facts = null,
+        IReadOnlyList<string>? concepts = null,
+        IReadOnlyList<string>? filesRead = null,
+        IReadOnlyList<string>? filesModified = null)
+    {
+        // Building the candidate rejects blank content, the only way an explicit candidate fails validation.
+        BuildExplicitCandidate(content, type, title, topic, facts, concepts, filesRead, filesModified);
+
+        var payload = new RememberMemoryPayload(content, type, title, topic, facts, concepts, filesRead, filesModified);
+        return await jobQueue.EnqueueAsync(JobType.RememberMemory, payload, projectId, JobPriority.Session, ct).ConfigureAwait(false);
+    }
+
+    private static MemoryCandidate BuildExplicitCandidate(
+        string content,
+        MemoryType? type,
+        string? title,
+        string? topic,
+        IReadOnlyList<string>? facts,
+        IReadOnlyList<string>? concepts,
+        IReadOnlyList<string>? filesRead,
+        IReadOnlyList<string>? filesModified)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(content);
 
-        var candidate = new MemoryCandidate(
+        return new MemoryCandidate(
             Type: type ?? MemoryType.Fact,
             Title: string.IsNullOrWhiteSpace(title) ? BuildExplicitRememberTitle(content) : title.Trim(),
             Body: content,
@@ -518,9 +565,6 @@ public sealed class ContextEngine(
             FilesModified: filesModified ?? [],
             Topic: string.IsNullOrWhiteSpace(topic) ? null : topic.Trim(),
             ScopePath: Context.Memory.Extraction.ScopePathHeuristics.DeriveFromFiles(filesModified ?? [], filesRead ?? []));
-
-        var result = await memoryConsolidator.ConsolidateAsync(projectId, sessionId: null, candidate, isInteractive: true, ct).ConfigureAwait(false);
-        return result.Memory;
     }
 
     /// <summary>First sentence of <paramref name="content"/>, or its first ~<see cref="ExplicitRememberTitleCharLimit"/>

@@ -161,8 +161,12 @@ public sealed class ContextMcpTools(
         "about this session (in-progress plans, what you intend to do next) — see memory_search's Topic guidance for " +
         "what makes a memory durable. You already have the full context, so fill in facts/topic/concepts/files yourself " +
         "rather than leaving this an unstructured narrative dump — the same structured shape the automatic " +
-        "session-summary extraction produces, so this memory is just as useful when it resurfaces later.")]
-    public async Task<Context.Domain.Entities.Memory> MemoryRememberAsync(
+        "session-summary extraction produces, so this memory is just as useful when it resurfaces later. " +
+        "Saving is asynchronous: the call returns status \"saving\" with a jobId as soon as the request is durably queued, and the " +
+        "memory is stored (and retried if the embedding provider is down) in the background. No memory id is returned — the " +
+        "jobId is not a memory id, so don't pass it to memory_get or memory_forget. The memory shows up in memory_search after " +
+        "a short delay, longer while the provider is unavailable. Don't call it again just because it isn't searchable yet.")]
+    public async Task<MemoryWriteAccepted> MemoryRememberAsync(
         [Description("The memory's main content: 2-5 self-contained sentences naming the SPECIFIC files (by path), " +
             "classes/functions/symbols (by name), and config keys actually involved — never a generic stand-in " +
             "('a service', 'some files'). State the actual mechanism/reasoning, not just that something happened.")] string content,
@@ -183,9 +187,10 @@ public sealed class ContextMcpTools(
     {
         await EnsureExplicitMemoryWritesEnabledAsync("memory_remember", ct).ConfigureAwait(false);
 
-        return await engine.RememberExplicitlyAsync(
+        var jobId = await engine.RequestRememberAsync(
             currentProject.ProjectId, content, ParseMemoryType(type), ct,
             title, topic, facts, concepts, filesRead, filesModified).ConfigureAwait(false);
+        return new MemoryWriteAccepted(MemoryWriteStatus.Saving, jobId);
     }
 
     [McpServerTool(Name = "memory_forget")]
@@ -195,13 +200,17 @@ public sealed class ContextMcpTools(
         "wrong or obsolete (e.g. it describes an approach that has since been replaced) rather than leaving stale/misleading " +
         "guidance for a future session. Prefer memory_remember for a memory that's merely outdated/incomplete — a fresh call " +
         "about the same topic is deduped/reinforced/supersedes the old one automatically, which preserves history; reach for " +
-        "memory_forget only when the memory should not exist at all.")]
-    public async Task MemoryForgetAsync(
+        "memory_forget only when the memory should not exist at all. The delete is asynchronous: status \"deleting\" with a jobId " +
+        "means it was queued and will be applied (and retried) in the background; \"not_found\" means no such memory exists in this project.")]
+    public async Task<MemoryWriteAccepted> MemoryForgetAsync(
         [Description("Id of the memory to delete.")] Guid memoryId,
         CancellationToken ct = default)
     {
         await EnsureExplicitMemoryWritesEnabledAsync("memory_forget", ct).ConfigureAwait(false);
-        await engine.ForgetMemoryAsync(currentProject.ProjectId, memoryId, ct).ConfigureAwait(false);
+        var jobId = await engine.RequestForgetAsync(currentProject.ProjectId, memoryId, ct).ConfigureAwait(false);
+        return jobId is { } id
+            ? new MemoryWriteAccepted(MemoryWriteStatus.Deleting, id)
+            : new MemoryWriteAccepted(MemoryWriteStatus.NotFound, null);
     }
 
     [McpServerTool(Name = "graph_neighbors")]
@@ -499,6 +508,17 @@ public sealed class ContextMcpTools(
             return 0;
         }
     }
+}
+
+/// <summary>What <c>memory_remember</c> / <c>memory_forget</c> return: the write is queued, not applied. <see cref="JobId"/>
+/// identifies the background job (not a memory) and is null for <see cref="MemoryWriteStatus.NotFound"/>.</summary>
+public sealed record MemoryWriteAccepted(string Status, Guid? JobId);
+
+public static class MemoryWriteStatus
+{
+    public const string Saving = "saving";
+    public const string Deleting = "deleting";
+    public const string NotFound = "not_found";
 }
 
 /// <summary>Compact per-session row returned by <see cref="ContextMcpTools.SessionSearchAsync"/>.</summary>

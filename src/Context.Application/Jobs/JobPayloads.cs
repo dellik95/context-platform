@@ -1,3 +1,5 @@
+using Context.Domain.Enums;
+
 namespace Context.Application.Jobs;
 
 // Payload DTOs serialized into Job.PayloadJson via System.Text.Json. One record per JobType;
@@ -76,3 +78,20 @@ public sealed record ReconsolidateMemoryPayload(
     bool DryRun = true,
     Guid? ReportId = null,
     IReadOnlyList<int>? ExcludeGroups = null);
+
+/// <summary>
+/// Drives <see cref="Handlers.RememberMemoryJobHandler"/>: the arguments of an explicit
+/// <c>memory_remember</c>, stored before any embedding or LLM call so the content survives a provider outage.
+/// </summary>
+public sealed record RememberMemoryPayload(
+    string Content,
+    MemoryType? Type = null,
+    string? Title = null,
+    string? Topic = null,
+    IReadOnlyList<string>? Facts = null,
+    IReadOnlyList<string>? Concepts = null,
+    IReadOnlyList<string>? FilesRead = null,
+    IReadOnlyList<string>? FilesModified = null);
+
+/// <summary>Drives <see cref="Handlers.ForgetMemoryJobHandler"/>.</summary>
+public sealed record ForgetMemoryPayload(Guid MemoryId);

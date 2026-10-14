@@ -4,7 +4,7 @@ using Context.Dashboard.Server.Security;
 namespace Context.Dashboard.Server.Api;
 
 /// <summary><c>GET /api/memories</c> (search), <c>GET /api/memories/{id}</c> (memory with evidence and
-/// entities) and <c>DELETE /api/memories/{id}</c>. Scoped to the project the caller's bearer token
+/// entities) and <c>DELETE /api/memories/{id}</c> (queues the delete, 202). Scoped to the project the caller's bearer token
 /// resolved to: the query parameter by <see cref="ProjectScopeAuth.RequireMatchingProjectIdFilter"/>,
 /// a memory id by the engine's ownership check (another project's memory reports 404, not 403).</summary>
 public static class MemoryEndpoints
@@ -33,6 +33,9 @@ public static class MemoryEndpoints
         return detail is null ? Results.NotFound() : Results.Ok(detail);
     }
 
+    /// <summary>Queues the delete as a retryable job: 202 with the job id, or 404 for a memory this project doesn't own.</summary>
     private static async Task<IResult> DeleteAsync(Guid id, IContextEngine engine, CurrentProjectAccessor currentProject, CancellationToken ct) =>
-        await engine.ForgetMemoryAsync(currentProject.ProjectId, id, ct).ConfigureAwait(false) ? Results.NoContent() : Results.NotFound();
+        await engine.RequestForgetAsync(currentProject.ProjectId, id, ct).ConfigureAwait(false) is { } jobId
+            ? Results.Accepted(value: new { jobId, status = "deleting" })
+            : Results.NotFound();
 }

@@ -1003,4 +1003,73 @@ public sealed class ContextEngineTests
 
         result.Type.Should().Be(expected);
     }
+
+    // ---- 8. RequestRememberAsync / RequestForgetAsync: durable queueing instead of inline work ----
+
+    [Fact]
+    public async Task RequestRememberAsync_queues_a_RememberMemory_job_without_consolidating_inline()
+    {
+        var projectId = Guid.NewGuid();
+        var jobId = Guid.NewGuid();
+        _jobQueue
+            .Setup(q => q.EnqueueAsync(JobType.RememberMemory, It.IsAny<object>(), projectId, JobPriority.Session, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(jobId);
+
+        var result = await _sut.RequestRememberAsync(
+            projectId, "Use SQLite for the cache.", MemoryType.Decision, CancellationToken.None,
+            title: "Cache", topic: "Caching", facts: ["SQLite"], filesModified: ["src/Cache.cs"]);
+
+        result.Should().Be(jobId);
+        _jobQueue.Verify(
+            q => q.EnqueueAsync(
+                JobType.RememberMemory,
+                It.Is<object>(p => p is RememberMemoryPayload
+                    && ((RememberMemoryPayload)p).Content == "Use SQLite for the cache."
+                    && ((RememberMemoryPayload)p).Type == MemoryType.Decision
+                    && ((RememberMemoryPayload)p).Title == "Cache"
+                    && ((RememberMemoryPayload)p).Topic == "Caching"
+                    && ((RememberMemoryPayload)p).Facts!.SequenceEqual(new[] { "SQLite" })
+                    && ((RememberMemoryPayload)p).FilesModified!.SequenceEqual(new[] { "src/Cache.cs" })),
+                projectId, JobPriority.Session, It.IsAny<CancellationToken>()),
+            Times.Once);
+        _memoryConsolidator.Verify(
+            c => c.ConsolidateAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<MemoryCandidate>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task RequestRememberAsync_rejects_blank_content_without_queueing(string content)
+    {
+        var act = () => _sut.RequestRememberAsync(Guid.NewGuid(), content, type: null, CancellationToken.None);
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        _jobQueue.Verify(q => q.EnqueueAsync(It.IsAny<JobType>(), It.IsAny<object>(), It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RequestForgetAsync_queues_a_ForgetMemory_job_only_for_a_memory_of_the_owning_project()
+    {
+        var projectId = Guid.NewGuid();
+        var memory = MakeMemory(projectId, MemoryType.Decision, "JWT", "Short-lived tokens");
+        var jobId = Guid.NewGuid();
+        _memoryRepository.Setup(r => r.GetByIdAsync(memory.Id, It.IsAny<CancellationToken>())).ReturnsAsync(memory);
+        _jobQueue
+            .Setup(q => q.EnqueueAsync(JobType.ForgetMemory, It.IsAny<object>(), projectId, JobPriority.Session, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(jobId);
+
+        var foreign = await _sut.RequestForgetAsync(Guid.NewGuid(), memory.Id, CancellationToken.None);
+        var missing = await _sut.RequestForgetAsync(projectId, Guid.NewGuid(), CancellationToken.None);
+        var own = await _sut.RequestForgetAsync(projectId, memory.Id, CancellationToken.None);
+
+        foreign.Should().BeNull();
+        missing.Should().BeNull();
+        own.Should().Be(jobId);
+        _jobQueue.Verify(
+            q => q.EnqueueAsync(JobType.ForgetMemory, It.Is<object>(p => p is ForgetMemoryPayload && ((ForgetMemoryPayload)p).MemoryId == memory.Id),
+                projectId, JobPriority.Session, It.IsAny<CancellationToken>()),
+            Times.Once);
+        _memoryStore.Verify(s => s.DeleteAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
 }

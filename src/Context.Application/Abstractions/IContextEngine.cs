@@ -29,6 +29,10 @@ public interface IContextEngine
     /// doesn't exist or belongs to another project.</summary>
     Task<bool> ForgetMemoryAsync(Guid projectId, Guid memoryId, CancellationToken ct);
 
+    /// <summary>Queues <see cref="ForgetMemoryAsync"/> as a retryable job and returns the job id. Null
+    /// when the memory doesn't exist or belongs to another project (nothing is queued).</summary>
+    Task<Guid?> RequestForgetAsync(Guid projectId, Guid memoryId, CancellationToken ct);
+
     /// <summary><paramref name="cwd"/> is the working directory Claude Code reported at SessionStart,
     /// captured once on creation only, never on the "reuse existing session" path.</summary>
     Task<Guid> StartSessionAsync(Guid projectId, string? claudeSessionId, CancellationToken ct, string? cwd = null);
@@ -79,6 +83,23 @@ public interface IContextEngine
     /// <paramref name="content"/> and the rest stays empty.
     /// </summary>
     Task<Context.Domain.Entities.Memory> RememberExplicitlyAsync(
+        Guid projectId,
+        string content,
+        Context.Domain.Enums.MemoryType? type,
+        CancellationToken ct,
+        string? title = null,
+        string? topic = null,
+        IReadOnlyList<string>? facts = null,
+        IReadOnlyList<string>? concepts = null,
+        IReadOnlyList<string>? filesRead = null,
+        IReadOnlyList<string>? filesModified = null);
+
+    /// <summary>
+    /// Queues <see cref="RememberExplicitlyAsync"/> as a retryable job and returns the job id once the
+    /// request is durably stored; the embedding, judging and consolidation happen in the job. Blank
+    /// content fails here with an <see cref="ArgumentException"/> instead of burning retries.
+    /// </summary>
+    Task<Guid> RequestRememberAsync(
         Guid projectId,
         string content,
         Context.Domain.Enums.MemoryType? type,

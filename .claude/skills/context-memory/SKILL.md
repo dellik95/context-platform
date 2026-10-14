@@ -12,8 +12,8 @@ This project has Context Platform's MCP tools registered:
 - `symbol_search` - finds symbols (classes, functions, methods, ...) by name pattern.
 - `memory_search` - semantic search over the project's knowledge base: how the system works (architecture, component behavior, decisions and their reasons, constraints, configuration, gotchas, procedures, open issues).
 - `memory_get` - fetches one memory by id.
-- `memory_remember` - explicitly stores something right now, bypassing the normal extraction triggers.
-- `memory_forget` - permanently deletes one memory by id. No undo.
+- `memory_remember` - explicitly stores something, bypassing the normal extraction triggers. Queued and saved in the background.
+- `memory_forget` - permanently deletes one memory by id. No undo. Queued and applied in the background.
 - `graph_neighbors` - lists graph nodes reachable from a node within N hops, optionally filtered by edge kind.
 - `graph_path` - finds the shortest path between two graph nodes.
 - `graph_impact` - blast-radius analysis for a symbol: transitive callers, implementers, and covering tests.
@@ -50,6 +50,14 @@ you already have the full context right now, so there's no reason to leave this 
 narrative dump the way a bare `content` string would. Be as selective here as the periodic
 extraction pipeline is: skip trivia, in-progress work with no conclusion yet, and anything that's
 just process narration with no durable outcome. Not every exchange needs a memory.
+
+## Saving and deleting are asynchronous
+
+`memory_remember` and `memory_forget` return as soon as the request is durably queued: status `saving` or
+`deleting` plus a `jobId` (`not_found` when the memory to forget doesn't exist). The work runs in the background
+and is retried if the embedding provider is down. No memory id comes back and the `jobId` is not one, so never pass
+it to `memory_get` or `memory_forget`. A remembered memory appears in `memory_search` after a short delay; don't call
+`memory_remember` again just because it isn't searchable yet.
 
 ## Updating a memory
 

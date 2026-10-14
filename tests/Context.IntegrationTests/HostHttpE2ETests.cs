@@ -72,6 +72,7 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         await AssertProtectedEndpointRequiresBearerTokenAsync(client);
         await AssertCrossProjectAccessIsRejectedAsync(client, project);
         await AssertPendingCleanupKeepsUserDataJobsAsync(client, project);
+        await AssertMemoryDeleteIsQueuedThenAppliedAsync(client, project);
         await AssertHubJoinIsScopedToTheTokensProjectAsync(project);
         await AssertHookAuthAsync(client);
         await AssertSearchSmokeAsync(client, project);
@@ -344,6 +345,55 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         var verifyDb = verifyScope.ServiceProvider.GetRequiredService<ContextDbContext>();
         (await verifyDb.Jobs.AsNoTracking().AnyAsync(j => j.Id == hookJobId)).Should().BeTrue("bulk cleanup skips user-data job types");
         (await verifyDb.Jobs.AsNoTracking().AnyAsync(j => j.Id == embedJobId)).Should().BeFalse("EmbedChunk is regenerable work the bulk cleanup may discard");
+    }
+
+    /// <summary>DELETE /api/memories/{id} answers 202 once the delete is queued; the job then removes the memory.</summary>
+    private async Task AssertMemoryDeleteIsQueuedThenAppliedAsync(HttpClient client, ProjectDto project)
+    {
+        var memoryId = Guid.NewGuid();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ContextDbContext>();
+            db.Memories.Add(new Context.Domain.Entities.Memory
+            {
+                Id = memoryId,
+                ProjectId = project.Id,
+                Type = MemoryType.Fact,
+                Title = "Queued delete",
+                Body = "Removed by a ForgetMemory job.",
+                CreatedAt = DateTimeOffset.UtcNow,
+                LastReinforcedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using (var missingRequest = CreateAuthorizedRequest(HttpMethod.Delete, $"/api/memories/{Guid.NewGuid()}", project.Token!))
+        {
+            (await client.SendAsync(missingRequest)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        }
+
+        using (var request = CreateAuthorizedRequest(HttpMethod.Delete, $"/api/memories/{memoryId}", project.Token!))
+        {
+            var response = await client.SendAsync(request);
+            response.StatusCode.Should().Be(HttpStatusCode.Accepted, "the delete is queued, not applied inline");
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            body.GetProperty("status").GetString().Should().Be("deleting");
+            body.GetProperty("jobId").GetGuid().Should().NotBeEmpty();
+        }
+
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
+        while (true)
+        {
+            using var pollScope = _factory.Services.CreateScope();
+            var pollDb = pollScope.ServiceProvider.GetRequiredService<ContextDbContext>();
+            if (!await pollDb.Memories.AsNoTracking().AnyAsync(m => m.Id == memoryId))
+            {
+                break;
+            }
+
+            DateTimeOffset.UtcNow.Should().BeBefore(deadline, "the ForgetMemory job should have deleted the memory by now");
+            await Task.Delay(100);
+        }
     }
 
     // Both transports: long polling hands the hub a cloned HttpContext, not the authenticated request's own.

@@ -186,6 +186,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IJobHandler, BackupDbJobHandler>();
         services.AddScoped<IJobHandler, RecreateEmbeddingsJobHandler>();
         services.AddScoped<IJobHandler, ReconsolidateMemoryJobHandler>();
+        services.AddScoped<IJobHandler, RememberMemoryJobHandler>();
+        services.AddScoped<IJobHandler, ForgetMemoryJobHandler>();
     }
 
     /// <summary>
