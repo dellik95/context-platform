@@ -132,7 +132,7 @@
             (click)="cleanupPending()"
             [disabled]="cleaningUpPending()"
             [showProgress]="cleaningUpPending()"
-            matTooltip="Delete every currently Pending job (discards queued work that hasn't run yet)"
+            matTooltip="Delete every currently Pending job except hook, memory and summary jobs (discards queued work that hasn't run yet)"
           >
             <mat-spinner progressIndicator diameter="18" />
             <mat-icon>delete_forever</mat-icon>
@@ -322,18 +322,20 @@
                 <td>{{ row.type }}</td>
                 <td>{{ row.count }}</td>
                 <td class="retry-cell">
-                  <button
-                    mat-button
-                    type="button"
-                    color="warn"
-                    (click)="cleanupPendingOfType(row.type, row.count)"
-                    [disabled]="cleaningUpPendingType() !== null"
-                    [showProgress]="cleaningUpPendingType() === row.type"
-                    matTooltip="Delete every Pending job of this type"
-                  >
-                    <mat-spinner progressIndicator diameter="18" />
-                    Delete
-                  </button>
+                  @if (!isUserDataJobType(row.type)) {
+                    <button
+                      mat-button
+                      type="button"
+                      color="warn"
+                      (click)="cleanupPendingOfType(row.type, row.count)"
+                      [disabled]="cleaningUpPendingType() !== null"
+                      [showProgress]="cleaningUpPendingType() === row.type"
+                      matTooltip="Delete every Pending job of this type"
+                    >
+                      <mat-spinner progressIndicator diameter="18" />
+                      Delete
+                    </button>
+                  }
                 </td>
               </tr>
             }

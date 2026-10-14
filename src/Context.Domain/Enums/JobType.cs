@@ -16,4 +16,9 @@ public enum JobType
     BackupDb = 9,
     RecreateEmbeddings = 10,
     ReconsolidateMemory = 12,
+    ProcessHook = 13,
+    RememberMemory = 14,
+    ForgetMemory = 15,
+    ReindexProject = 16,
+    RepairVectors = 17,
 }

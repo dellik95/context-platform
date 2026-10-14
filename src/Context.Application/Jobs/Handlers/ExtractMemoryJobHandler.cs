@@ -64,7 +64,7 @@ public sealed class ExtractMemoryJobHandler(
             "Memory extraction produced {MemoryCount} memories for session {SessionId} from {Source}.",
             memories.Count, payload.SessionId, source);
 
-        await _activityNotifier.NotifyAsync(projectId, ProjectActivityKind.MemoryCreated, ct).ConfigureAwait(false);
+        await _activityNotifier.NotifyAsync(projectId, ProjectActivityKind.MemoryChanged, ct).ConfigureAwait(false);
     }
 
     // Summarization and extraction finish in either order; whichever runs second frees the events

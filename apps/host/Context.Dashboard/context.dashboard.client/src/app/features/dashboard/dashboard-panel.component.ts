@@ -11,7 +11,7 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { ApiService } from '../../core/api.service';
-import { HookInvocationDto, JobDto, JobType, ReindexProgressEvent } from '../../core/models';
+import { HookInvocationDto, JobDto, JobType, ReindexProgressEvent, USER_DATA_JOB_TYPES } from '../../core/models';
 import { SignalrService } from '../../core/signalr.service';
 import { ProjectContextService } from '../projects/project-context.service';
 import { LogsDialogComponent } from './logs-dialog.component';
@@ -325,6 +325,10 @@ export class DashboardPanelComponent {
     }
   }
 
+  protected isUserDataJobType(type: JobType): boolean {
+    return USER_DATA_JOB_TYPES.includes(type);
+  }
+
   protected cleanupPendingOfType(type: JobType, count: number): void {
     if (!confirm(`Delete ${count} pending ${type} job(s)? This discards queued work that has not run yet.`)) {
       return;
@@ -409,7 +413,7 @@ export class DashboardPanelComponent {
    * explicit action and confirmation instead of being folded into the Done cleanup.
    */
   protected cleanupPending(): void {
-    if (!confirm('Delete every currently Pending job? This discards queued work that has not run yet.')) {
+    if (!confirm('Delete every currently Pending job? This discards queued work that has not run yet. Hook, memory and summary jobs are kept.')) {
       return;
     }
 

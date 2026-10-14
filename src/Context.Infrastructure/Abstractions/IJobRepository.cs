@@ -47,20 +47,22 @@ public interface IJobRepository
 
     /// <summary>
     /// Bulk-deletes every job row in <paramref name="status"/> (optionally scoped to one project and
-    /// to one <paramref name="type"/>), returning how many were removed. Backs the System tab's "clean up job queue" action — a
+    /// to one <paramref name="type"/>, and never touching <paramref name="excludeTypes"/>), returning
+    /// how many were removed. Backs the System tab's "clean up job queue" action — a
     /// long-running host accumulates one permanent <see cref="Job"/> row per completed EmbedChunk
     /// job with nothing left to act on, and this is the only way to shrink that table back down.
     /// </summary>
-    Task<int> DeleteByStatusAsync(JobStatus status, Guid? projectId, JobType? type, CancellationToken ct);
+    Task<int> DeleteByStatusAsync(JobStatus status, Guid? projectId, JobType? type, IReadOnlyCollection<JobType>? excludeTypes, CancellationToken ct);
 
     /// <summary>
     /// Deletes terminal (<see cref="JobStatus.Done"/> / <see cref="JobStatus.Failed"/>) jobs that
-    /// finished before <paramref name="cutoff"/>, host-wide, returning how many rows went. The
+    /// finished before <paramref name="cutoff"/> and match <paramref name="filter"/>, host-wide,
+    /// returning how many rows went. The
     /// manual <see cref="DeleteByStatusAsync"/> cleanup exists but nothing calls it on its own, so
     /// this is what keeps the table from growing by one permanent row per embedded chunk forever
     /// on a host nobody clicks buttons on.
     /// </summary>
-    Task<int> DeleteFinishedOlderThanAsync(DateTimeOffset cutoff, CancellationToken ct);
+    Task<int> DeleteFinishedOlderThanAsync(DateTimeOffset cutoff, JobRetentionFilter filter, CancellationToken ct);
 
     /// <summary>
     /// When a job of <paramref name="type"/> was last enqueued host-wide, or null if none ever was.
@@ -69,6 +71,12 @@ public interface IJobRepository
     /// its first tick and silently skip backups forever.
     /// </summary>
     Task<DateTimeOffset?> GetLastEnqueuedAtAsync(JobType type, CancellationToken ct);
+}
+
+/// <summary>Narrows a retention sweep. Unset members match everything.</summary>
+public sealed record JobRetentionFilter(JobType? OnlyType = null, JobType? ExceptType = null, JobStatus? OnlyStatus = null)
+{
+    public static readonly JobRetentionFilter All = new();
 }
 
 public sealed record JobStatusCounts(int Pending, int Running, int Failed, int Done);

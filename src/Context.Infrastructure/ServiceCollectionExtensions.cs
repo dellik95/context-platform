@@ -29,6 +29,7 @@ public static class ServiceCollectionExtensions
             options.UseSqlite($"Data Source={dbPath}")
                    .AddInterceptors(new ContextDbContext.SqlitePragmaConnectionInterceptor()));
 
+        services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IProjectRepository, ProjectRepository>();
         services.AddScoped<IFileRepository, FileRepository>();
         services.AddScoped<ISymbolRepository, SymbolRepository>();

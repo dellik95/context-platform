@@ -34,7 +34,13 @@ export type GraphEdgeKind =
 export type JobType =
   | 'IndexFile' | 'ResolveRelations' | 'UpdateGraph'
   | 'EmbedChunk' | 'SummarizeSession' | 'ExtractMemory' | 'DecayMemory' | 'BackupDb'
-  | 'RecreateEmbeddings' | 'ReconsolidateMemory';
+  | 'RecreateEmbeddings' | 'ReconsolidateMemory'
+  | 'ProcessHook' | 'RememberMemory' | 'ForgetMemory' | 'ReindexProject' | 'RepairVectors';
+
+/** Job types whose Pending rows hold data that exists nowhere else; the host refuses to bulk-delete them. */
+export const USER_DATA_JOB_TYPES: readonly JobType[] = [
+  'ProcessHook', 'RememberMemory', 'ForgetMemory', 'ExtractMemory', 'SummarizeSession', 'ReconsolidateMemory',
+];
 
 export type JobStatus = 'Pending' | 'Running' | 'Done' | 'Failed';
 
@@ -515,7 +521,7 @@ export interface ClaudeInstallResponse {
   installed: boolean;
 }
 
-export type ProjectActivityKind = 'SessionSummaryUpdated' | 'MemoryCreated';
+export type ProjectActivityKind = 'SessionSummaryUpdated' | 'MemoryChanged';
 
 // Pushed over the /hubs/indexing SignalR hub's "ProjectActivity" event (Context.Host's
 // IndexingHub.ProjectActivityAsync) whenever a session gets a new summary or a memory is

@@ -1,3 +1,4 @@
+using Context.Domain.Enums;
 using Context.Infrastructure.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -30,6 +31,11 @@ public sealed class JobRetentionScheduler(
 
     public static readonly TimeSpan RetentionPeriod = TimeSpan.FromDays(7);
 
+    /// <summary>A finished ProcessHook job carries a full hook payload (a PostToolUse one holds the tool's whole
+    /// response) that the HookInvocation row already keeps, so it ages out sooner than other jobs.
+    /// Failed ones stay for <see cref="RetentionPeriod"/>: they are the only record of an unprocessed hook.</summary>
+    public static readonly TimeSpan DoneHookRetentionPeriod = TimeSpan.FromDays(1);
+
     private readonly IServiceScopeFactory _scopeFactory = scopeFactory;
 
     protected internal override async Task PollOnceAsync(CancellationToken ct)
@@ -37,8 +43,12 @@ public sealed class JobRetentionScheduler(
         using var scope = _scopeFactory.CreateScope();
         var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
 
-        var cutoff = TimeProvider.GetUtcNow() - RetentionPeriod;
-        var deleted = await jobRepository.DeleteFinishedOlderThanAsync(cutoff, ct).ConfigureAwait(false);
+        var now = TimeProvider.GetUtcNow();
+        var cutoff = now - RetentionPeriod;
+        var deleted = await jobRepository
+            .DeleteFinishedOlderThanAsync(now - DoneHookRetentionPeriod, new JobRetentionFilter(JobType.ProcessHook, OnlyStatus: JobStatus.Done), ct)
+            .ConfigureAwait(false);
+        deleted += await jobRepository.DeleteFinishedOlderThanAsync(cutoff, JobRetentionFilter.All, ct).ConfigureAwait(false);
 
         if (deleted > 0)
         {

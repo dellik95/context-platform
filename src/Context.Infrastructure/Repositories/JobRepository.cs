@@ -175,14 +175,17 @@ public class JobRepository(ContextDbContext db) : IJobRepository
     /// <summary>Keeps one retention sweep's DELETE statements off SQLite's parameter limit.</summary>
     private const int RetentionDeleteBatchSize = 500;
 
-    public async Task<int> DeleteFinishedOlderThanAsync(DateTimeOffset cutoff, CancellationToken ct)
+    public async Task<int> DeleteFinishedOlderThanAsync(DateTimeOffset cutoff, JobRetentionFilter filter, CancellationToken ct)
     {
         // Only the two columns the cutoff needs are materialized. The DateTimeOffset comparison has
         // to run client-side (same provider limitation DequeueNextAsync documents), and Jobs is
         // precisely the table that reaches six figures, so pulling whole entities — PayloadJson
         // included — just to decide what to delete would cost more than the rows being freed.
         var terminal = await db.Jobs.AsNoTracking()
-            .Where(j => j.Status == JobStatus.Done || j.Status == JobStatus.Failed)
+            .Where(j => (j.Status == JobStatus.Done || j.Status == JobStatus.Failed)
+                && (filter.OnlyStatus == null || j.Status == filter.OnlyStatus)
+                && (filter.OnlyType == null || j.Type == filter.OnlyType)
+                && (filter.ExceptType == null || j.Type != filter.ExceptType))
             .Select(j => new { j.Id, j.FinishedAt, j.CreatedAt })
             .ToListAsync(ct);
 
@@ -214,10 +217,19 @@ public class JobRepository(ContextDbContext db) : IJobRepository
         return createdAt.Count == 0 ? null : createdAt.Max();
     }
 
-    public Task<int> DeleteByStatusAsync(JobStatus status, Guid? projectId, JobType? type, CancellationToken ct) =>
-        db.Jobs
-            .Where(j => j.Status == status
-                && (projectId == null || j.ProjectId == projectId)
-                && (type == null || j.Type == type))
-            .ExecuteDeleteAsync(ct);
+    public Task<int> DeleteByStatusAsync(
+        JobStatus status, Guid? projectId, JobType? type, IReadOnlyCollection<JobType>? excludeTypes, CancellationToken ct)
+    {
+        var query = db.Jobs.Where(j => j.Status == status
+            && (projectId == null || j.ProjectId == projectId)
+            && (type == null || j.Type == type));
+
+        if (excludeTypes is { Count: > 0 })
+        {
+            var excluded = excludeTypes.ToArray();
+            query = query.Where(j => !excluded.Contains(j.Type));
+        }
+
+        return query.ExecuteDeleteAsync(ct);
+    }
 }

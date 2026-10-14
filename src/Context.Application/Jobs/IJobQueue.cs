@@ -12,6 +12,14 @@ public interface IJobQueue
     Task<Guid> EnqueueAsync(JobType type, object payload, Guid? projectId = null, int priority = 0, CancellationToken ct = default);
 
     /// <summary>
+    /// Tells the dispatcher that jobs for <paramref name="projectId"/> were inserted directly through
+    /// <see cref="Context.Infrastructure.Abstractions.IJobRepository"/> (inside a caller's database
+    /// transaction, where <see cref="EnqueueAsync"/> would open a second connection and wait on that
+    /// transaction's write lock) and are now committed and ready to claim.
+    /// </summary>
+    Task WakeAsync(Guid? projectId, CancellationToken ct = default);
+
+    /// <summary>
     /// Manually re-triggers a job that has already exhausted its automatic retries and is
     /// permanently <see cref="Context.Domain.Enums.JobStatus.Failed"/> (the System tab's "retry"
     /// button) — resets it to a fresh <see cref="Context.Domain.Enums.JobStatus.Pending"/> attempt

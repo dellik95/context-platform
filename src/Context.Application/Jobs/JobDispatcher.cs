@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Text.Json;
 using Context.Application.Notifications;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
@@ -63,10 +62,6 @@ namespace Context.Application.Jobs;
 /// </remarks>
 public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 {
-    /// <summary>Per JobType max attempts before a failure is final (spec: 5 for EmbedChunk, 3 for everything else).</summary>
-    private const int DefaultMaxAttempts = 3;
-    private const int EmbedChunkMaxAttempts = 5;
-
     /// <summary>A Running job found at startup can only mean the previous process died mid-job; always requeue it.</summary>
     private static readonly TimeSpan RunningIsAlwaysStaleAtStartup = TimeSpan.Zero;
 
@@ -150,17 +145,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 
     public async Task<Guid> EnqueueAsync(JobType type, object payload, Guid? projectId = null, int priority = 0, CancellationToken ct = default)
     {
-        var job = new Job
-        {
-            Id = Guid.NewGuid(),
-            Type = type,
-            ProjectId = projectId,
-            PayloadJson = JsonSerializer.Serialize(payload, payload.GetType()),
-            Status = JobStatus.Pending,
-            Priority = priority,
-            Attempts = 0,
-            CreatedAt = DateTimeOffset.UtcNow
-        };
+        var job = JobFactory.Create(type, payload, projectId, priority);
 
         using (var scope = _scopeFactory.CreateScope())
         {
@@ -168,10 +153,15 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
             job = await jobRepository.EnqueueAsync(job, ct).ConfigureAwait(false);
         }
 
+        await WakeAsync(projectId, ct).ConfigureAwait(false);
+        return job.Id;
+    }
+
+    public async Task WakeAsync(Guid? projectId, CancellationToken ct = default)
+    {
         KickLane(projectId);
         await _jobSignal.PublishAsync(ct).ConfigureAwait(false);
         await PublishJobCountsAsync(projectId, ct).ConfigureAwait(false);
-        return job.Id;
     }
 
     /// <summary>
@@ -612,25 +602,27 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 
     private async Task HandleFailureAsync(IJobRepository jobRepository, Job job, Exception ex, CancellationToken ct)
     {
-        if (FindRateLimit(ex) is { } rateLimited)
+        if (FindDeferral(ex) is var (retryAt, deferralMessage))
         {
-            // A provider quota says nothing about the job itself, so it waits out the cooldown with
-            // its attempt budget intact instead of failing permanently within seconds.
+            // A provider quota or a handler waiting on earlier work says nothing about the job
+            // itself, so it waits with its attempt budget intact instead of failing permanently
+            // within seconds.
             job.Status = JobStatus.Pending;
             job.Attempts = Math.Max(0, job.Attempts - 1);
             job.StartedAt = null;
-            job.NextRetryAt = rateLimited.RetryAt;
-            job.LastError = rateLimited.Message;
+            job.NextRetryAt = retryAt;
+            job.LastError = deferralMessage;
             await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
 
             _logger.LogWarning(
-                "Job {JobId} ({JobType}) was rate-limited by its provider; retrying at {NextRetryAt:O} without spending an attempt.",
-                job.Id, job.Type, job.NextRetryAt);
+                "Job {JobId} ({JobType}) was deferred ({Reason}); retrying at {NextRetryAt:O} without spending an attempt.",
+                job.Id, job.Type, deferralMessage, job.NextRetryAt);
             await PublishJobCountsAsync(job.ProjectId, ct).ConfigureAwait(false);
             return;
         }
 
-        var maxAttempts = job.Type == JobType.EmbedChunk ? EmbedChunkMaxAttempts : DefaultMaxAttempts;
+        var budget = JobRetryPolicy.For(job.Type);
+        var maxAttempts = budget.MaxAttempts;
         var message = ex.ToString();
         job.LastError = message.Length > 4000 ? message[..4000] : message;
 
@@ -648,13 +640,12 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
             return;
         }
 
-        // Exponential backoff: 2s, 4s, 8s, ... capped at 5 minutes so a mis-tuned attempt count
+        // Exponential backoff capped per job type (see JobRetryPolicy) so a mis-tuned attempt count
         // never leaves a job in limbo for an unreasonable time. DequeueNextAsync's own NextRetryAt
         // filter (picked up by the next poll tick, see this type's remarks) is what actually
         // resumes it -- no per-job timer here any more.
-        var backoff = TimeSpan.FromSeconds(Math.Min(300, Math.Pow(2, job.Attempts + 1)));
         job.Status = JobStatus.Pending;
-        job.NextRetryAt = DateTimeOffset.UtcNow + backoff;
+        job.NextRetryAt = DateTimeOffset.UtcNow + budget.BackoffAfter(job.Attempts);
         await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
 
         _logger.LogWarning(ex,
@@ -664,13 +655,16 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         await PublishJobCountsAsync(job.ProjectId, ct).ConfigureAwait(false);
     }
 
-    private static ProviderRateLimitedException? FindRateLimit(Exception ex)
+    private static (DateTimeOffset RetryAt, string Message)? FindDeferral(Exception ex)
     {
         for (var e = ex; e is not null; e = e.InnerException)
         {
-            if (e is ProviderRateLimitedException rateLimited)
+            switch (e)
             {
-                return rateLimited;
+                case ProviderRateLimitedException rateLimited:
+                    return (rateLimited.RetryAt, rateLimited.Message);
+                case JobDeferredException deferred:
+                    return (deferred.RetryAt, deferred.Message);
             }
         }
 

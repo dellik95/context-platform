@@ -24,10 +24,11 @@ public sealed class JobRepositoryTests : IDisposable
         return new ContextDbContext(optionsBuilder.Options);
     }
 
-    private static Job NewJob(int priority = 0, JobStatus status = JobStatus.Pending, DateTimeOffset? createdAt = null) => new()
+    private static Job NewJob(
+        int priority = 0, JobStatus status = JobStatus.Pending, DateTimeOffset? createdAt = null, JobType type = JobType.EmbedChunk) => new()
     {
         Id = Guid.NewGuid(),
-        Type = JobType.EmbedChunk,
+        Type = type,
         PayloadJson = "{}",
         Status = status,
         Priority = priority,
@@ -166,7 +167,7 @@ public sealed class JobRepositoryTests : IDisposable
         var counts = await repository.CountByTypeAsync(JobStatus.Pending, projectId, CancellationToken.None);
         counts.Should().BeEquivalentTo([new JobTypeCount(JobType.EmbedChunk, 2), new JobTypeCount(JobType.IndexFile, 1)]);
 
-        var removed = await repository.DeleteByStatusAsync(JobStatus.Pending, projectId, JobType.EmbedChunk, CancellationToken.None);
+        var removed = await repository.DeleteByStatusAsync(JobStatus.Pending, projectId, JobType.EmbedChunk, null, CancellationToken.None);
 
         removed.Should().Be(2);
         var remaining = await db.Jobs.AsNoTracking().Select(j => new { j.Type, j.Status }).ToListAsync();
@@ -197,7 +198,7 @@ public sealed class JobRepositoryTests : IDisposable
         db.Jobs.AddRange(oldDone, oldFailed, recentDone, oldPending, oldRunning);
         await db.SaveChangesAsync();
 
-        var deleted = await new JobRepository(db).DeleteFinishedOlderThanAsync(cutoff, CancellationToken.None);
+        var deleted = await new JobRepository(db).DeleteFinishedOlderThanAsync(cutoff, JobRetentionFilter.All, CancellationToken.None);
 
         deleted.Should().Be(2);
         var survivors = await db.Jobs.AsNoTracking().Select(j => j.Id).ToListAsync();
@@ -216,9 +217,72 @@ public sealed class JobRepositoryTests : IDisposable
         db.Jobs.Add(orphan);
         await db.SaveChangesAsync();
 
-        var deleted = await new JobRepository(db).DeleteFinishedOlderThanAsync(DateTimeOffset.UtcNow.AddDays(-7), CancellationToken.None);
+        var deleted = await new JobRepository(db).DeleteFinishedOlderThanAsync(DateTimeOffset.UtcNow.AddDays(-7), JobRetentionFilter.All, CancellationToken.None);
 
         deleted.Should().Be(1, "falling back to CreatedAt stops such a row pinning itself in the table forever");
+    }
+
+    [Fact]
+    public async Task DeleteFinishedOlderThanAsync_filter_limits_the_sweep_to_the_requested_type_and_status()
+    {
+        await MigrateAsync();
+        using var db = CreateContext();
+
+        var old = DateTimeOffset.UtcNow.AddDays(-3);
+        Job Finished(JobType type, JobStatus status)
+        {
+            var job = NewJob(status: status, type: type);
+            job.FinishedAt = old;
+            return job;
+        }
+
+        var doneHook = Finished(JobType.ProcessHook, JobStatus.Done);
+        var failedHook = Finished(JobType.ProcessHook, JobStatus.Failed);
+        var doneEmbed = Finished(JobType.EmbedChunk, JobStatus.Done);
+        db.Jobs.AddRange(doneHook, failedHook, doneEmbed);
+        await db.SaveChangesAsync();
+
+        var repository = new JobRepository(db);
+        var cutoff = DateTimeOffset.UtcNow.AddDays(-1);
+
+        var onlyDoneHooks = await repository.DeleteFinishedOlderThanAsync(
+            cutoff, new JobRetentionFilter(JobType.ProcessHook, OnlyStatus: JobStatus.Done), CancellationToken.None);
+        onlyDoneHooks.Should().Be(1);
+
+        var exceptHooks = await repository.DeleteFinishedOlderThanAsync(
+            cutoff, new JobRetentionFilter(ExceptType: JobType.ProcessHook), CancellationToken.None);
+        exceptHooks.Should().Be(1);
+
+        var survivors = await db.Jobs.AsNoTracking().Select(j => j.Id).ToListAsync();
+        survivors.Should().BeEquivalentTo([failedHook.Id], "a failed hook job is the only record of an unprocessed hook");
+    }
+
+    [Fact]
+    public async Task DeleteByStatusAsync_never_removes_excluded_types()
+    {
+        await MigrateAsync();
+        using var db = CreateContext();
+
+        var projectId = Guid.NewGuid();
+        Job ForProject(JobType type)
+        {
+            var job = NewJob(type: type);
+            job.ProjectId = projectId;
+            return job;
+        }
+
+        var hook = ForProject(JobType.ProcessHook);
+        var remember = ForProject(JobType.RememberMemory);
+        var embed = ForProject(JobType.EmbedChunk);
+        db.Jobs.AddRange(hook, remember, embed);
+        await db.SaveChangesAsync();
+
+        var removed = await new JobRepository(db).DeleteByStatusAsync(
+            JobStatus.Pending, projectId, null, [JobType.ProcessHook, JobType.RememberMemory], CancellationToken.None);
+
+        removed.Should().Be(1);
+        var survivors = await db.Jobs.AsNoTracking().Select(j => j.Id).ToListAsync();
+        survivors.Should().BeEquivalentTo([hook.Id, remember.Id]);
     }
 
     [Fact]

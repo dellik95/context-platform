@@ -88,7 +88,7 @@ export class MemoriesPanelComponent {
     // from a session ending or a periodic mid-session summary) should show up here without the
     // user having to re-run the search themselves.
     this.signalr.projectActivity$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((event) => {
-      if (event.kind === 'MemoryCreated' && event.projectId === this.ctx.projectId()) {
+      if (event.kind === 'MemoryChanged' && event.projectId === this.ctx.projectId()) {
         this.resource.reload();
       }
     });

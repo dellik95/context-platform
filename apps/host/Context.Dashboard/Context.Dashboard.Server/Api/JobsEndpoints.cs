@@ -202,8 +202,21 @@ public static class JobsEndpoints
             });
         }
 
+        // A Pending user-data job (a hook payload, a memory the caller was told is "saving") exists
+        // nowhere else, so deleting it is data loss, not housekeeping.
+        var protectsUserData = effectiveStatus == JobStatus.Pending;
+        if (protectsUserData && type is { } requested && JobRetryPolicy.IsUserData(requested))
+        {
+            return Results.BadRequest(new
+            {
+                message = $"Cannot bulk-delete Pending '{requested}' jobs: they hold data that exists nowhere else."
+            });
+        }
+
         var scopedProjectId = projectId ?? currentProject.ProjectId;
-        var removed = await jobs.DeleteByStatusAsync(effectiveStatus, scopedProjectId, type, ct).ConfigureAwait(false);
+        var removed = await jobs
+            .DeleteByStatusAsync(effectiveStatus, scopedProjectId, type, protectsUserData ? JobRetryPolicy.UserData : null, ct)
+            .ConfigureAwait(false);
 
         // Same per-project counts push JobDispatcher does after every status change -- otherwise the
         // System tab's stat tiles stay stale (showing the pre-cleanup count) until its next slow

@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Context.Claude.Hooks;
 using Context.Domain.Entities;
+using Context.Domain.Enums;
 using Context.Dashboard.Server;
 using Context.Dashboard.Server.Api;
 using Context.Dashboard.Server.Hooks;
@@ -18,6 +19,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 namespace Context.IntegrationTests;
@@ -69,6 +71,7 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         var project = await AssertProjectCreateAndRoundTripAsync(client);
         await AssertProtectedEndpointRequiresBearerTokenAsync(client);
         await AssertCrossProjectAccessIsRejectedAsync(client, project);
+        await AssertPendingCleanupKeepsUserDataJobsAsync(client, project);
         await AssertHubJoinIsScopedToTheTokensProjectAsync(project);
         await AssertHookAuthAsync(client);
         await AssertSearchSmokeAsync(client, project);
@@ -293,6 +296,54 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
             response.IsSuccessStatusCode.Should().BeTrue(
                 "{0} names the caller's own project (or no project at all, which defaults to it)", url);
         }
+    }
+
+    /// <summary>Bulk-deleting Pending jobs must never discard a job that holds data nobody else has (a hook payload, a queued memory).</summary>
+    private async Task AssertPendingCleanupKeepsUserDataJobsAsync(HttpClient client, ProjectDto project)
+    {
+        Guid hookJobId;
+        Guid embedJobId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ContextDbContext>();
+            // NextRetryAt far in the future keeps the live dispatcher from claiming the seeded rows.
+            Job Seed(JobType type) => new()
+            {
+                Id = Guid.NewGuid(),
+                Type = type,
+                ProjectId = project.Id,
+                PayloadJson = "{}",
+                Status = JobStatus.Pending,
+                CreatedAt = DateTimeOffset.UtcNow,
+                NextRetryAt = DateTimeOffset.UtcNow.AddDays(1),
+            };
+
+            var hook = Seed(JobType.ProcessHook);
+            var embed = Seed(JobType.EmbedChunk);
+            db.Jobs.AddRange(hook, embed);
+            await db.SaveChangesAsync();
+            hookJobId = hook.Id;
+            embedJobId = embed.Id;
+        }
+
+        using (var explicitRequest = CreateAuthorizedRequest(
+            HttpMethod.Post, "/api/jobs/cleanup?status=Pending&type=ProcessHook", project.Token!, new { }))
+        {
+            var explicitResponse = await client.SendAsync(explicitRequest);
+            explicitResponse.StatusCode.Should().Be(HttpStatusCode.BadRequest,
+                "a Pending ProcessHook job is the only copy of that hook payload");
+        }
+
+        using (var bulkRequest = CreateAuthorizedRequest(HttpMethod.Post, "/api/jobs/cleanup?status=Pending", project.Token!, new { }))
+        {
+            var bulkResponse = await client.SendAsync(bulkRequest);
+            bulkResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        }
+
+        using var verifyScope = _factory.Services.CreateScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<ContextDbContext>();
+        (await verifyDb.Jobs.AsNoTracking().AnyAsync(j => j.Id == hookJobId)).Should().BeTrue("bulk cleanup skips user-data job types");
+        (await verifyDb.Jobs.AsNoTracking().AnyAsync(j => j.Id == embedJobId)).Should().BeFalse("EmbedChunk is regenerable work the bulk cleanup may discard");
     }
 
     // Both transports: long polling hands the hub a cloned HttpContext, not the authenticated request's own.

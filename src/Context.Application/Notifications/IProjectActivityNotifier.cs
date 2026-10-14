@@ -4,7 +4,7 @@ namespace Context.Application.Notifications;
 public enum ProjectActivityKind
 {
     SessionSummaryUpdated,
-    MemoryCreated,
+    MemoryChanged,
 }
 
 /// <summary>
