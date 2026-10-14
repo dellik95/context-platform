@@ -64,6 +64,9 @@ public interface IJobRepository
     /// </summary>
     Task<int> DeleteFinishedOlderThanAsync(DateTimeOffset cutoff, JobRetentionFilter filter, CancellationToken ct);
 
+    /// <summary>The project's Pending or Running jobs of <paramref name="type"/>, without their payloads.</summary>
+    Task<IReadOnlyList<ActiveJob>> ListActiveByTypeAsync(JobType type, Guid projectId, CancellationToken ct);
+
     /// <summary>
     /// When a job of <paramref name="type"/> was last enqueued host-wide, or null if none ever was.
     /// Lets the daily maintenance scheduler derive its own cadence from the queue instead of from
@@ -78,6 +81,8 @@ public sealed record JobRetentionFilter(JobType? OnlyType = null, JobType? Excep
 {
     public static readonly JobRetentionFilter All = new();
 }
+
+public sealed record ActiveJob(Guid Id, DateTimeOffset CreatedAt);
 
 public sealed record JobStatusCounts(int Pending, int Running, int Failed, int Done);
 

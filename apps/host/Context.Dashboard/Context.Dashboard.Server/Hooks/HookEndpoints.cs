@@ -2,11 +2,10 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Context.Application;
-using Context.Application.Notifications;
+using Context.Application.Jobs;
 using Context.Claude.Hooks;
 using Context.Domain.Enums;
 using Context.Dashboard.Server.Security;
-using Context.Infrastructure.Abstractions;
 using Context.Memory.Search;
 using Context.Retrieval.Abstractions;
 
@@ -20,9 +19,14 @@ namespace Context.Dashboard.Server.Hooks;
 /// remarks), which resolves the request's <c>Authorization: Bearer</c> header to whichever
 /// <see cref="Context.Domain.Entities.Project"/> it belongs to and stashes it for
 /// <see cref="CurrentProjectAccessor"/> to read back below.
-/// Every handler fails open on its own internal errors where the generated hook scripts expect it
-/// (additional-context building never lets an exception escape) — but never on the auth check
-/// itself, which must reject unambiguously.
+/// <para/>
+/// A hook's only durable work on the request path is one <see cref="JobType.ProcessHook"/> insert: the
+/// session lookup, event recording and follow-up jobs run in <c>ProcessHookJobHandler</c>, which retries
+/// on failure, so a locked database or a slow provider no longer costs the hook its data and the
+/// script's 2 s curl timeout is easy to meet. The two hooks whose reply carries context
+/// (SessionStart, UserPromptSubmit) still build it here: that is read-only, and fails open — an
+/// exception while building it never escapes — but never on the auth check, which must reject
+/// unambiguously.
 /// </summary>
 public static class HookEndpoints
 {
@@ -62,96 +66,39 @@ public static class HookEndpoints
         hooks.MapPost("/stop", StopAsync);
     }
 
-    private static async Task<IResult> SessionStartAsync(
-        SessionStartInput input,
-        IContextEngine engine,
-        CurrentProjectAccessor project,
-        ClaudeSessionMap sessionMap,
-        IHookInvocationRepository hookInvocations,
-        IHookInvocationNotifier hookNotifier,
-        CancellationToken ct)
+    internal static async Task<IResult> SessionStartAsync(
+        SessionStartInput input, IContextEngine engine, IJobQueue jobQueue, CurrentProjectAccessor project, CancellationToken ct)
     {
-        await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.SessionStart, input, ct).ConfigureAwait(false);
-
-        var sessionId = await sessionMap.StartAsync(
-            input.SessionId, project.ProjectId,
-            c => engine.StartSessionAsync(project.ProjectId, input.SessionId, c, input.Cwd),
-            ct).ConfigureAwait(false);
+        await QueueHookAsync(jobQueue, project.ProjectId, HookType.SessionStart, input, ct).ConfigureAwait(false);
 
         var additionalContext = await TryBuildSessionStartContextAsync(engine, project.ProjectId, ct).ConfigureAwait(false);
         return Results.Ok(new HookOutput(additionalContext));
     }
 
-    private static async Task<IResult> UserPromptSubmitAsync(
-        UserPromptSubmitInput input,
-        IContextEngine engine,
-        CurrentProjectAccessor project,
-        ClaudeSessionMap sessionMap,
-        IHookInvocationRepository hookInvocations,
-        IHookInvocationNotifier hookNotifier,
-        CancellationToken ct)
+    internal static async Task<IResult> UserPromptSubmitAsync(
+        UserPromptSubmitInput input, IContextEngine engine, IJobQueue jobQueue, CurrentProjectAccessor project, CancellationToken ct)
     {
-        await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.UserPromptSubmit, input, ct).ConfigureAwait(false);
+        await QueueHookAsync(jobQueue, project.ProjectId, HookType.UserPromptSubmit, input, ct).ConfigureAwait(false);
 
-        var sessionId = await GetOrStartSessionAsync(engine, project, sessionMap, input.SessionId, ct).ConfigureAwait(false);
-        await engine.RecordEventAsync(project.ProjectId, sessionId, SessionEventType.Prompt, new { prompt = input.Prompt }, ct).ConfigureAwait(false);
-
-        var additionalContext = await TryBuildPromptContextAsync(engine, project.ProjectId, sessionId, input.Prompt, ct).ConfigureAwait(false);
+        var additionalContext = await TryBuildPromptContextAsync(engine, project.ProjectId, input.SessionId, input.Prompt, ct).ConfigureAwait(false);
         return Results.Ok(new HookOutput(additionalContext));
     }
 
-    /// <summary>
-    /// Hooks contain no memory business logic. Exposed as <c>internal</c> (see <c>InternalsVisibleTo</c> in Context.Dashboard.Server.csproj), the same
-    /// pattern already used by <see cref="FormatContextPack"/>/<see cref="WrapAsRetrievedData"/>
-    /// below, so Context.IntegrationTests can invoke this Minimal API handler directly with a mock
-    /// <see cref="IContextEngine"/> and assert its only side effect is <c>RecordEventAsync</c> —
-    /// without going through real HTTP routing/DI just to reach a plain static method.
-    /// </summary>
     internal static async Task<IResult> PostToolUseAsync(
-        PostToolUseInput input,
-        IContextEngine engine,
-        CurrentProjectAccessor project,
-        ClaudeSessionMap sessionMap,
-        IHookInvocationRepository hookInvocations,
-        IHookInvocationNotifier hookNotifier,
-        CancellationToken ct)
+        PostToolUseInput input, IJobQueue jobQueue, CurrentProjectAccessor project, CancellationToken ct)
     {
-        await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.PostToolUse, input, ct).ConfigureAwait(false);
-
-        var sessionId = await GetOrStartSessionAsync(engine, project, sessionMap, input.SessionId, ct).ConfigureAwait(false);
-        var type = ClassifyTool(input.ToolName);
-
-        // `path` is lifted out of the tool input here, at the producer, so the downstream
-        // extractor never needs to know Claude Code's snake_case tool-input schema.
-        await engine.RecordEventAsync(project.ProjectId, sessionId, type, new
-        {
-            toolName = input.ToolName,
-            path = HookToolPath.TryExtract(input.ToolInputJson, project.Project.RootPath),
-            toolInput = input.ToolInputJson,
-            toolResponse = input.ToolResponseJson
-        }, ct).ConfigureAwait(false);
-
         // File-level reindexing on edit is intentionally NOT triggered here: the
         // ProjectFileWatcherManager's per-project watcher already picks up any on-disk change a
         // tool makes (Edit/Write/MultiEdit and friends all write through the real filesystem), so
         // doing it again here would just be a redundant, harder-to-debounce second trigger.
+        await QueueHookAsync(jobQueue, project.ProjectId, HookType.PostToolUse, input, ct).ConfigureAwait(false);
         return Results.Ok(new HookOutput(AdditionalContext: null));
     }
 
-    private static async Task<IResult> SessionEndAsync(
-        SessionEndInput input,
-        IContextEngine engine,
-        CurrentProjectAccessor project,
-        ClaudeSessionMap sessionMap,
-        IHookInvocationRepository hookInvocations,
-        IHookInvocationNotifier hookNotifier,
-        CancellationToken ct)
+    internal static async Task<IResult> SessionEndAsync(
+        SessionEndInput input, IJobQueue jobQueue, CurrentProjectAccessor project, CancellationToken ct)
     {
-        await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.SessionEnd, input, ct).ConfigureAwait(false);
-
-        var sessionId = await GetOrStartSessionAsync(engine, project, sessionMap, input.SessionId, ct).ConfigureAwait(false);
-        await engine.EndSessionAsync(project.ProjectId, sessionId, ct, input.Reason).ConfigureAwait(false);
-        sessionMap.Remove(input.SessionId, project.ProjectId);
+        await QueueHookAsync(jobQueue, project.ProjectId, HookType.SessionEnd, input, ct).ConfigureAwait(false);
         return Results.Ok(new HookOutput(AdditionalContext: null));
     }
 
@@ -159,69 +106,42 @@ public static class HookEndpoints
     /// the conversation. Must never return context: on Stop, additionalContext keeps Claude
     /// running instead of letting the turn end.</summary>
     internal static async Task<IResult> StopAsync(
-        StopInput input,
-        IContextEngine engine,
-        CurrentProjectAccessor project,
-        ClaudeSessionMap sessionMap,
-        IHookInvocationRepository hookInvocations,
-        IHookInvocationNotifier hookNotifier,
-        CancellationToken ct)
+        StopInput input, IJobQueue jobQueue, CurrentProjectAccessor project, CancellationToken ct)
     {
-        await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.Stop, input, ct).ConfigureAwait(false);
-
-        if (!string.IsNullOrWhiteSpace(input.LastAssistantMessage))
-        {
-            var sessionId = await GetOrStartSessionAsync(engine, project, sessionMap, input.SessionId, ct).ConfigureAwait(false);
-            await engine.RecordEventAsync(
-                project.ProjectId, sessionId, SessionEventType.AssistantMessage, new { message = input.LastAssistantMessage }, ct).ConfigureAwait(false);
-        }
-
+        await QueueHookAsync(jobQueue, project.ProjectId, HookType.Stop, input, ct).ConfigureAwait(false);
         return Results.Ok(new HookOutput(AdditionalContext: null));
     }
 
     /// <summary>
     /// A <c>/compact</c> (manual or auto) is a natural mid-session checkpoint, same idea as
     /// <see cref="Context.Application.Scheduling.SessionSummaryScheduler"/>'s periodic pass but
-    /// event-driven instead of timer-driven — enqueues a new <see cref="Context.Domain.Entities.SessionSummaryChunk"/>
-    /// via <see cref="IContextEngine.RequestSessionSummaryAsync"/> without ending the session, and
-    /// memory extraction over Claude Code's own compaction summary.
+    /// event-driven instead of timer-driven — the job extracts memory from Claude Code's own
+    /// compaction summary and requests a new <see cref="Context.Domain.Entities.SessionSummaryChunk"/>
+    /// without ending the session. The summary is resolved here, from stdin or else the transcript's tail,
+    /// because the transcript keeps growing and the job may run later.
     /// </summary>
     internal static async Task<IResult> PostCompactAsync(
-        PostCompactInput input,
-        IContextEngine engine,
-        CurrentProjectAccessor project,
-        ClaudeSessionMap sessionMap,
-        IHookInvocationRepository hookInvocations,
-        IHookInvocationNotifier hookNotifier,
-        CancellationToken ct)
+        PostCompactInput input, IJobQueue jobQueue, CurrentProjectAccessor project, CancellationToken ct)
     {
         // Older Claude Code builds don't send compact_summary; the same text is in the transcript.
         var compactSummary = string.IsNullOrWhiteSpace(input.CompactSummary)
             ? await TryExtractCompactSummaryAsync(input.TranscriptPath, ct).ConfigureAwait(false)
             : input.CompactSummary;
-        var recordedPayload = new PostCompactRecordedPayload(input.SessionId, input.Trigger, input.Cwd, input.TranscriptPath, compactSummary);
-        await RecordHookInvocationAsync(hookInvocations, hookNotifier, project.ProjectId, HookType.PostCompact, recordedPayload, ct).ConfigureAwait(false);
 
-        var sessionId = await GetOrStartSessionAsync(engine, project, sessionMap, input.SessionId, ct).ConfigureAwait(false);
-        if (compactSummary is not null)
-        {
-            await engine.ExtractMemoryFromCompactSummaryAsync(project.ProjectId, sessionId, compactSummary, ct).ConfigureAwait(false);
-        }
-
-        await engine.RequestSessionSummaryAsync(project.ProjectId, sessionId, ct).ConfigureAwait(false);
+        await QueueHookAsync(jobQueue, project.ProjectId, HookType.PostCompact, input with { CompactSummary = compactSummary }, ct).ConfigureAwait(false);
         return Results.Ok(new HookOutput(AdditionalContext: null));
     }
 
-    /// <summary>What actually gets persisted/broadcast for a PostCompact invocation -- same
-    /// snake_case wire naming as <see cref="PostCompactInput"/> (and every other hook DTO) so the
-    /// dashboard's raw-payload viewer stays consistent across hook types, with the summary resolved
-    /// from either stdin or the transcript.</summary>
-    private sealed record PostCompactRecordedPayload(
-        [property: JsonPropertyName("session_id")] string SessionId,
-        [property: JsonPropertyName("trigger")] string Trigger,
-        [property: JsonPropertyName("cwd")] string? Cwd,
-        [property: JsonPropertyName("transcript_path")] string? TranscriptPath,
-        [property: JsonPropertyName("compact_summary")] string? CompactSummary);
+    /// <summary>The request's single durable write. <c>ReceivedAt</c> is taken now, not when the job runs, so
+    /// events keep their real order. A failure surfaces as a 500: the hook script drops the call, as it always
+    /// has when this host is unreachable.</summary>
+    private static Task QueueHookAsync(IJobQueue jobQueue, Guid projectId, HookType type, object input, CancellationToken ct) =>
+        jobQueue.EnqueueAsync(
+            JobType.ProcessHook,
+            new ProcessHookPayload(type, JsonSerializer.Serialize(input, input.GetType()), DateTimeOffset.UtcNow),
+            projectId,
+            JobPriority.Hook,
+            ct);
 
     private const int CompactSummaryMaxLinesToScan = 200;
     private const int CompactSummaryMaxBytesToScan = 2 * 1024 * 1024;
@@ -320,37 +240,6 @@ public static class HookEndpoints
     }
 
     /// <summary>
-    /// Records that one of the hook endpoints fired, for the Dashboard's "Hook invocations"
-    /// panel — persists the raw (already model-bound) payload, then pushes the new total count and
-    /// this payload live over SignalR so the panel updates without polling.
-    /// </summary>
-    private static async Task RecordHookInvocationAsync(
-        IHookInvocationRepository repo, IHookInvocationNotifier notifier,
-        Guid projectId, HookType type, object payload, CancellationToken ct)
-    {
-        var json = JsonSerializer.Serialize(payload);
-        await repo.RecordAsync(projectId, type, json, ct).ConfigureAwait(false);
-        var count = await repo.CountAsync(projectId, ct).ConfigureAwait(false);
-        await notifier.NotifyAsync(projectId, new HookInvocationEvent(type, json, DateTimeOffset.UtcNow, count), ct).ConfigureAwait(false);
-    }
-
-    /// <summary>See <see cref="ClaudeSessionMap"/>'s remarks for why a miss here starts a new session.</summary>
-    private static Task<Guid> GetOrStartSessionAsync(
-        IContextEngine engine, CurrentProjectAccessor project, ClaudeSessionMap sessionMap, string claudeSessionId, CancellationToken ct) =>
-        sessionMap.GetOrStartAsync(
-            claudeSessionId, project.ProjectId,
-            c => engine.StartSessionAsync(project.ProjectId, claudeSessionId, c),
-            ct);
-
-    private static SessionEventType ClassifyTool(string toolName) => toolName switch
-    {
-        "Read" or "NotebookRead" => SessionEventType.FileRead,
-        "Edit" or "Write" or "MultiEdit" or "NotebookEdit" => SessionEventType.FileEdit,
-        "Bash" or "BashOutput" or "KillShell" => SessionEventType.Command,
-        _ => SessionEventType.ToolCall
-    };
-
-    /// <summary>
     /// SessionStart context: a short project snapshot plus the project's most relevant memories. Any
     /// failure is swallowed - Context Platform being briefly unhealthy must never block Claude Code's
     /// own session start.
@@ -391,7 +280,7 @@ public static class HookEndpoints
     /// failure for the same fail-open reason as <see cref="TryBuildSessionStartContextAsync"/>.
     /// </summary>
     private static async Task<string?> TryBuildPromptContextAsync(
-        IContextEngine engine, Guid projectId, Guid sessionId, string prompt, CancellationToken ct)
+        IContextEngine engine, Guid projectId, string claudeSessionId, string prompt, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(prompt))
         {
@@ -400,7 +289,7 @@ public static class HookEndpoints
 
         try
         {
-            var query = new SearchQuery(projectId, prompt, Scope: null, TokenBudget: PromptContextTokenBudget, SessionId: sessionId);
+            var query = new SearchQuery(projectId, prompt, Scope: null, TokenBudget: PromptContextTokenBudget, SessionKey: claudeSessionId);
             var pack = await engine.SearchContextAsync(query, ct).ConfigureAwait(false);
             return FormatContextPack(pack);
         }

@@ -15,14 +15,14 @@ public static class SearchEndpoints
     }
 
     private static async Task<IResult> SearchAsync(
-        string q, int? budget, Guid? sessionId, CurrentProjectAccessor currentProject, IContextEngine engine, CancellationToken ct)
+        string q, int? budget, string? sessionId, CurrentProjectAccessor currentProject, IContextEngine engine, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(q))
         {
             return Results.BadRequest("'q' is required.");
         }
 
-        var query = new SearchQuery(currentProject.ProjectId, q, Scope: null, TokenBudget: budget ?? DefaultTokenBudget, SessionId: sessionId);
+        var query = new SearchQuery(currentProject.ProjectId, q, Scope: null, TokenBudget: budget ?? DefaultTokenBudget, SessionKey: sessionId);
         var pack = await engine.SearchContextAsync(query, ct).ConfigureAwait(false);
         return Results.Ok(pack);
     }

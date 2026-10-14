@@ -103,7 +103,6 @@ try
     });
 
     builder.Services.AddSingleton(hostOptions);
-    builder.Services.AddSingleton<ClaudeSessionMap>();
     builder.Services.AddSingleton<AdminTokenProvider>();
 
     // CurrentProjectAccessor reads the Project that BearerTokenAuth/HubBearerTokenAuthMiddleware

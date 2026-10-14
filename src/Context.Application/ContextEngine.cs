@@ -58,6 +58,8 @@ public sealed class ContextEngine(
     IMemoryStore memoryStore,
     ISessionSummaryVectorIndex sessionSummaryVectorIndex,
     IProviderResolver providerResolver,
+    IUnitOfWork unitOfWork,
+    IJobRepository jobRepository,
     ILogger<ContextEngine>? logger = null) : IContextEngine
 {
     private const int SummaryCharLimit = 800;
@@ -88,7 +90,7 @@ public sealed class ContextEngine(
 
         var pack = await contextPackBuilder.BuildAsync(query, historicalNotes, openIssues, ct).ConfigureAwait(false);
 
-        return query.SessionId is { } sessionId ? ApplySessionDeliveryCache(pack, sessionId) : pack;
+        return query.SessionKey is { Length: > 0 } sessionKey ? ApplySessionDeliveryCache(pack, query.ProjectId, sessionKey) : pack;
     }
 
     public async Task<object> ExpandAsync(Guid nodeId, DisclosureLevel level, CancellationToken ct)
@@ -406,37 +408,52 @@ public sealed class ContextEngine(
         return saved.Id;
     }
 
-    public async Task RecordEventAsync(Guid projectId, Guid sessionId, SessionEventType type, object payload, CancellationToken ct)
+    public async Task RecordEventAsync(
+        Guid projectId, Guid sessionId, SessionEventType type, object payload, CancellationToken ct,
+        Guid? eventId = null, DateTimeOffset? timestamp = null)
     {
         var payloadJson = JsonSerializer.Serialize(payload, payload.GetType());
 
         var sessionEvent = new SessionEvent
         {
-            Id = Guid.NewGuid(),
+            Id = eventId ?? Guid.NewGuid(),
             SessionId = sessionId,
             Type = type,
             PayloadJson = payloadJson,
-            Timestamp = DateTimeOffset.UtcNow,
+            Timestamp = timestamp ?? DateTimeOffset.UtcNow,
             TokenEstimate = TokenEstimator.Estimate(payloadJson)
         };
 
-        await sessionRepository.AddEventAsync(sessionEvent, ct).ConfigureAwait(false);
-
         var settings = await projectSettingsService.GetAsync(projectId, ct).ConfigureAwait(false);
-        await EnqueueExtractionBatchAsync(projectId, sessionId, Math.Max(1, settings.MinEventsForMemoryExtraction), ct).ConfigureAwait(false);
+        var queued = await unitOfWork.InTransactionAsync(async () =>
+        {
+            await sessionRepository.AddEventAsync(sessionEvent, ct).ConfigureAwait(false);
+            return await QueueExtractionBatchAsync(projectId, sessionId, Math.Max(1, settings.MinEventsForMemoryExtraction), ct).ConfigureAwait(false);
+        }, ct).ConfigureAwait(false);
+
+        if (queued)
+        {
+            await jobQueue.WakeAsync(projectId, ct).ConfigureAwait(false);
+        }
     }
 
-    private async Task EnqueueExtractionBatchAsync(Guid projectId, Guid sessionId, int minEvents, CancellationToken ct)
+    /// <summary>Claims the unclaimed events as one batch and inserts its <c>ExtractMemory</c> job. Runs inside the
+    /// caller's transaction so the claim and the job commit together: a claimed batch without a job would never be
+    /// extracted.</summary>
+    private async Task<bool> QueueExtractionBatchAsync(Guid projectId, Guid sessionId, int minEvents, CancellationToken ct)
     {
         var batchId = await sessionRepository.ClaimEventsForExtractionAsync(sessionId, minEvents, ct).ConfigureAwait(false);
         if (batchId is null)
         {
-            return;
+            return false;
         }
 
-        await jobQueue.EnqueueAsync(
-            JobType.ExtractMemory, new ExtractMemoryPayload(sessionId, EventBatchId: batchId), projectId, JobPriority.Session, ct).ConfigureAwait(false);
+        await InsertJobAsync(JobType.ExtractMemory, new ExtractMemoryPayload(sessionId, EventBatchId: batchId), projectId, ct).ConfigureAwait(false);
+        return true;
     }
+
+    private Task InsertJobAsync(JobType type, object payload, Guid projectId, CancellationToken ct) =>
+        jobRepository.EnqueueAsync(JobFactory.Create(type, payload, projectId, JobPriority.Session), ct);
 
     public async Task ExtractMemoryFromCompactSummaryAsync(Guid projectId, Guid sessionId, string compactSummary, CancellationToken ct)
     {
@@ -445,23 +462,29 @@ public sealed class ContextEngine(
             return;
         }
 
-        await jobQueue.EnqueueAsync(
-            JobType.ExtractMemory, new ExtractMemoryPayload(sessionId, CompactSummary: compactSummary), projectId, JobPriority.Session, ct).ConfigureAwait(false);
+        await InsertJobAsync(JobType.ExtractMemory, new ExtractMemoryPayload(sessionId, CompactSummary: compactSummary), projectId, ct).ConfigureAwait(false);
+        await jobQueue.WakeAsync(projectId, ct).ConfigureAwait(false);
     }
 
     public async Task EndSessionAsync(Guid projectId, Guid sessionId, CancellationToken ct, string? reason = null)
     {
-        var session = await sessionRepository.GetByIdAsync(projectId, sessionId, ct).ConfigureAwait(false)
-            ?? throw new KeyNotFoundException($"Session {sessionId} was not found.");
+        var ownerProjectId = await unitOfWork.InTransactionAsync(async () =>
+        {
+            var session = await sessionRepository.GetByIdAsync(projectId, sessionId, ct).ConfigureAwait(false)
+                ?? throw new KeyNotFoundException($"Session {sessionId} was not found.");
 
-        session.Status = SessionStatus.Ended;
-        session.EndedAt = DateTimeOffset.UtcNow;
-        session.EndReason = reason;
-        await sessionRepository.UpdateAsync(session, ct).ConfigureAwait(false);
+            session.Status = SessionStatus.Ended;
+            session.EndedAt = DateTimeOffset.UtcNow;
+            session.EndReason = reason;
+            await sessionRepository.UpdateAsync(session, ct).ConfigureAwait(false);
 
-        // No later event will push the remainder over the batch threshold, so flush it now.
-        await EnqueueExtractionBatchAsync(session.ProjectId, sessionId, minEvents: 1, ct).ConfigureAwait(false);
-        await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(sessionId, IsSessionEnd: true), session.ProjectId, JobPriority.Session, ct).ConfigureAwait(false);
+            // No later event will push the remainder over the batch threshold, so flush it now.
+            await QueueExtractionBatchAsync(session.ProjectId, sessionId, minEvents: 1, ct).ConfigureAwait(false);
+            await InsertJobAsync(JobType.SummarizeSession, new SummarizeSessionPayload(sessionId, IsSessionEnd: true), session.ProjectId, ct).ConfigureAwait(false);
+            return session.ProjectId;
+        }, ct).ConfigureAwait(false);
+
+        await jobQueue.WakeAsync(ownerProjectId, ct).ConfigureAwait(false);
     }
 
     public async Task RequestSessionSummaryAsync(Guid projectId, Guid sessionId, CancellationToken ct)
@@ -469,7 +492,8 @@ public sealed class ContextEngine(
         var session = await sessionRepository.GetByIdAsync(projectId, sessionId, ct).ConfigureAwait(false)
             ?? throw new KeyNotFoundException($"Session {sessionId} was not found.");
 
-        await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(sessionId, IsSessionEnd: false), session.ProjectId, JobPriority.Session, ct).ConfigureAwait(false);
+        await InsertJobAsync(JobType.SummarizeSession, new SummarizeSessionPayload(sessionId, IsSessionEnd: false), session.ProjectId, ct).ConfigureAwait(false);
+        await jobQueue.WakeAsync(session.ProjectId, ct).ConfigureAwait(false);
     }
 
     public async Task<object> ProjectInfoAsync(Guid projectId, CancellationToken ct)
@@ -668,7 +692,7 @@ public sealed class ContextEngine(
     /// the node directly if it actually needs to see it again. <see cref="ContextPack.EstimatedTokens"/>
     /// is recomputed to reflect the swap.
     /// </summary>
-    private ContextPack ApplySessionDeliveryCache(ContextPack pack, Guid sessionId)
+    private ContextPack ApplySessionDeliveryCache(ContextPack pack, Guid projectId, string sessionKey)
     {
         if (pack.PrimaryHits.Count == 0)
         {
@@ -680,7 +704,7 @@ public sealed class ContextEngine(
 
         foreach (var hit in pack.PrimaryHits)
         {
-            var previousDelivery = deliveryCache.TryGetRecentDelivery(sessionId, hit.NodeId);
+            var previousDelivery = deliveryCache.TryGetRecentDelivery($"{projectId:N}/{sessionKey}", hit.NodeId);
             if (previousDelivery is { } deliveredAt)
             {
                 changed = true;

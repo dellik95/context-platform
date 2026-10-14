@@ -42,6 +42,7 @@ public sealed class ContextEngineTests
     private readonly Mock<IMemoryStore> _memoryStore = new();
     private readonly Mock<ISessionSummaryVectorIndex> _sessionSummaryVectorIndex = new();
     private readonly Mock<IProviderResolver> _providerResolver = new();
+    private readonly Mock<IJobRepository> _jobRepository = new();
     private readonly Mock<IEmbeddingGenerator<string, Embedding<float>>> _embeddingGenerator = new();
     private readonly Mock<ILogger<ContextEngine>> _logger = new();
     private readonly SessionDeliveryCache _deliveryCache = new();
@@ -68,7 +69,12 @@ public sealed class ContextEngineTests
             _memoryStore.Object,
             _sessionSummaryVectorIndex.Object,
             _providerResolver.Object,
+            new PassthroughUnitOfWork(),
+            _jobRepository.Object,
             _logger.Object);
+
+        _jobRepository.Setup(r => r.EnqueueAsync(It.IsAny<Job>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Job job, CancellationToken _) => job);
 
         // Neutral defaults so tests only need to configure what they actually exercise.
         _symbolRepository.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
@@ -145,6 +151,29 @@ public sealed class ContextEngineTests
             Status = supersededById is null ? MemoryStatus.Active : MemoryStatus.Superseded,
             SupersededById = supersededById
         };
+    }
+
+    private ContextEngine CreateSutWith(IUnitOfWork unitOfWork) => new(
+        new ContextPackBuilder(_searchEngine.Object), _jobQueue.Object, _graphTraversal.Object, _graphCacheProvider.Object,
+        _projectRepository.Object, _fileRepository.Object, _symbolRepository.Object, _chunkRepository.Object, _memoryRepository.Object,
+        _sessionRepository.Object, _deliveryCache, _projectSettingsService.Object, _memoryConsolidator.Object, _memoryStore.Object,
+        _sessionSummaryVectorIndex.Object, _providerResolver.Object, unitOfWork, _jobRepository.Object, _logger.Object);
+
+    private sealed class PassthroughUnitOfWork : IUnitOfWork
+    {
+        public Task<T> InTransactionAsync<T>(Func<Task<T>> work, CancellationToken ct) => work();
+    }
+
+    private sealed class RollbackTrackingUnitOfWork : IUnitOfWork
+    {
+        public bool Committed { get; private set; }
+
+        public async Task<T> InTransactionAsync<T>(Func<Task<T>> work, CancellationToken ct)
+        {
+            var result = await work();
+            Committed = true;
+            return result;
+        }
     }
 
     // ---- 1. SearchContextAsync merges ranked DomainMemory records into historical notes / open issues ----
@@ -314,14 +343,14 @@ public sealed class ContextEngineTests
     public async Task SearchContextAsync_replaces_recurring_node_with_already_shown_marker_on_second_call_in_same_session()
     {
         var projectId = Guid.NewGuid();
-        var sessionId = Guid.NewGuid();
+        var sessionKey = "claude-session-1";
         var nodeId = Guid.NewGuid();
 
         var hit = new SearchHit(nodeId, "Symbol", "Foo.Bar", 1.0, "original snippet content");
         _searchEngine.Setup(s => s.SearchAsync(It.IsAny<SearchQuery>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<SearchHit>)[hit]);
 
-        var query = new SearchQuery(projectId, "foo", null, TokenBudget: 5000, SessionId: sessionId);
+        var query = new SearchQuery(projectId, "foo", null, TokenBudget: 5000, SessionKey: sessionKey);
 
         var first = await _sut.SearchContextAsync(query, CancellationToken.None);
         var second = await _sut.SearchContextAsync(query, CancellationToken.None);
@@ -347,8 +376,8 @@ public sealed class ContextEngineTests
         _searchEngine.Setup(s => s.SearchAsync(It.IsAny<SearchQuery>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<SearchHit>)[hit]);
 
-        var firstQuery = new SearchQuery(projectId, "foo", null, TokenBudget: 5000, SessionId: Guid.NewGuid());
-        var secondQuery = new SearchQuery(projectId, "foo", null, TokenBudget: 5000, SessionId: Guid.NewGuid());
+        var firstQuery = new SearchQuery(projectId, "foo", null, TokenBudget: 5000, SessionKey: Guid.NewGuid().ToString());
+        var secondQuery = new SearchQuery(projectId, "foo", null, TokenBudget: 5000, SessionKey: Guid.NewGuid().ToString());
 
         var first = await _sut.SearchContextAsync(firstQuery, CancellationToken.None);
         var second = await _sut.SearchContextAsync(secondQuery, CancellationToken.None);
@@ -367,7 +396,7 @@ public sealed class ContextEngineTests
         _searchEngine.Setup(s => s.SearchAsync(It.IsAny<SearchQuery>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<SearchHit>)[hit]);
 
-        var query = new SearchQuery(projectId, "foo", null, TokenBudget: 5000, SessionId: null);
+        var query = new SearchQuery(projectId, "foo", null, TokenBudget: 5000, SessionKey: null);
 
         var first = await _sut.SearchContextAsync(query, CancellationToken.None);
         var second = await _sut.SearchContextAsync(query, CancellationToken.None);
@@ -517,20 +546,16 @@ public sealed class ContextEngineTests
         };
 
         _sessionRepository.Setup(r => r.GetByIdAsync(session.ProjectId, sessionId, It.IsAny<CancellationToken>())).ReturnsAsync(session);
-        _jobQueue
-            .Setup(q => q.EnqueueAsync(JobType.SummarizeSession, It.IsAny<object>(), It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Guid.NewGuid());
 
         await _sut.EndSessionAsync(session.ProjectId, sessionId, CancellationToken.None);
 
-        _jobQueue.Verify(
-            q => q.EnqueueAsync(
-                JobType.SummarizeSession,
-                It.Is<object>(p => p is SummarizeSessionPayload && ((SummarizeSessionPayload)p).SessionId == sessionId),
-                session.ProjectId,
-                It.IsAny<int>(),
+        _jobRepository.Verify(
+            r => r.EnqueueAsync(
+                It.Is<Job>(j => j.Type == JobType.SummarizeSession && j.ProjectId == session.ProjectId
+                    && System.Text.Json.JsonSerializer.Deserialize<SummarizeSessionPayload>(j.PayloadJson, (System.Text.Json.JsonSerializerOptions?)null)!.SessionId == sessionId),
                 It.IsAny<CancellationToken>()),
             Times.Once);
+        _jobQueue.Verify(q => q.WakeAsync(session.ProjectId, It.IsAny<CancellationToken>()), Times.Once);
 
         session.Status.Should().Be(SessionStatus.Ended);
         session.EndedAt.Should().NotBeNull();
@@ -550,9 +575,6 @@ public sealed class ContextEngineTests
         };
 
         _sessionRepository.Setup(r => r.GetByIdAsync(session.ProjectId, sessionId, It.IsAny<CancellationToken>())).ReturnsAsync(session);
-        _jobQueue
-            .Setup(q => q.EnqueueAsync(JobType.SummarizeSession, It.IsAny<object>(), It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Guid.NewGuid());
 
         await _sut.EndSessionAsync(session.ProjectId, sessionId, CancellationToken.None, reason: "stale-timeout");
 
@@ -569,9 +591,8 @@ public sealed class ContextEngineTests
         var act = () => _sut.EndSessionAsync(projectId, sessionId, CancellationToken.None);
 
         await act.Should().ThrowAsync<KeyNotFoundException>();
-        _jobQueue.Verify(
-            q => q.EnqueueAsync(It.IsAny<JobType>(), It.IsAny<object>(), It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+        _jobRepository.Verify(r => r.EnqueueAsync(It.IsAny<Job>(), It.IsAny<CancellationToken>()), Times.Never);
+        _jobQueue.Verify(q => q.WakeAsync(It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // ---- 4b. Memory extraction batching ----
@@ -588,15 +609,44 @@ public sealed class ContextEngineTests
         await _sut.RecordEventAsync(projectId, sessionId, SessionEventType.ToolCall, new { tool = "Edit" }, CancellationToken.None);
 
         _sessionRepository.Verify(r => r.AddEventAsync(It.Is<SessionEvent>(e => e.SessionId == sessionId), It.IsAny<CancellationToken>()), Times.Once);
-        _jobQueue.Verify(
-            q => q.EnqueueAsync(
-                JobType.ExtractMemory,
-                It.Is<object>(p => p is ExtractMemoryPayload && ((ExtractMemoryPayload)p).EventBatchId == batchId
-                    && ((ExtractMemoryPayload)p).SessionId == sessionId),
-                projectId,
-                It.IsAny<int>(),
+        _jobRepository.Verify(
+            r => r.EnqueueAsync(
+                It.Is<Job>(j => j.Type == JobType.ExtractMemory && j.ProjectId == projectId && j.Priority == JobPriority.Session
+                    && System.Text.Json.JsonSerializer.Deserialize<ExtractMemoryPayload>(j.PayloadJson, (System.Text.Json.JsonSerializerOptions?)null)!.EventBatchId == batchId
+                    && System.Text.Json.JsonSerializer.Deserialize<ExtractMemoryPayload>(j.PayloadJson, (System.Text.Json.JsonSerializerOptions?)null)!.SessionId == sessionId),
                 It.IsAny<CancellationToken>()),
             Times.Once);
+        _jobQueue.Verify(q => q.WakeAsync(projectId, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RecordEventAsync_keeps_the_supplied_event_id_and_timestamp()
+    {
+        var sessionId = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+        var receivedAt = DateTimeOffset.UtcNow.AddMinutes(-3);
+
+        await _sut.RecordEventAsync(Guid.NewGuid(), sessionId, SessionEventType.Prompt, new { prompt = "hi" }, CancellationToken.None, eventId, receivedAt);
+
+        _sessionRepository.Verify(
+            r => r.AddEventAsync(It.Is<SessionEvent>(e => e.Id == eventId && e.Timestamp == receivedAt && e.SessionId == sessionId), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task RecordEventAsync_does_not_commit_the_event_when_queueing_the_batch_job_fails()
+    {
+        var sessionId = Guid.NewGuid();
+        var unitOfWork = new RollbackTrackingUnitOfWork();
+        var sut = CreateSutWith(unitOfWork);
+        _sessionRepository.Setup(r => r.ClaimEventsForExtractionAsync(sessionId, It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(Guid.NewGuid());
+        _jobRepository.Setup(r => r.EnqueueAsync(It.IsAny<Job>(), It.IsAny<CancellationToken>())).ThrowsAsync(new InvalidOperationException("database is locked"));
+
+        var act = () => sut.RecordEventAsync(Guid.NewGuid(), sessionId, SessionEventType.ToolCall, new { tool = "Edit" }, CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        unitOfWork.Committed.Should().BeFalse("the event, the batch claim and the job must succeed or fail together");
+        _jobQueue.Verify(q => q.WakeAsync(It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -631,12 +681,8 @@ public sealed class ContextEngineTests
         await _sut.EndSessionAsync(session.ProjectId, sessionId, CancellationToken.None);
 
         _sessionRepository.Verify(r => r.ClaimEventsForExtractionAsync(sessionId, 1, It.IsAny<CancellationToken>()), Times.Once);
-        _jobQueue.Verify(
-            q => q.EnqueueAsync(JobType.ExtractMemory, It.IsAny<object>(), session.ProjectId, JobPriority.Session, It.IsAny<CancellationToken>()),
-            Times.Once);
-        _jobQueue.Verify(
-            q => q.EnqueueAsync(JobType.SummarizeSession, It.IsAny<object>(), session.ProjectId, JobPriority.Session, It.IsAny<CancellationToken>()),
-            Times.Once);
+        _jobRepository.Verify(r => r.EnqueueAsync(It.Is<Job>(j => j.Type == JobType.ExtractMemory && j.ProjectId == session.ProjectId), It.IsAny<CancellationToken>()), Times.Once);
+        _jobRepository.Verify(r => r.EnqueueAsync(It.Is<Job>(j => j.Type == JobType.SummarizeSession && j.ProjectId == session.ProjectId), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -648,14 +694,13 @@ public sealed class ContextEngineTests
         await _sut.ExtractMemoryFromCompactSummaryAsync(projectId, sessionId, "   ", CancellationToken.None);
         await _sut.ExtractMemoryFromCompactSummaryAsync(projectId, sessionId, "Switched auth to PKCE.", CancellationToken.None);
 
-        _jobQueue.Verify(
-            q => q.EnqueueAsync(
-                JobType.ExtractMemory,
-                It.Is<object>(p => p is ExtractMemoryPayload && ((ExtractMemoryPayload)p).CompactSummary == "Switched auth to PKCE."),
-                projectId,
-                JobPriority.Session,
+        _jobRepository.Verify(
+            r => r.EnqueueAsync(
+                It.Is<Job>(j => j.Type == JobType.ExtractMemory && j.ProjectId == projectId && j.Priority == JobPriority.Session
+                    && System.Text.Json.JsonSerializer.Deserialize<ExtractMemoryPayload>(j.PayloadJson, (System.Text.Json.JsonSerializerOptions?)null)!.CompactSummary == "Switched auth to PKCE."),
                 It.IsAny<CancellationToken>()),
             Times.Once);
+        _jobQueue.Verify(q => q.WakeAsync(projectId, It.IsAny<CancellationToken>()), Times.Once);
         _jobQueue.VerifyNoOtherCalls();
     }
 

@@ -24,17 +24,17 @@ public sealed class SessionDeliveryCache
 {
     public static readonly TimeSpan Ttl = TimeSpan.FromMinutes(20);
 
-    private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<Guid, DateTimeOffset>> _bySession = new();
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<Guid, DateTimeOffset>> _bySession = new();
 
     /// <summary>
-    /// If <paramref name="nodeId"/> was already delivered to <paramref name="sessionId"/> within
+    /// If <paramref name="nodeId"/> was already delivered to <paramref name="sessionKey"/> within
     /// the TTL, returns the prior delivery instant and leaves state unchanged. Otherwise records
     /// <paramref name="nodeId"/> as delivered now and returns null (meaning: send full content).
     /// </summary>
-    public DateTimeOffset? TryGetRecentDelivery(Guid sessionId, Guid nodeId)
+    public DateTimeOffset? TryGetRecentDelivery(string sessionKey, Guid nodeId)
     {
         var now = DateTimeOffset.UtcNow;
-        var nodes = _bySession.GetOrAdd(sessionId, static _ => new ConcurrentDictionary<Guid, DateTimeOffset>());
+        var nodes = _bySession.GetOrAdd(sessionKey, static _ => new ConcurrentDictionary<Guid, DateTimeOffset>());
 
         // Lazy sweep: drop stale entries for this session so the dictionary doesn't grow forever
         // across a very long session that keeps touching new nodes.

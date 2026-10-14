@@ -205,6 +205,16 @@ public class JobRepository(ContextDbContext db) : IJobRepository
         return deleted;
     }
 
+    public async Task<IReadOnlyList<ActiveJob>> ListActiveByTypeAsync(JobType type, Guid projectId, CancellationToken ct)
+    {
+        var rows = await db.Jobs.AsNoTracking()
+            .Where(j => j.Type == type && j.ProjectId == projectId && (j.Status == JobStatus.Pending || j.Status == JobStatus.Running))
+            .Select(j => new { j.Id, j.CreatedAt })
+            .ToListAsync(ct);
+
+        return [.. rows.Select(r => new ActiveJob(r.Id, r.CreatedAt))];
+    }
+
     public async Task<DateTimeOffset?> GetLastEnqueuedAtAsync(JobType type, CancellationToken ct)
     {
         // Max()/OrderBy over a DateTimeOffset column is untranslatable on SQLite, so the aggregate

@@ -38,8 +38,12 @@ public interface IContextEngine
     Task<Guid> StartSessionAsync(Guid projectId, string? claudeSessionId, CancellationToken ct, string? cwd = null);
 
     /// <summary>Persists one session event. Once <c>ProjectSettingsDto.MinEventsForMemoryExtraction</c>
-    /// events are waiting unclaimed, claims them as one batch and enqueues <c>ExtractMemory</c> for it.</summary>
-    Task RecordEventAsync(Guid projectId, Guid sessionId, Context.Domain.Enums.SessionEventType type, object payload, CancellationToken ct);
+    /// events are waiting unclaimed, claims them as one batch and inserts <c>ExtractMemory</c> for it in the same
+    /// transaction. <paramref name="eventId"/> and <paramref name="timestamp"/> let a job that replays a hook
+    /// keep the event's identity and its original time.</summary>
+    Task RecordEventAsync(
+        Guid projectId, Guid sessionId, Context.Domain.Enums.SessionEventType type, object payload, CancellationToken ct,
+        Guid? eventId = null, DateTimeOffset? timestamp = null);
 
     /// <summary>Marks the session ended, flushes any still-unclaimed events into a final
     /// <c>ExtractMemory</c> batch, and enqueues the final <c>SummarizeSession</c>.

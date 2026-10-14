@@ -76,6 +76,7 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         await AssertConsolidationReportsCanBeDeletedAsync(client, project);
         await AssertHubJoinIsScopedToTheTokensProjectAsync(project);
         await AssertHookAuthAsync(client);
+        await AssertPostedHookIsProcessedByItsJobAsync(client, project);
         await AssertSearchSmokeAsync(client, project);
     }
 
@@ -445,6 +446,33 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         (await ExistsAsync(applied)).Should().BeFalse("finished reports are cleared");
         (await ExistsAsync(pending)).Should().BeTrue("a Pending report still awaits review");
         (await ExistsAsync(applying)).Should().BeTrue();
+    }
+
+    /// <summary>A hook posted over HTTP is acknowledged after one job insert, then lands as a session event once its job runs.</summary>
+    private async Task AssertPostedHookIsProcessedByItsJobAsync(HttpClient client, ProjectDto project)
+    {
+        var claudeSessionId = $"hook-e2e-{Guid.NewGuid():N}";
+        using (var request = CreateAuthorizedRequest(
+            HttpMethod.Post, "/hooks/post-tool-use", project.Token!, new PostToolUseInput(claudeSessionId, "Read", "{\"file_path\":\"src/A.cs\"}", "{}")))
+        {
+            (await client.SendAsync(request)).StatusCode.Should().Be(HttpStatusCode.OK);
+        }
+
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
+        while (true)
+        {
+            using var scope = _factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ContextDbContext>();
+            var session = await db.Sessions.AsNoTracking().FirstOrDefaultAsync(s => s.ProjectId == project.Id && s.ClaudeSessionId == claudeSessionId);
+            if (session is not null && await db.SessionEvents.AsNoTracking().AnyAsync(e => e.SessionId == session.Id && e.Type == SessionEventType.FileRead))
+            {
+                (await db.HookInvocations.AsNoTracking().AnyAsync(h => h.ProjectId == project.Id && h.Type == HookType.PostToolUse)).Should().BeTrue();
+                break;
+            }
+
+            DateTimeOffset.UtcNow.Should().BeBefore(deadline, "the ProcessHook job should have recorded the event by now");
+            await Task.Delay(100);
+        }
     }
 
     // Both transports: long polling hands the hub a cloned HttpContext, not the authenticated request's own.

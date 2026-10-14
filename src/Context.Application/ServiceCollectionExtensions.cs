@@ -189,6 +189,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IJobHandler, ReconsolidateMemoryJobHandler>();
         services.AddScoped<IJobHandler, RememberMemoryJobHandler>();
         services.AddScoped<IJobHandler, ForgetMemoryJobHandler>();
+        services.AddScoped<IJobHandler, ProcessHookJobHandler>();
     }
 
     /// <summary>

@@ -5,7 +5,11 @@ namespace Context.Infrastructure.Abstractions;
 
 public interface IHookInvocationRepository
 {
-    Task<HookInvocation> RecordAsync(Guid projectId, HookType type, string payloadJson, CancellationToken ct);
+    /// <summary>Stores the invocation under <paramref name="id"/>, the id of the job that processed it, so the
+    /// row doubles as that job's "already processed" marker (see <see cref="ExistsAsync"/>).</summary>
+    Task<HookInvocation> RecordAsync(Guid id, Guid projectId, HookType type, string payloadJson, DateTimeOffset receivedAt, CancellationToken ct);
+
+    Task<bool> ExistsAsync(Guid id, CancellationToken ct);
     Task<int> CountAsync(Guid projectId, CancellationToken ct);
 
     /// <summary>Most recent invocations for <paramref name="projectId"/>, newest first, capped at

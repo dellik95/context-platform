@@ -95,3 +95,12 @@ public sealed record RememberMemoryPayload(
 
 /// <summary>Drives <see cref="Handlers.ForgetMemoryJobHandler"/>.</summary>
 public sealed record ForgetMemoryPayload(Guid MemoryId);
+
+/// <summary>
+/// Drives <see cref="Handlers.ProcessHookJobHandler"/>: one Claude Code hook call, captured as the
+/// request path's only durable write. <see cref="InputJson"/> is the hook's JSON exactly as the
+/// matching <c>Context.Claude.Hooks</c> input record serializes it; <see cref="ReceivedAt"/> is the
+/// instant the host received it, which orders the resulting event however late the job runs.
+/// </summary>
+public sealed record ProcessHookPayload(HookType Type, string InputJson, DateTimeOffset ReceivedAt);
+

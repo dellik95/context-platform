@@ -7,21 +7,25 @@ namespace Context.Infrastructure.Repositories;
 
 public class HookInvocationRepository(ContextDbContext db) : IHookInvocationRepository
 {
-    public async Task<HookInvocation> RecordAsync(Guid projectId, HookType type, string payloadJson, CancellationToken ct)
+    public async Task<HookInvocation> RecordAsync(
+        Guid id, Guid projectId, HookType type, string payloadJson, DateTimeOffset receivedAt, CancellationToken ct)
     {
         var invocation = new HookInvocation
         {
-            Id = Guid.NewGuid(),
+            Id = id,
             ProjectId = projectId,
             Type = type,
             PayloadJson = payloadJson,
-            ReceivedAt = DateTimeOffset.UtcNow,
+            ReceivedAt = receivedAt,
         };
 
         db.HookInvocations.Add(invocation);
         await db.SaveChangesAsync(ct);
         return invocation;
     }
+
+    public Task<bool> ExistsAsync(Guid id, CancellationToken ct) =>
+        db.HookInvocations.AsNoTracking().AnyAsync(h => h.Id == id, ct);
 
     public Task<int> CountAsync(Guid projectId, CancellationToken ct) =>
         db.HookInvocations.AsNoTracking().CountAsync(h => h.ProjectId == projectId, ct);
