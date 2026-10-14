@@ -82,6 +82,10 @@ export class ProjectContextService implements OnDestroy {
             if (dto.token) {
               this.projectTokenService.setToken(projectId, dto.token);
             }
+
+            if (dto.warning) {
+              this.snackBar.open(dto.warning, 'Dismiss', { duration: 20000 });
+            }
           }),
           catchError(() => of(null)),
         ),

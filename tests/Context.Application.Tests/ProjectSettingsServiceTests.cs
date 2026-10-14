@@ -141,6 +141,25 @@ public sealed class ProjectSettingsServiceTests
         settingsNode.GetProperty("MaxMemoryNotesPerSection").GetInt32().Should().Be(11);
     }
 
+    [Fact]
+    public async Task UpdateAsync_with_both_target_leaves_the_database_untouched_when_the_local_file_cannot_be_written()
+    {
+        var projectId = Guid.NewGuid();
+        var root = CreateTempProjectRoot();
+        // A file where the .claude directory belongs makes the local write fail.
+        await System.IO.File.WriteAllTextAsync(Path.Combine(root, ".claude"), "not a directory");
+        var project = new Project { Id = projectId, Name = "demo", RootPath = root, CreatedAt = DateTimeOffset.UtcNow, ConfigJson = null };
+        var repo = new Mock<IProjectRepository>();
+        repo.Setup(r => r.GetByIdAsync(projectId, It.IsAny<CancellationToken>())).ReturnsAsync(project);
+        var service = new ProjectSettingsService(repo.Object, Options.Create(new ContextProvidersOptions()), new ConfigurationBuilder().Build());
+
+        var act = () => service.UpdateAsync(projectId, BuildSettings("embed-x", "llm-x", 11), ProjectSettingsWriteTarget.Both, CancellationToken.None);
+
+        await act.Should().ThrowAsync<IOException>();
+        project.ConfigJson.Should().BeNull("the database is only written once the overriding local file is");
+        repo.Verify(r => r.UpdateAsync(It.IsAny<Project>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     private static ProjectSettingsDto BuildSettings(string embedding, string llm, int maxMemory) =>
         new(
             EmbeddingProvider: embedding,

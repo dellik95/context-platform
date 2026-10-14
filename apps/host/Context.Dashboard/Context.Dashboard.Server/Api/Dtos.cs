@@ -12,7 +12,11 @@ public sealed record CreateProjectRequest(string Name, string RootPath, string? 
 /// that creation response is the only place this is ever non-null. <see cref="FromEntity"/> (used
 /// everywhere else this DTO is returned — list, status) never sets it.
 /// </summary>
-public sealed record ProjectDto(Guid Id, string Name, string RootPath, string? VcsRemote, DateTimeOffset CreatedAt, string? Token = null)
+/// <param name="Token">The raw bearer token, present only in the response that minted it.</param>
+/// <param name="Warning">Set when the project was saved but its Claude integration files could not be written, so
+/// the caller can tell the user instead of the failure only reaching the log.</param>
+public sealed record ProjectDto(
+    Guid Id, string Name, string RootPath, string? VcsRemote, DateTimeOffset CreatedAt, string? Token = null, string? Warning = null)
 {
     public static ProjectDto FromEntity(Project project) =>
         new(project.Id, project.Name, project.RootPath, project.VcsRemote, project.CreatedAt);

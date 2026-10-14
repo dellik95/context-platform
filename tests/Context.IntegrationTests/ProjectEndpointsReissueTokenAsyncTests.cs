@@ -61,7 +61,9 @@ public sealed class ProjectEndpointsReissueTokenAsyncTests
         var result = await ProjectEndpoints.ReissueTokenAsync(
             _project.Id, projects.Object, installer.Object, NullLoggerFactory.Instance, CancellationToken.None);
 
-        result.Should().BeOfType<Ok<ProjectDto>>().Subject.Value!.Token.Should().NotBeNullOrWhiteSpace();
+        var dto = result.Should().BeOfType<Ok<ProjectDto>>().Subject.Value!;
+        dto.Token.Should().NotBeNullOrWhiteSpace();
+        dto.Warning.Should().Contain("read-only root").And.Contain("401");
         projects.Verify(p => p.UpdateAsync(_project, It.IsAny<CancellationToken>()), Times.Once);
     }
 

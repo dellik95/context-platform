@@ -54,6 +54,8 @@ export interface ProjectDto {
   // never be recovered once minted (only its hash is persisted), so those are the only two
   // moments it's ever returned.
   token: string | null;
+  // Set when the project was saved but its Claude integration files could not be written.
+  warning?: string | null;
 }
 
 export interface ProjectStatusDto {

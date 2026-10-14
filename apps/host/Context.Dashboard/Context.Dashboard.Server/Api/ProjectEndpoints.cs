@@ -95,7 +95,8 @@ public static class ProjectEndpoints
         // POST /{id}/claude/install action. Reuses `rawToken` above rather than minting a second one:
         // the .mcp.json entry and Project.BearerTokenHash must reference the same raw token.
         // Best-effort -- a filesystem failure here (e.g. an unwritable root path) must not undo the
-        // DB row that already exists, so it's logged and swallowed rather than propagated.
+        // DB row that already exists, so it's logged and reported as a warning rather than propagated.
+        string? warning = null;
         try
         {
             await claudeInstaller.InstallMcpOnlyAsync(project.Id, project.RootPath, ct, bearerToken: rawToken).ConfigureAwait(false);
@@ -106,6 +107,7 @@ public static class ProjectEndpoints
                 ex,
                 "Failed to auto-register the MCP integration for project {ProjectId} at {RootPath}; the project was still created and can be installed manually later.",
                 project.Id, project.RootPath);
+            warning = $"The project was created, but its Claude integration could not be written to '{project.RootPath}' ({ex.Message}). Install it from the project page once the folder is writable.";
         }
 
         // Starts indexing/watching this project immediately rather than only from the next host
@@ -115,7 +117,7 @@ public static class ProjectEndpoints
         // project's hooks on a stale token the whole time.
         fileWatcherManager.StartWatchingInBackground(project);
 
-        return Results.Created($"/api/projects/{project.Id}", ProjectDto.FromEntity(project) with { Token = rawToken });
+        return Results.Created($"/api/projects/{project.Id}", ProjectDto.FromEntity(project) with { Token = rawToken, Warning = warning });
     }
 
     private static async Task<IResult> ListAsync(IProjectRepository projects, CancellationToken ct)
@@ -154,6 +156,7 @@ public static class ProjectEndpoints
         project.BearerTokenIssuedAt = DateTimeOffset.UtcNow;
         await projects.UpdateAsync(project, ct).ConfigureAwait(false);
 
+        string? warning = null;
         try
         {
             await claudeInstaller.InstallMcpOnlyAsync(project.Id, project.RootPath, ct, bearerToken: rawToken).ConfigureAwait(false);
@@ -164,9 +167,10 @@ public static class ProjectEndpoints
                 ex,
                 "Reissued the token for project {ProjectId} but could not write it to {RootPath}; its hooks and MCP keep the old token until the Claude integration is reinstalled.",
                 project.Id, project.RootPath);
+            warning = $"The token was reissued, but could not be written to '{project.RootPath}' ({ex.Message}); the project's hooks and MCP keep the old token and fail with 401 until the Claude integration is reinstalled.";
         }
 
-        return Results.Ok(ProjectDto.FromEntity(project) with { Token = rawToken });
+        return Results.Ok(ProjectDto.FromEntity(project) with { Token = rawToken, Warning = warning });
     }
 
     private static async Task<IResult> GetStatusAsync(Guid id, IServiceProvider services, CancellationToken ct)

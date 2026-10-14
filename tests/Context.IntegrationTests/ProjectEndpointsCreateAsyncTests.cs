@@ -99,7 +99,10 @@ public sealed class ProjectEndpointsCreateAsyncTests
         var result = await ProjectEndpoints.CreateAsync(
             request, projects.Object, CreateFileWatcherManager(), installer.Object, NullLoggerFactory.Instance, CancellationToken.None);
 
-        result.Should().BeOfType<Microsoft.AspNetCore.Http.HttpResults.Created<ProjectDto>>(
-            "a failure registering MCP must not turn a successful project creation into an error response");
+        var created = result.Should().BeOfType<Microsoft.AspNetCore.Http.HttpResults.Created<ProjectDto>>(
+            "a failure registering MCP must not turn a successful project creation into an error response").Subject;
+        created.Value!.Token.Should().NotBeNullOrWhiteSpace("the raw token exists only in this response");
+        created.Value.Warning.Should().Contain("root path not writable").And.Contain(rootPath,
+            "the caller is told the integration files were not written instead of the failure only reaching the log");
     }
 }

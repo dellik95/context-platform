@@ -94,8 +94,11 @@ public sealed class ProjectSettingsService(
                 await UpdateLocalAsync(projectId, settings, ct).ConfigureAwait(false);
                 break;
             case ProjectSettingsWriteTarget.Both:
-                await UpdateAsync(projectId, settings, ct).ConfigureAwait(false);
+                // The local file overrides the database when settings are read, so it is written first: if it
+                // fails, nothing has changed and the caller sees a clean error. Written the other way round, a
+                // file failure left the database updated while the effective settings stayed as they were.
                 await UpdateLocalAsync(projectId, settings, ct).ConfigureAwait(false);
+                await UpdateAsync(projectId, settings, ct).ConfigureAwait(false);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(target), target, "Unsupported settings write target.");

@@ -92,6 +92,10 @@ export class ProjectsListComponent {
         this.showCreateForm.set(false);
         this.createModel.set({ name: '', rootPath: '' });
 
+        if (project.warning) {
+          this.snackBar.open(project.warning, 'Dismiss', { duration: 20000 });
+        }
+
         if (project.token) {
           // Stash it locally so this tab can use the project right away, and show the
           // one-time deep link so it can be bookmarked or handed to another browser/device --
