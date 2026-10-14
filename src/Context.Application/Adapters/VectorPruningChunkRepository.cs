@@ -1,6 +1,7 @@
 using Context.Application.Abstractions;
 using Context.Domain.Entities;
 using Context.Infrastructure.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace Context.Application.Adapters;
 
@@ -12,7 +13,8 @@ namespace Context.Application.Adapters;
 /// </summary>
 /// <remarks>A decorator rather than a call at each site: <c>IndexingPipeline</c> alone replaces a
 /// file's chunks from five places, and a site added later would silently start leaking again.</remarks>
-public sealed class VectorPruningChunkRepository(IChunkRepository inner, IChunkVectorIndex vectorIndex) : IChunkRepository
+public sealed class VectorPruningChunkRepository(
+    IChunkRepository inner, IChunkVectorIndex vectorIndex, ILogger<VectorPruningChunkRepository>? logger = null) : IChunkRepository
 {
     public async Task<IReadOnlyList<Guid>> ReplaceForFileAsync(Guid fileId, IReadOnlyList<Chunk> chunks, CancellationToken ct)
     {
@@ -24,7 +26,17 @@ public sealed class VectorPruningChunkRepository(IChunkRepository inner, IChunkV
         Guid[] stale = [.. removed.Where(id => !kept.Contains(id))];
         if (stale.Length > 0)
         {
-            await vectorIndex.DeleteAsync(stale, ct).ConfigureAwait(false);
+            // The rows are already gone and the removed ids cannot be recovered later, so a failure here
+            // must not fail the caller (its retry would find nothing left to prune): the orphaned vectors are
+            // swept by RepairVectors instead.
+            try
+            {
+                await vectorIndex.DeleteAsync(stale, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger?.LogWarning(ex, "Could not prune {Count} stale chunk vectors for file {FileId}; a vector repair pass will remove them.", stale.Length, fileId);
+            }
         }
 
         return removed;
@@ -38,4 +50,6 @@ public sealed class VectorPruningChunkRepository(IChunkRepository inner, IChunkV
         inner.GetByContentHashesAsync(contentHashes, ct);
 
     public Task<IReadOnlyList<Chunk>> ListByProjectAsync(Guid projectId, CancellationToken ct) => inner.ListByProjectAsync(projectId, ct);
+
+    public Task<IReadOnlySet<Guid>> ListIdsByProjectAsync(Guid projectId, CancellationToken ct) => inner.ListIdsByProjectAsync(projectId, ct);
 }

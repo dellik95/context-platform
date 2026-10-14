@@ -102,6 +102,27 @@ public sealed class SqliteChunkVectorIndexTests : IDisposable
     }
 
     [Fact]
+    public async Task ListChunkIdsAsync_returns_the_projects_ids_from_every_provider_collection()
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<ContextDbContext>();
+        optionsBuilder.UseSqlite($"Data Source={_dbPath}");
+        await using (var db = new ContextDbContext(optionsBuilder.Options))
+        {
+            await db.Database.MigrateAsync();
+        }
+
+        using var index = new SqliteChunkVectorIndex(_dbPath, new PooledDbContextFactoryStub(_dbPath));
+        var projectId = Guid.NewGuid();
+        var (a, b, foreign) = (Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        await index.UpsertAsync(a, projectId, "ollama", [1f, 0f, 0f], CancellationToken.None);
+        await index.UpsertAsync(b, projectId, "openai", [1f, 0f, 0f, 0f], CancellationToken.None);
+        await index.UpsertAsync(foreign, Guid.NewGuid(), "ollama", [0f, 1f, 0f], CancellationToken.None);
+
+        (await index.ListChunkIdsAsync(projectId, CancellationToken.None)).Should().BeEquivalentTo(new[] { a, b });
+        (await index.ListChunkIdsAsync(Guid.NewGuid(), CancellationToken.None)).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task DeleteAsync_is_a_no_op_for_ids_that_were_never_indexed()
     {
         var optionsBuilder = new DbContextOptionsBuilder<ContextDbContext>();

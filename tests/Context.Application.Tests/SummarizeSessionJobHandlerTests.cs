@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Context.Application.Abstractions;
+using Context.Application.Indexing;
 using Context.Application.Jobs;
 using Context.Application.Jobs.Handlers;
 using Context.Application.Settings;
@@ -169,6 +170,55 @@ public sealed class SummarizeSessionJobHandlerTests
 
         _sessionRepository.Verify(r => r.AddSummaryChunkAsync(producedChunk, It.IsAny<CancellationToken>()), Times.Once);
         _sessionRepository.Verify(r => r.UpsertSummaryAsync(It.Is<SessionSummary>(sum => sum.Title == "Quick fix"), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HandleAsync_keeps_the_summary_and_queues_a_vector_repair_when_the_chunk_cannot_be_embedded_or_indexed(bool embeddingFails)
+    {
+        var projectId = Guid.NewGuid();
+        var sessionId = Guid.NewGuid();
+        var startedAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        var events = Enumerable.Range(1, 15).Select(i => MakeEvent(startedAt.AddSeconds(i))).ToList();
+        var producedChunk = new SessionSummaryChunk
+        {
+            Id = Guid.NewGuid(), SessionId = sessionId, Title = "Real work happened", EventCount = 15,
+            FromEventAt = events[0].Timestamp, ToEventAt = events[^1].Timestamp, GeneratedAt = DateTimeOffset.UtcNow,
+        };
+        _sessionRepository.Setup(r => r.GetByIdAsync(projectId, sessionId, It.IsAny<CancellationToken>())).ReturnsAsync(MakeSession(projectId, sessionId, startedAt));
+        _sessionRepository.SetupSequence(r => r.GetSummaryChunksAsync(projectId, sessionId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<SessionSummaryChunk>)[])
+            .ReturnsAsync((IReadOnlyList<SessionSummaryChunk>)[producedChunk]);
+        _sessionRepository.Setup(r => r.GetEventsAsync(projectId, sessionId, It.IsAny<CancellationToken>())).ReturnsAsync(events);
+        _summarizer.Setup(s => s.SummarizeAsync(projectId, sessionId, startedAt, It.IsAny<CancellationToken>())).ReturnsAsync(producedChunk);
+        _sessionRepository.Setup(r => r.AddSummaryChunkAsync(producedChunk, It.IsAny<CancellationToken>())).ReturnsAsync(producedChunk);
+        SetUpSettings(minEventsForSessionSummary: 15, minEventsForMemoryExtraction: 20);
+        if (embeddingFails)
+        {
+            _providerResolver.Setup(p => p.GetEmbeddingGeneratorAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new HttpRequestException("embedding provider unreachable"));
+        }
+        else
+        {
+            _sessionSummaryVectorIndex
+                .Setup(v => v.UpsertAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<float[]>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new InvalidOperationException("sqlite-vec is locked"));
+        }
+
+        var jobQueue = new Mock<IJobQueue>();
+        var jobs = new Mock<IJobRepository>();
+        jobs.Setup(j => j.ListActiveByTypeAsync(JobType.RepairVectors, projectId, It.IsAny<CancellationToken>())).ReturnsAsync((IReadOnlyList<ActiveJob>)[]);
+        var sut = new SummarizeSessionJobHandler(
+            _summarizer.Object, _sessionRepository.Object, _settingsService.Object, _providerResolver.Object, _sessionSummaryVectorIndex.Object,
+            vectorRepairRequester: new VectorRepairRequester(jobQueue.Object, jobs.Object));
+
+        await sut.HandleAsync(MakeJob(projectId, sessionId, isSessionEnd: false), CancellationToken.None);
+
+        _sessionRepository.Verify(r => r.UpsertSummaryAsync(It.Is<SessionSummary>(sum => sum.Title == "Real work happened"), It.IsAny<CancellationToken>()), Times.Once);
+        jobQueue.Verify(
+            q => q.EnqueueAsync(JobType.RepairVectors, It.Is<object>(p => ((RepairVectorsPayload)p).ProjectId == projectId), projectId, It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]

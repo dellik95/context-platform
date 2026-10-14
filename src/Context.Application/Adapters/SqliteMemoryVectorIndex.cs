@@ -91,6 +91,22 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
         }
     }
 
+    public async Task<IReadOnlySet<Guid>> ListMemoryIdsAsync(Guid projectId, CancellationToken ct)
+    {
+        var ids = new HashSet<Guid>();
+        foreach (var tableName in await SqliteVectorTables.ListAsync(_connectionString, TableNamePrefix, ct).ConfigureAwait(false))
+        {
+            using var collection = OpenForDelete(tableName);
+            await collection.EnsureCollectionExistsAsync(ct).ConfigureAwait(false);
+            await foreach (var record in collection.GetAsync(r => r.ProjectId == projectId, int.MaxValue, options: null, ct).ConfigureAwait(false))
+            {
+                ids.Add(record.MemoryId);
+            }
+        }
+
+        return ids;
+    }
+
     public async Task DeleteAsync(IReadOnlyCollection<Guid> memoryIds, CancellationToken ct)
     {
         if (memoryIds.Count == 0)

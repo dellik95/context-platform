@@ -13,6 +13,9 @@ public interface IChunkRepository
     /// build on since everything else here is scoped per-file.</summary>
     Task<IReadOnlyList<Chunk>> ListByProjectAsync(Guid projectId, CancellationToken ct);
 
+    /// <summary>Just the ids of the project's chunks, for sweeps that must not load every chunk's text.</summary>
+    Task<IReadOnlySet<Guid>> ListIdsByProjectAsync(Guid projectId, CancellationToken ct);
+
     /// <summary>Atomically replaces all chunks owned by a file — used on re-index of a changed file.</summary>
     /// <returns>The ids of the chunks that were removed, so a caller holding an out-of-band index
     /// keyed by chunk id (the sqlite-vec vector store) can prune the same rows.</returns>

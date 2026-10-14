@@ -39,4 +39,7 @@ public interface IChunkVectorIndex
     /// produce a wrong result — but it still occupies one of the ANN pass's fixed top-K slots, so a
     /// project reindexed enough times loses recall to rows whose chunks are long gone.</remarks>
     Task DeleteAsync(IReadOnlyCollection<Guid> chunkIds, CancellationToken ct);
+
+    /// <summary>The ids of <paramref name="projectId"/>'s records across every embedding-provider collection.</summary>
+    Task<IReadOnlySet<Guid>> ListChunkIdsAsync(Guid projectId, CancellationToken ct);
 }

@@ -38,6 +38,8 @@ public static class JobRetryPolicy
         // The embedding provider can stay down for a while; a saved memory should outlast that.
         JobType.RememberMemory => new(10, TimeSpan.FromMinutes(15)),
         JobType.EmbedChunk => new(5, DefaultBackoffCap),
+        // Repairs wait on the same embedding provider whose outage usually caused them.
+        JobType.RepairVectors => new(8, TimeSpan.FromMinutes(15)),
         _ => new(3, DefaultBackoffCap),
     };
 }

@@ -229,9 +229,12 @@ public static class ProjectEndpoints
     /// every row transitively owned by it (files, symbols, chunks, sessions, memories, graph
     /// nodes/edges, the Claude integration record -- see <see cref="IProjectRepository.DeleteAsync"/>'s
     /// remarks for exactly what cascades and why), plus the two things cascade can't reach
-    /// (<see cref="IChunkVectorIndex"/>, a separate sqlite-vec-backed store) and stops anything still
+    /// (the three sqlite-vec-backed vector indexes) and stops anything still
     /// touching the project (an in-progress reindex; that project's <see cref="ProjectFileWatcher"/>,
-    /// via <see cref="ProjectFileWatcherManager.StopWatching"/>). The shared, content-hash-keyed
+    /// via <see cref="ProjectFileWatcherManager.StopWatching"/>; its queued jobs). The database delete
+    /// comes first: it is what decides whether the project exists, so a failure in it leaves a project
+    /// that is still fully intact, and a failure in a vector cleanup afterwards only leaves records no
+    /// search ever returns (they are filtered by project). The shared, content-hash-keyed
     /// <c>Embeddings</c> cache is deliberately left untouched -- another project may still reference
     /// the same content hash (see <c>EmbedChunkJobHandler</c>'s remarks).
     /// <para/>
@@ -242,9 +245,13 @@ public static class ProjectEndpoints
     private static async Task<IResult> DeleteProjectAsync(
         Guid id,
         IProjectRepository projects,
-        IChunkVectorIndex vectorIndex,
+        IJobRepository jobs,
+        IChunkVectorIndex chunkVectors,
+        IMemoryVectorIndex memoryVectors,
+        ISessionSummaryVectorIndex summaryVectors,
         ReindexCancellationRegistry reindexRegistry,
         ProjectFileWatcherManager fileWatcherManager,
+        ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var existing = await projects.GetByIdAsync(id, ct).ConfigureAwait(false);
@@ -256,10 +263,27 @@ public static class ProjectEndpoints
         reindexRegistry.Cancel(id);
         fileWatcherManager.StopWatching(id);
 
-        await vectorIndex.DeleteByProjectAsync(id, ct).ConfigureAwait(false);
         await projects.DeleteAsync(id, ct).ConfigureAwait(false);
 
+        var logger = loggerFactory.CreateLogger("Context.Dashboard.Server.DeleteProject");
+        await CleanUpAsync("queued jobs", () => jobs.DeleteByProjectAsync(id, ct)).ConfigureAwait(false);
+        await CleanUpAsync("chunk vectors", () => chunkVectors.DeleteByProjectAsync(id, ct)).ConfigureAwait(false);
+        await CleanUpAsync("memory vectors", () => memoryVectors.DeleteByProjectAsync(id, ct)).ConfigureAwait(false);
+        await CleanUpAsync("session-summary vectors", () => summaryVectors.DeleteByProjectAsync(id, ct)).ConfigureAwait(false);
+
         return Results.NoContent();
+
+        async Task CleanUpAsync(string what, Func<Task> cleanup)
+        {
+            try
+            {
+                await cleanup().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Deleted project {ProjectId}, but could not remove its {What}.", id, what);
+            }
+        }
     }
 
     internal static async Task<ProjectStatusDto?> BuildStatusDtoAsync(Guid id, IServiceProvider services, CancellationToken ct)

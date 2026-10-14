@@ -191,6 +191,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IJobHandler, ForgetMemoryJobHandler>();
         services.AddScoped<IJobHandler, ProcessHookJobHandler>();
         services.AddScoped<IJobHandler, ReindexProjectJobHandler>();
+        services.AddScoped<IJobHandler, RepairVectorsJobHandler>();
     }
 
     /// <summary>
@@ -223,6 +224,7 @@ public static class ServiceCollectionExtensions
         // and the request that later cancels it (ProjectEndpoints.CancelIndex) — see its own remarks.
         services.AddSingleton<ReindexCancellationRegistry>();
         services.AddScoped<ReindexRequester>();
+        services.AddScoped<VectorRepairRequester>();
     }
 
     private static void AddContextEngine(IServiceCollection services)

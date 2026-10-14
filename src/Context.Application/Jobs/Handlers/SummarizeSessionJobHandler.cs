@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Context.Application.Abstractions;
+using Context.Application.Indexing;
 using Context.Application.Notifications;
 using Context.Application.Settings;
 using Context.Domain.Entities;
@@ -24,7 +25,8 @@ public sealed class SummarizeSessionJobHandler(
     IProviderResolver providerResolver,
     ISessionSummaryVectorIndex sessionSummaryVectorIndex,
     IProjectActivityNotifier? activityNotifier = null,
-    ILogger<SummarizeSessionJobHandler>? logger = null) : IJobHandler
+    ILogger<SummarizeSessionJobHandler>? logger = null,
+    VectorRepairRequester? vectorRepairRequester = null) : IJobHandler
 {
     private readonly IProjectActivityNotifier _activityNotifier = activityNotifier ?? NullProjectActivityNotifier.Instance;
 
@@ -82,7 +84,7 @@ public sealed class SummarizeSessionJobHandler(
         // chunk's ToEventAt, newEventCount drops to 0, and the gate above returns early. So every
         // remote call that can fail happens BEFORE the insert, and everything after it is either a
         // local write on the critical path or explicitly best-effort.
-        var embedding = await TryEmbedChunkAsync(projectId, newChunk, ct).ConfigureAwait(false);
+        var (embedding, embeddingFailed) = await TryEmbedChunkAsync(projectId, newChunk, ct).ConfigureAwait(false);
 
         var savedChunk = await sessionRepository.AddSummaryChunkAsync(newChunk, ct).ConfigureAwait(false);
 
@@ -92,8 +94,23 @@ public sealed class SummarizeSessionJobHandler(
 
         if (embedding is not null)
         {
-            await sessionSummaryVectorIndex.UpsertAsync(
-                savedChunk.Id, projectId, savedChunk.SessionId, embedding.ModelKey, embedding.Vector, ct).ConfigureAwait(false);
+            // The chunk is committed, so a retry of this job could never write the vector (it exits at the gate
+            // above): a failed write is handed to the vector repair instead of failing the job.
+            try
+            {
+                await sessionSummaryVectorIndex.UpsertAsync(
+                    savedChunk.Id, projectId, savedChunk.SessionId, embedding.ModelKey, embedding.Vector, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger?.LogWarning(ex, "Failed to index the vector of summary chunk {ChunkId}; queueing a vector repair.", savedChunk.Id);
+                embeddingFailed = true;
+            }
+        }
+
+        if (embeddingFailed)
+        {
+            await RequestVectorRepairAsync(projectId).ConfigureAwait(false);
         }
 
         // Everything up to this chunk's own ToEventAt is now fully covered by it. Only events whose
@@ -116,27 +133,43 @@ public sealed class SummarizeSessionJobHandler(
     }
 
     /// <summary>Embeds <paramref name="chunk"/>'s text so <c>session_summary_search</c> can rank it
-    /// by semantic similarity. Null when there's nothing worth embedding (every field blank) or the
-    /// embedding provider is unavailable — semantic ranking degrades to keyword-only rather than
-    /// costing the session its summary and its memories.</summary>
-    private async Task<ChunkEmbedding?> TryEmbedChunkAsync(Guid projectId, SessionSummaryChunk chunk, CancellationToken ct)
+    /// by semantic similarity. No embedding when there's nothing worth embedding (every field blank), or when the
+    /// embedding provider is unavailable (<c>Failed</c>) — semantic ranking degrades to keyword-only, and a vector
+    /// repair job is queued, rather than costing the session its summary and its memories.</summary>
+    private async Task<(ChunkEmbedding? Embedding, bool Failed)> TryEmbedChunkAsync(Guid projectId, SessionSummaryChunk chunk, CancellationToken ct)
     {
-        var chunkText = $"{chunk.Title}\n{chunk.Completed}\n{chunk.Discovered}\n{chunk.Decisions}\n{chunk.OpenIssues}\n{chunk.NextSteps}";
-        if (string.IsNullOrWhiteSpace(chunkText.Replace("\n", string.Empty)))
+        if (SessionSummaryEmbeddingText.For(chunk) is not { } chunkText)
         {
-            return null;
+            return (null, false);
         }
 
         try
         {
             var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
             var embeddingResult = await embeddingGenerator.GenerateAsync(chunkText, cancellationToken: ct).ConfigureAwait(false);
-            return new ChunkEmbedding(embeddingGenerator.GetProviderModelKey(), embeddingResult.Vector.ToArray());
+            return (new ChunkEmbedding(embeddingGenerator.GetProviderModelKey(), embeddingResult.Vector.ToArray()), false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger?.LogWarning(ex, "Failed to embed summary chunk for session {SessionId}; it stays keyword-searchable only.", chunk.SessionId);
-            return null;
+            logger?.LogWarning(ex, "Failed to embed summary chunk for session {SessionId}; it stays keyword-searchable until a vector repair rebuilds its vector.", chunk.SessionId);
+            return (null, true);
+        }
+    }
+
+    private async Task RequestVectorRepairAsync(Guid projectId)
+    {
+        if (vectorRepairRequester is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await vectorRepairRequester.RequestAsync(projectId, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Could not queue a vector repair for project {ProjectId}.", projectId);
         }
     }
 

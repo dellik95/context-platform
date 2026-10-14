@@ -64,6 +64,10 @@ public interface IJobRepository
     /// </summary>
     Task<int> DeleteFinishedOlderThanAsync(DateTimeOffset cutoff, JobRetentionFilter filter, CancellationToken ct);
 
+    /// <summary>Deletes every job of <paramref name="projectId"/> that is not running (used when the project is deleted),
+    /// returning how many went.</summary>
+    Task<int> DeleteByProjectAsync(Guid projectId, CancellationToken ct);
+
     /// <summary>The project's Pending or Running jobs of <paramref name="type"/>, without their payloads.</summary>
     Task<IReadOnlyList<ActiveJob>> ListActiveByTypeAsync(JobType type, Guid projectId, CancellationToken ct);
 

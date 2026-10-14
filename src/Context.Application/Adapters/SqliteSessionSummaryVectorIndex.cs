@@ -80,6 +80,26 @@ public sealed class SqliteSessionSummaryVectorIndex(string dbPath)
         }
     }
 
+    public async Task<IReadOnlySet<Guid>> ListChunkIdsAsync(Guid projectId, string provider, CancellationToken ct)
+    {
+        var tableName = CollectionNameFor(provider);
+        var ids = new HashSet<Guid>();
+        if (!(await ListSessionSummaryVectorTableNamesAsync(ct).ConfigureAwait(false)).Contains(tableName))
+        {
+            return ids;
+        }
+
+        using var collection = new SqliteCollection<Guid, SessionSummaryVectorRecord>(
+            _connectionString, tableName, new SqliteCollectionOptions { Definition = BuildDeleteOnlyDefinition() });
+        await collection.EnsureCollectionExistsAsync(ct).ConfigureAwait(false);
+        await foreach (var record in collection.GetAsync(r => r.ProjectId == projectId, int.MaxValue, options: null, ct).ConfigureAwait(false))
+        {
+            ids.Add(record.ChunkId);
+        }
+
+        return ids;
+    }
+
     private async Task<IReadOnlyList<string>> ListSessionSummaryVectorTableNamesAsync(CancellationToken ct)
     {
         await using var connection = new Microsoft.Data.Sqlite.SqliteConnection(_connectionString);

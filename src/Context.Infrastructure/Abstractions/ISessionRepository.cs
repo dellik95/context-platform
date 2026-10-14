@@ -68,6 +68,9 @@ public interface ISessionRepository
     /// one chunk a given <c>ExtractMemory</c> job was enqueued for.</summary>
     Task<SessionSummaryChunk?> GetSummaryChunkByIdAsync(Guid projectId, Guid chunkId, CancellationToken ct);
 
+    /// <summary>Every summary chunk of the project's sessions, for rebuilding their vectors.</summary>
+    Task<IReadOnlyList<SessionSummaryChunk>> ListSummaryChunksByProjectAsync(Guid projectId, CancellationToken ct);
+
     Task<IReadOnlyList<SessionListItem>> ListByProjectAsync(Guid projectId, int limit, CancellationToken ct);
 
     /// <summary>

@@ -23,6 +23,11 @@ public class ChunkRepository(ContextDbContext db) : IChunkRepository
             .Join(db.Files.AsNoTracking().Where(f => f.ProjectId == projectId && !f.IsDeleted), c => c.FileId, f => f.Id, (c, f) => c)
             .ToListAsync(ct);
 
+    public async Task<IReadOnlySet<Guid>> ListIdsByProjectAsync(Guid projectId, CancellationToken ct) =>
+        (await db.Chunks.AsNoTracking()
+            .Join(db.Files.AsNoTracking().Where(f => f.ProjectId == projectId), c => c.FileId, f => f.Id, (c, f) => c.Id)
+            .ToListAsync(ct)).ToHashSet();
+
     public async Task<IReadOnlyList<Guid>> ReplaceForFileAsync(Guid fileId, IReadOnlyList<Chunk> chunks, CancellationToken ct)
     {
         await using var tx = await db.Database.BeginTransactionAsync(ct);

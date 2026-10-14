@@ -197,6 +197,11 @@ public class SessionRepository(ContextDbContext db) : ISessionRepository
         return chunk;
     }
 
+    public async Task<IReadOnlyList<SessionSummaryChunk>> ListSummaryChunksByProjectAsync(Guid projectId, CancellationToken ct) =>
+        await db.SessionSummaryChunks.AsNoTracking()
+            .Join(db.Sessions.AsNoTracking().Where(s => s.ProjectId == projectId), c => c.SessionId, s => s.Id, (c, s) => c)
+            .ToListAsync(ct);
+
     public async Task<IReadOnlyList<SessionSummaryChunk>> GetSummaryChunksAsync(Guid projectId, Guid sessionId, CancellationToken ct)
     {
         // Same ownership-check-then-fetch pattern as GetEventsAsync: SessionSummaryChunk has no

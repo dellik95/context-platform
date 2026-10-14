@@ -3,7 +3,12 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Context.Dashboard.Server.Api;
+using Context.Domain.Entities;
+using Context.Domain.Enums;
+using Context.Infrastructure;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Context.IntegrationTests;
 
@@ -81,6 +86,32 @@ public sealed class ProjectLifecycleHttpTests : IClassFixture<HostHttpE2ETests.H
         using var secondDeleteRequest = AuthorizedRequest(HttpMethod.Delete, $"/api/projects/{project.Id}", _factory.AdminToken);
         var secondDeleteResponse = await client.SendAsync(secondDeleteRequest);
         secondDeleteResponse.StatusCode.Should().Be(HttpStatusCode.NotFound, "deleting an already-deleted project must not silently succeed or 500");
+    }
+
+    [Fact]
+    public async Task DeleteProject_also_removes_the_projects_queued_jobs()
+    {
+        using var client = _factory.CreateClient();
+        var project = await CreateProjectAsync(client, "delete-with-jobs");
+        var queuedId = Guid.NewGuid();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ContextDbContext>();
+            // NextRetryAt far in the future keeps the live dispatcher from claiming the seeded row.
+            db.Jobs.Add(new Job
+            {
+                Id = queuedId, Type = JobType.EmbedChunk, ProjectId = project.Id, PayloadJson = "{}", Status = JobStatus.Pending,
+                CreatedAt = DateTimeOffset.UtcNow, NextRetryAt = DateTimeOffset.UtcNow.AddDays(1),
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using var deleteRequest = AuthorizedRequest(HttpMethod.Delete, $"/api/projects/{project.Id}", project.Token!);
+        (await client.SendAsync(deleteRequest)).StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        using var verifyScope = _factory.Services.CreateScope();
+        (await verifyScope.ServiceProvider.GetRequiredService<ContextDbContext>().Jobs.AsNoTracking().AnyAsync(j => j.Id == queuedId))
+            .Should().BeFalse("work queued for a deleted project can only fail");
     }
 
     [Fact]

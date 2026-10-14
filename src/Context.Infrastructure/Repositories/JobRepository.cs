@@ -205,6 +205,9 @@ public class JobRepository(ContextDbContext db) : IJobRepository
         return deleted;
     }
 
+    public Task<int> DeleteByProjectAsync(Guid projectId, CancellationToken ct) =>
+        db.Jobs.Where(j => j.ProjectId == projectId && j.Status != JobStatus.Running).ExecuteDeleteAsync(ct);
+
     public async Task<IReadOnlyList<ActiveJob>> ListActiveByTypeAsync(JobType type, Guid projectId, CancellationToken ct)
     {
         var rows = await db.Jobs.AsNoTracking()

@@ -38,4 +38,7 @@ public interface IMemoryVectorIndex
     /// but until its vector goes too it keeps consuming a top-K slot.
     /// </summary>
     Task DeleteAsync(IReadOnlyCollection<Guid> memoryIds, CancellationToken ct);
+
+    /// <summary>The ids of <paramref name="projectId"/>'s records across every embedding-provider collection.</summary>
+    Task<IReadOnlySet<Guid>> ListMemoryIdsAsync(Guid projectId, CancellationToken ct);
 }

@@ -107,3 +107,6 @@ public sealed record ProcessHookPayload(HookType Type, string InputJson, DateTim
 /// <summary>Drives <see cref="Handlers.ReindexProjectJobHandler"/>: a full or incremental pass over the project's tree.</summary>
 public sealed record ReindexProjectPayload(Guid ProjectId, bool Full);
 
+
+/// <summary>Drives <see cref="Handlers.RepairVectorsJobHandler"/>: reconciles a project's vector indexes with its database.</summary>
+public sealed record RepairVectorsPayload(Guid ProjectId);

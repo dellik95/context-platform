@@ -28,4 +28,8 @@ public interface ISessionSummaryVectorIndex
     /// <see cref="IMemoryVectorIndex.DeleteByProjectAsync"/>.
     /// </summary>
     Task DeleteByProjectAsync(Guid projectId, CancellationToken ct);
+
+    /// <summary>The ids of <paramref name="projectId"/>'s chunks that have a vector under <paramref name="provider"/>.
+    /// Empty when that provider has no collection yet.</summary>
+    Task<IReadOnlySet<Guid>> ListChunkIdsAsync(Guid projectId, string provider, CancellationToken ct);
 }

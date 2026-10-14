@@ -37,6 +37,23 @@ public sealed class VectorPruningRepositoryTests
     }
 
     [Fact]
+    public async Task ReplaceForFileAsync_does_not_fail_when_pruning_the_vectors_fails_because_the_rows_are_already_gone()
+    {
+        var dropped = Guid.NewGuid();
+        var inner = new Mock<IChunkRepository>();
+        inner.Setup(r => r.ReplaceForFileAsync(It.IsAny<Guid>(), It.IsAny<IReadOnlyList<Chunk>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<Guid>)[dropped]);
+        var vectorIndex = new Mock<IChunkVectorIndex>();
+        vectorIndex.Setup(v => v.DeleteAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("sqlite-vec is locked"));
+        var sut = new VectorPruningChunkRepository(inner.Object, vectorIndex.Object);
+
+        var removed = await sut.ReplaceForFileAsync(Guid.NewGuid(), [], CancellationToken.None);
+
+        removed.Should().Equal(dropped);
+    }
+
+    [Fact]
     public async Task ReplaceForFileAsync_does_not_touch_the_vector_index_when_nothing_was_removed()
     {
         var inner = new Mock<IChunkRepository>();

@@ -19,7 +19,8 @@ public sealed class ReindexProjectJobHandler(
     ReindexCancellationRegistry registry,
     IIndexingProgressReporter progressReporter,
     IProjectStatusPublisher? statusPublisher = null,
-    ILogger<ReindexProjectJobHandler>? logger = null) : IJobHandler
+    ILogger<ReindexProjectJobHandler>? logger = null,
+    VectorRepairRequester? vectorRepairRequester = null) : IJobHandler
 {
     private readonly IProjectStatusPublisher _statusPublisher = statusPublisher ?? NullProjectStatusPublisher.Instance;
     private readonly ILogger _logger = logger ?? NullLogger<ReindexProjectJobHandler>.Instance;
@@ -39,6 +40,7 @@ public sealed class ReindexProjectJobHandler(
             await pipeline.ReindexProjectAsync(projectId, payload.Full, linked.Token).ConfigureAwait(false);
             _logger.LogInformation("Reindex of project {ProjectId} (full={Full}) completed.", projectId, payload.Full);
             await PublishStatusAsync(projectId).ConfigureAwait(false);
+            await RequestVectorRepairAsync(projectId).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested && registryToken.IsCancellationRequested)
         {
@@ -66,6 +68,24 @@ public sealed class ReindexProjectJobHandler(
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Could not publish the status of project {ProjectId} after its reindex.", projectId);
+        }
+    }
+
+    /// <summary>A pass is when chunks churn most, so it is when orphaned vectors are swept.</summary>
+    private async Task RequestVectorRepairAsync(Guid projectId)
+    {
+        if (vectorRepairRequester is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await vectorRepairRequester.RequestAsync(projectId, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not queue a vector repair for project {ProjectId} after its reindex.", projectId);
         }
     }
 
