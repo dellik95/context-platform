@@ -154,8 +154,8 @@ public sealed class IndexingPipeline(
                 // A single file that throws during parsing/indexing (malformed syntax, an
                 // unreadable file, ...) must not abort the whole pass -- it would otherwise take
                 // down the deleted-file cleanup and the completion signal below for every OTHER
-                // file too. Log it, count it, and move on; the file self-heals on the next
-                // scheduled pass (its ContentHash never advanced, so it's retried from scratch).
+                // file too. Log it, count it, and move on; the file is retried by an IndexFile job
+                // (its ContentHash only advances once indexing finished, so that retry starts from scratch).
                 try
                 {
                     using var scope = scopeFactory.CreateScope();
@@ -170,8 +170,9 @@ public sealed class IndexingPipeline(
                 {
                     Interlocked.Increment(ref filesFailed);
                     _logger.LogError(
-                        ex, "Failed to index {RelativePath} in project {ProjectId} during reindex; skipping it for this pass.",
+                        ex, "Failed to index {RelativePath} in project {ProjectId} during reindex; queueing a retry.",
                         scanned.RelativePath, projectId);
+                    await QueueFileRetryAsync(projectId, scanned.RelativePath).ConfigureAwait(false);
                 }
 
                 // Files can finish out of order under concurrency, so this count -- and the
@@ -216,6 +217,20 @@ public sealed class IndexingPipeline(
 
         await ReportProgressAsync(new ReindexProgressDto(projectId, filesTotal, filesTotal, Completed: true, filesFailed), ct)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>Best effort: the failure being retried is already logged, and the next pass picks the file up again anyway.</summary>
+    private async Task QueueFileRetryAsync(Guid projectId, string relativePath)
+    {
+        try
+        {
+            await jobQueue.EnqueueAsync(JobType.IndexFile, new IndexFilePayload(projectId, relativePath), projectId, ct: CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not queue a retry of {RelativePath} in project {ProjectId}.", relativePath, projectId);
+        }
     }
 
     /// <summary>
@@ -266,28 +281,34 @@ public sealed class IndexingPipeline(
         var extension = Path.GetExtension(relativePath);
         var parser = parsers.FirstOrDefault(p => p.SupportedExtensions.Contains(extension));
 
+        // The hash is written empty now and set for real as the very last step: an empty hash marks an
+        // index that never finished, so a retry (an IndexFile job, or the next reindex) cannot mistake a
+        // half-indexed file for an up-to-date one, and redoes the embedding and graph work too.
         var fileEntity = new DomainFile
         {
             Id = existingFile?.Id ?? Guid.NewGuid(),
             ProjectId = projectId,
             RelativePath = relativePath,
             Language = LanguageFromExtension(extension),
-            ContentHash = contentHash,
+            ContentHash = string.Empty,
             SizeBytes = new FileInfo(absolutePath).Length,
             IsDeleted = false,
             UpdatedAt = DateTimeOffset.UtcNow
         };
         fileEntity = await files.UpsertAsync(fileEntity, ct).ConfigureAwait(false);
 
-        var isFirstIndex = existingFile is null;
+        var isFirstIndex = existingFile is null || existingFile.ContentHash.Length == 0;
 
         if (parser is null)
         {
             await IndexUnparsedFileAsync(projectId, fileEntity, sourceText, isFirstIndex, ct).ConfigureAwait(false);
-            return;
+        }
+        else
+        {
+            await IndexParsedFileAsync(projectId, fileEntity, parser, sourceText, isFirstIndex, ct).ConfigureAwait(false);
         }
 
-        await IndexParsedFileAsync(projectId, fileEntity, parser, sourceText, isFirstIndex, ct).ConfigureAwait(false);
+        await files.SetContentHashAsync(fileEntity.Id, contentHash, ct).ConfigureAwait(false);
     }
 
     private async Task HandleFileRemovedAsync(Guid projectId, string relativePath, CancellationToken ct)
@@ -494,8 +515,10 @@ public sealed class IndexingPipeline(
         var changedOrAddedSymbolIds = diff.Added.Concat(diff.Changed)
             .Select(d => idByQualifiedName[d.QualifiedName])
             .ToHashSet();
+        // A first (or unfinished) index checks every chunk: the symbol diff of a retry sees nothing changed,
+        // because the failed attempt had already replaced the symbols.
         var chunksNeedingEmbedCheck = newChunkRows
-            .Where(c => (c.SymbolId.HasValue && changedOrAddedSymbolIds.Contains(c.SymbolId.Value)) || c == summaryChunk)
+            .Where(c => isFirstIndex || (c.SymbolId.HasValue && changedOrAddedSymbolIds.Contains(c.SymbolId.Value)) || c == summaryChunk)
             .ToList();
         await EnqueueEmbedIfMissingAsync(projectId, chunksNeedingEmbedCheck, ct).ConfigureAwait(false);
 

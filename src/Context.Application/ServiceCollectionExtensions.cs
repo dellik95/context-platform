@@ -190,6 +190,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IJobHandler, RememberMemoryJobHandler>();
         services.AddScoped<IJobHandler, ForgetMemoryJobHandler>();
         services.AddScoped<IJobHandler, ProcessHookJobHandler>();
+        services.AddScoped<IJobHandler, ReindexProjectJobHandler>();
     }
 
     /// <summary>
@@ -221,7 +222,7 @@ public static class ServiceCollectionExtensions
         // Singleton: shared between the request that starts a reindex (ProjectEndpoints.TriggerIndex)
         // and the request that later cancels it (ProjectEndpoints.CancelIndex) — see its own remarks.
         services.AddSingleton<ReindexCancellationRegistry>();
-        services.AddSingleton<ReindexRunner>();
+        services.AddScoped<ReindexRequester>();
     }
 
     private static void AddContextEngine(IServiceCollection services)

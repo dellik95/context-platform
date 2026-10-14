@@ -104,3 +104,6 @@ public sealed record ForgetMemoryPayload(Guid MemoryId);
 /// </summary>
 public sealed record ProcessHookPayload(HookType Type, string InputJson, DateTimeOffset ReceivedAt);
 
+/// <summary>Drives <see cref="Handlers.ReindexProjectJobHandler"/>: a full or incremental pass over the project's tree.</summary>
+public sealed record ReindexProjectPayload(Guid ProjectId, bool Full);
+

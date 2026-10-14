@@ -64,6 +64,9 @@ public class FileRepository(ContextDbContext db) : IFileRepository
         return file;
     }
 
+    public async Task SetContentHashAsync(Guid fileId, string contentHash, CancellationToken ct) =>
+        await db.Files.Where(f => f.Id == fileId).ExecuteUpdateAsync(setters => setters.SetProperty(f => f.ContentHash, contentHash), ct);
+
     public async Task MarkDeletedAsync(Guid fileId, CancellationToken ct)
     {
         var file = await db.Files.FirstOrDefaultAsync(f => f.Id == fileId, ct);

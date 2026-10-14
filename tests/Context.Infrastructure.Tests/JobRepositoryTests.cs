@@ -286,6 +286,36 @@ public sealed class JobRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task ListActiveByTypeAsync_returns_only_the_pending_and_running_jobs_of_that_type_and_project()
+    {
+        await MigrateAsync();
+        using var db = CreateContext();
+
+        var projectId = Guid.NewGuid();
+        Job Job(JobType type, JobStatus status, Guid? project = null)
+        {
+            var job = NewJob(status: status, type: type);
+            job.ProjectId = project ?? projectId;
+            return job;
+        }
+
+        var pending = Job(JobType.ReindexProject, JobStatus.Pending);
+        var running = Job(JobType.ReindexProject, JobStatus.Running);
+        db.Jobs.AddRange(
+            pending, running,
+            Job(JobType.ReindexProject, JobStatus.Done),
+            Job(JobType.ReindexProject, JobStatus.Failed),
+            Job(JobType.IndexFile, JobStatus.Pending),
+            Job(JobType.ReindexProject, JobStatus.Pending, Guid.NewGuid()));
+        await db.SaveChangesAsync();
+
+        var active = await new JobRepository(db).ListActiveByTypeAsync(JobType.ReindexProject, projectId, CancellationToken.None);
+
+        active.Select(a => a.Id).Should().BeEquivalentTo(new[] { pending.Id, running.Id });
+        active.Should().OnlyContain(a => a.CreatedAt != default);
+    }
+
+    [Fact]
     public async Task GetLastEnqueuedAtAsync_returns_the_newest_job_of_that_type_regardless_of_status()
     {
         await MigrateAsync();

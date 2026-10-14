@@ -75,6 +75,7 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         await AssertMemoryDeleteIsQueuedThenAppliedAsync(client, project);
         await AssertConsolidationReportsCanBeDeletedAsync(client, project);
         await AssertApplyClaimsTheReportAndRunsItsJobAsync(client, project);
+        await AssertReindexIsQueuedAndAQueuedOneCanBeCancelledAsync(client, project);
         await AssertHubJoinIsScopedToTheTokensProjectAsync(project);
         await AssertHookAuthAsync(client);
         await AssertPostedHookIsProcessedByItsJobAsync(client, project);
@@ -521,6 +522,65 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
             DateTimeOffset.UtcNow.Should().BeBefore(deadline, "the queued ReconsolidateMemory job should have applied the report; last status {0}", status);
             await Task.Delay(100);
         }
+    }
+
+    /// <summary>A reindex request answers 202 once its job is stored, and Stop removes a job that has not started.</summary>
+    private async Task AssertReindexIsQueuedAndAQueuedOneCanBeCancelledAsync(HttpClient client, ProjectDto project)
+    {
+        using (var trigger = CreateAuthorizedRequest(HttpMethod.Post, $"/api/projects/{project.Id}/index?full=false", project.Token!, new { }))
+        {
+            var response = await client.SendAsync(trigger);
+            response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+            (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("status").GetString().Should().Be("queued");
+        }
+
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
+        while (true)
+        {
+            using var scope = _factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ContextDbContext>();
+            var job = await db.Jobs.AsNoTracking().FirstOrDefaultAsync(j => j.Type == JobType.ReindexProject && j.ProjectId == project.Id && j.Status == JobStatus.Done);
+            if (job is not null)
+            {
+                break;
+            }
+
+            DateTimeOffset.UtcNow.Should().BeBefore(deadline, "the ReindexProject job should have run to completion");
+            await Task.Delay(100);
+        }
+
+        Guid queuedId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ContextDbContext>();
+            // NextRetryAt far in the future keeps the live dispatcher from claiming the seeded row.
+            var queued = new Job
+            {
+                Id = Guid.NewGuid(),
+                Type = JobType.ReindexProject,
+                ProjectId = project.Id,
+                PayloadJson = System.Text.Json.JsonSerializer.Serialize(new Context.Application.Jobs.ReindexProjectPayload(project.Id, false)),
+                Status = JobStatus.Pending,
+                CreatedAt = DateTimeOffset.UtcNow,
+                NextRetryAt = DateTimeOffset.UtcNow.AddDays(1),
+            };
+            db.Jobs.Add(queued);
+            await db.SaveChangesAsync();
+            queuedId = queued.Id;
+        }
+
+        using (var cancel = CreateAuthorizedRequest(HttpMethod.Post, $"/api/projects/{project.Id}/index/cancel", project.Token!, new { }))
+        {
+            (await client.SendAsync(cancel)).StatusCode.Should().Be(HttpStatusCode.Accepted, "a queued reindex is cancelled by removing its job");
+        }
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            (await scope.ServiceProvider.GetRequiredService<ContextDbContext>().Jobs.AsNoTracking().AnyAsync(j => j.Id == queuedId)).Should().BeFalse();
+        }
+
+        using var again = CreateAuthorizedRequest(HttpMethod.Post, $"/api/projects/{project.Id}/index/cancel", project.Token!, new { });
+        (await client.SendAsync(again)).StatusCode.Should().Be(HttpStatusCode.NotFound, "nothing is queued or running any more");
     }
 
     // Both transports: long polling hands the hub a cloned HttpContext, not the authenticated request's own.

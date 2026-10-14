@@ -54,7 +54,15 @@ public sealed class ProjectFileWatcherManager(
 
             foreach (var project in projects)
             {
-                StartWatching(project);
+                // One project's unreadable root must not leave every project after it unwatched.
+                try
+                {
+                    StartWatching(project);
+                }
+                catch (Exception ex)
+                {
+                    _managerLogger.LogError(ex, "Could not start watching project {ProjectId} at '{Root}'; the remaining projects are still being set up.", project.Id, project.RootPath);
+                }
             }
         }, cancellationToken);
 

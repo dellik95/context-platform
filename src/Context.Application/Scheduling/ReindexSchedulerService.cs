@@ -16,16 +16,15 @@ namespace Context.Application.Scheduling;
 /// <see cref="ServiceCollectionExtensions.AddContextApplication"/>.
 /// </summary>
 /// <remarks>
-/// <see cref="IProjectSettingsService.UpdateAsync"/> stamps <c>LastReindexScheduledAt</c> BEFORE
-/// the reindex is fired (not after it completes) so a slow reindex can't still be running when
-/// the next poll ticks and re-triggers it. The reindex itself runs in the background through
-/// <see cref="ReindexRunner"/>, same as the Dashboard's manual trigger, so it is cancellable from
-/// the Dashboard and one project's failure or slowness can never block another project's turn.
-/// A project whose previous run is still going is skipped, never interrupted.
+/// <see cref="IProjectSettingsService.UpdateAsync"/> stamps <c>LastReindexScheduledAt</c> only after
+/// the reindex job is queued, so a failed enqueue is retried by the next poll instead of being skipped
+/// for a whole interval. The reindex itself is a <see cref="Context.Domain.Enums.JobType.ReindexProject"/>
+/// job (same as the Dashboard's manual trigger), so it is cancellable from the Dashboard and one project's
+/// failure or slowness can never block another project's turn. A project whose previous run is still
+/// queued or running is skipped, never interrupted.
 /// </remarks>
 public sealed class ReindexSchedulerService(
     IServiceScopeFactory scopeFactory,
-    ReindexRunner reindexRunner,
     TimeProvider? timeProvider = null,
     ILogger<ReindexSchedulerService>? logger = null)
     : PeriodicScheduler(PollInterval, timeProvider ?? TimeProvider.System, logger ?? NullLogger<ReindexSchedulerService>.Instance)
@@ -41,6 +40,7 @@ public sealed class ReindexSchedulerService(
         using var scope = _scopeFactory.CreateScope();
         var projectRepository = scope.ServiceProvider.GetRequiredService<IProjectRepository>();
         var settingsService = scope.ServiceProvider.GetRequiredService<IProjectSettingsService>();
+        var requester = scope.ServiceProvider.GetRequiredService<ReindexRequester>();
 
         var projects = await projectRepository.ListAsync(ct).ConfigureAwait(false);
 
@@ -48,7 +48,7 @@ public sealed class ReindexSchedulerService(
         {
             try
             {
-                await MaybeScheduleReindexAsync(project.Id, settingsService, ct).ConfigureAwait(false);
+                await MaybeScheduleReindexAsync(project.Id, settingsService, requester, ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -57,7 +57,8 @@ public sealed class ReindexSchedulerService(
         }
     }
 
-    private async Task MaybeScheduleReindexAsync(Guid projectId, IProjectSettingsService settingsService, CancellationToken ct)
+    private async Task MaybeScheduleReindexAsync(
+        Guid projectId, IProjectSettingsService settingsService, ReindexRequester requester, CancellationToken ct)
     {
         var settings = await settingsService.GetAsync(projectId, ct).ConfigureAwait(false);
         if (!settings.ReindexEnabled || settings.ReindexIntervalMinutes <= 0)
@@ -72,12 +73,12 @@ public sealed class ReindexSchedulerService(
             return;
         }
 
-        await settingsService.UpdateAsync(projectId, settings with { LastReindexScheduledAt = TimeProvider.GetUtcNow() }, ct)
-            .ConfigureAwait(false);
-
-        if (!reindexRunner.TryStart(projectId, full: false))
+        var now = TimeProvider.GetUtcNow();
+        if (await requester.RequestAsync(projectId, full: false, skipIfActive: true, ct).ConfigureAwait(false) is null)
         {
-            Logger.LogInformation("Skipped scheduled reindex of project {ProjectId}: one is already running.", projectId);
+            Logger.LogInformation("Skipped scheduled reindex of project {ProjectId}: one is already queued or running.", projectId);
         }
+
+        await settingsService.UpdateAsync(projectId, settings with { LastReindexScheduledAt = now }, ct).ConfigureAwait(false);
     }
 }

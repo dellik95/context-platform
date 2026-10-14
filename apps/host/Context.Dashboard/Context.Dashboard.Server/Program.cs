@@ -167,6 +167,7 @@ try
     builder.Services.AddSingleton<Context.Application.Notifications.IProjectActivityNotifier, Context.Dashboard.Server.Hubs.SignalRProjectActivityNotifier>();
     builder.Services.AddSingleton<Context.Application.Notifications.IJobCountsNotifier, Context.Dashboard.Server.Hubs.SignalRJobCountsNotifier>();
     builder.Services.AddSingleton<Context.Application.Notifications.IHookInvocationNotifier, Context.Dashboard.Server.Hubs.SignalRHookInvocationNotifier>();
+    builder.Services.AddScoped<Context.Application.Indexing.IProjectStatusPublisher, Context.Dashboard.Server.Hubs.SignalRProjectStatusPublisher>();
 
     // Multi-instance job dispatch: overrides Context.Application's single-process InMemoryJobSignal
     // default only when CONTEXT_PLATFORM_REDIS is configured, so more than one Context.Dashboard.Server

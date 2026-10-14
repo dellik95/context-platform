@@ -54,6 +54,33 @@ public sealed class ProjectFileWatcherPollingTests : IDisposable
         _enqueued.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task A_failed_enqueue_is_retried_instead_of_dropping_the_change()
+    {
+        var attempts = 0;
+        var queue = new Mock<IJobQueue>();
+        queue.Setup(q => q.EnqueueAsync(JobType.IndexFile, It.IsAny<object>(), It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Returns((JobType _, object payload, Guid? _, int _, CancellationToken _) =>
+            {
+                if (Interlocked.Increment(ref attempts) == 1)
+                {
+                    throw new InvalidOperationException("database is locked");
+                }
+
+                _enqueued.Enqueue(((IndexFilePayload)payload).RelativePath);
+                return Task.FromResult(Guid.NewGuid());
+            });
+        var services = new ServiceCollection().AddSingleton(queue.Object).BuildServiceProvider();
+        using var watcher = new ProjectFileWatcher(
+            _project, services.GetRequiredService<IServiceScopeFactory>(), root => new GitignoreStyleMatcher(root), NullLogger.Instance,
+            pollingInterval: TimeSpan.FromMilliseconds(100), enqueueRetryDelay: TimeSpan.FromMilliseconds(200));
+
+        Write("src/created.cs", "class Created {}");
+
+        await WaitUntilAsync(() => _enqueued.Contains("src/created.cs"));
+        attempts.Should().Be(2, "the first attempt failed and the change was re-armed, not lost");
+    }
+
     [Theory]
     [InlineData("/mnt/c/Projects/Pet projects/claudy", "9p")]
     [InlineData("/mnt/c", "9p")]

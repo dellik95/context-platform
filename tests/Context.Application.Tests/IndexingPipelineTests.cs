@@ -185,6 +185,93 @@ public sealed class IndexingPipelineTests : IDisposable
         final.FilesTotal.Should().Be(2);
         final.FilesProcessed.Should().Be(2);
         final.FilesFailed.Should().Be(1);
+
+        // The failed file is retried by its own job instead of waiting for the next pass.
+        _jobQueue.Verify(
+            q => q.EnqueueAsync(
+                JobType.IndexFile,
+                It.Is<object>(p => p is IndexFilePayload && ((IndexFilePayload)p).RelativePath == "bad.fake" && ((IndexFilePayload)p).ProjectId == projectId),
+                projectId, It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+        _jobQueue.Verify(
+            q => q.EnqueueAsync(JobType.IndexFile, It.Is<object>(p => ((IndexFilePayload)p).RelativePath == "good.fake"), It.IsAny<Guid?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task IndexFileAsync_writes_the_content_hash_empty_first_and_records_the_real_one_as_its_last_step()
+    {
+        var projectId = Guid.NewGuid();
+        _projectRepository.Setup(p => p.GetByIdAsync(projectId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Project { Id = projectId, Name = "Demo", RootPath = _root, CreatedAt = DateTimeOffset.UtcNow });
+        System.IO.File.WriteAllText(Path.Combine(_root, "ok.fake"), "ordinary content");
+        var steps = new List<string>();
+        _fileRepository.Setup(f => f.GetByRelativePathAsync(projectId, "ok.fake", It.IsAny<CancellationToken>())).ReturnsAsync((DomainFile?)null);
+        _fileRepository.Setup(f => f.UpsertAsync(It.IsAny<DomainFile>(), It.IsAny<CancellationToken>()))
+            .Callback<DomainFile, CancellationToken>((file, _) => steps.Add($"upsert:{file.ContentHash}"))
+            .ReturnsAsync((DomainFile file, CancellationToken _) => file);
+        _chunkRepository.Setup(c => c.ReplaceForFileAsync(It.IsAny<Guid>(), It.IsAny<IReadOnlyList<Chunk>>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, IReadOnlyList<Chunk>, CancellationToken>((_, chunks, _) => steps.Add($"chunks:{chunks.Count}"))
+            .ReturnsAsync((IReadOnlyList<Guid>)[]);
+        _fileRepository.Setup(f => f.SetContentHashAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, string, CancellationToken>((_, hash, _) => steps.Add($"hash:{hash}"))
+            .Returns(Task.CompletedTask);
+
+        await BuildPipeline(new ThrowingFakeParser()).IndexFileAsync(projectId, "ok.fake", CancellationToken.None);
+
+        var realHash = $"hash:{Path.Combine(_root, "ok.fake")}";
+        steps.First().Should().Be("upsert:");
+        steps.Last().Should().Be($"hash:{realHash}");
+        steps.Should().Contain(step => step.StartsWith("chunks:") && step != "chunks:0", "the new chunks were written before the hash was recorded");
+    }
+
+    [Fact]
+    public async Task IndexFileAsync_never_records_the_content_hash_when_indexing_fails_part_way()
+    {
+        var projectId = Guid.NewGuid();
+        _projectRepository.Setup(p => p.GetByIdAsync(projectId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Project { Id = projectId, Name = "Demo", RootPath = _root, CreatedAt = DateTimeOffset.UtcNow });
+        System.IO.File.WriteAllText(Path.Combine(_root, "bad.fake"), "THROW");
+        _fileRepository.Setup(f => f.GetByRelativePathAsync(projectId, "bad.fake", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DomainFile { Id = Guid.NewGuid(), ProjectId = projectId, RelativePath = "bad.fake", ContentHash = "old", UpdatedAt = DateTimeOffset.UtcNow });
+
+        var act = () => BuildPipeline(new ThrowingFakeParser()).IndexFileAsync(projectId, "bad.fake", CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        _fileRepository.Verify(f => f.SetContentHashAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _fileRepository.Verify(f => f.UpsertAsync(It.Is<DomainFile>(file => file.ContentHash == string.Empty), It.IsAny<CancellationToken>()), Times.Once,
+            "the interrupted attempt leaves the empty marker, so the retry starts from scratch");
+    }
+
+    [Theory]
+    [InlineData("previous-hash", false)]
+    [InlineData("", true)]
+    public async Task IndexFileAsync_redoes_the_graph_and_embedding_work_for_an_unfinished_index_even_when_no_symbol_changed(string existingHash, bool redone)
+    {
+        var projectId = Guid.NewGuid();
+        var fileId = Guid.NewGuid();
+        _projectRepository.Setup(p => p.GetByIdAsync(projectId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Project { Id = projectId, Name = "Demo", RootPath = _root, CreatedAt = DateTimeOffset.UtcNow });
+        System.IO.File.WriteAllText(Path.Combine(_root, "same.fake"), "ordinary content");
+        _fileRepository.Setup(f => f.GetByRelativePathAsync(projectId, "same.fake", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DomainFile { Id = fileId, ProjectId = projectId, RelativePath = "same.fake", ContentHash = existingHash, UpdatedAt = DateTimeOffset.UtcNow });
+
+        // What an earlier, interrupted attempt already stored: the file's one symbol and its chunk, identical to
+        // what the parser extracts now, so the symbol diff alone sees nothing to do.
+        var symbolId = Guid.NewGuid();
+        _symbolRepository.Setup(s => s.ListByFileAsync(fileId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Symbol { Id = symbolId, FileId = fileId, Name = "Foo", QualifiedName = "Foo", Kind = SymbolKind.Function, StartLine = 1, EndLine = 1, SignatureHash = "s", BodyHash = "b" }]);
+        _chunkRepository.Setup(c => c.ListByFileAsync(fileId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Chunk { Id = Guid.NewGuid(), FileId = fileId, SymbolId = symbolId, Text = "Foo()\nreturn;", ContentHash = "c" }]);
+
+        await BuildPipeline(new ThrowingFakeParser()).IndexFileAsync(projectId, "same.fake", CancellationToken.None);
+
+        _jobQueue.Verify(
+            q => q.EnqueueAsync(JobType.UpdateGraph, It.IsAny<object>(), projectId, It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            redone ? Times.Once() : Times.Never());
+        _embeddingRepository.Verify(
+            e => e.GetMissingContentHashesAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            redone ? Times.Once() : Times.Never());
     }
 
     /// <summary>

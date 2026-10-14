@@ -176,30 +176,17 @@ public static class ProjectEndpoints
     }
 
     /// <summary>
-    /// Triggers <see cref="IIndexingPipeline.ReindexProjectAsync"/> in the background via
-    /// <see cref="ReindexRunner"/>: a full project reindex can take a long time, so this endpoint
-    /// responds 202 immediately rather than holding the HTTP request open. The run is registered
-    /// with <see cref="ReindexCancellationRegistry"/>, so a later
-    /// <c>POST /api/projects/{id}/index/cancel</c> (<see cref="CancelIndex"/>) can actually stop it.
+    /// Queues a <see cref="JobType.ReindexProject"/> job: a full project reindex can take a long time, so
+    /// this endpoint responds 202 as soon as the job is stored rather than holding the HTTP request open, and
+    /// the job survives a restart. Once running, it is registered with <see cref="ReindexCancellationRegistry"/>,
+    /// so a later <c>POST /api/projects/{id}/index/cancel</c> (<see cref="CancelIndex"/>) can actually stop it,
+    /// and a newer request replaces it.
     /// </summary>
-    private static IResult TriggerIndex(
-        Guid id,
-        bool? full,
-        Context.Dashboard.Server.Hubs.IndexingHubNotifier hubNotifier,
-        ReindexRunner reindexRunner)
+    private static async Task<IResult> TriggerIndex(Guid id, bool? full, ReindexRequester requester, CancellationToken ct)
     {
         var fullReindex = full ?? false;
-
-        reindexRunner.Start(id, fullReindex, async services =>
-        {
-            var status = await BuildStatusDtoAsync(id, services, CancellationToken.None).ConfigureAwait(false);
-            if (status is not null)
-            {
-                await hubNotifier.ProjectStatusChangedAsync(id, status, CancellationToken.None).ConfigureAwait(false);
-            }
-        });
-
-        return Results.Accepted(value: new IndexTriggerResponse(id, fullReindex, "started"));
+        await requester.RequestAsync(id, fullReindex, skipIfActive: false, ct).ConfigureAwait(false);
+        return Results.Accepted(value: new IndexTriggerResponse(id, fullReindex, "queued"));
     }
 
     /// <summary>
@@ -207,12 +194,23 @@ public static class ProjectEndpoints
     /// <see cref="TriggerIndex"/>). Only stops the foreground scan from walking more files /
     /// enqueuing more background jobs -- jobs already enqueued (EmbedChunk, UpdateGraph, ...) keep
     /// running independently through <c>JobDispatcher</c>; see <see cref="ReindexCancellationRegistry"/>'s
-    /// remarks. Idempotent: 404 if nothing is currently running for this project (already finished,
-    /// never started, or already cancelled), matching this file's existing "not found" convention
+    /// remarks. A reindex still waiting in the job queue is removed too, with a final Cancelled progress event so
+    /// the dashboard's card clears. Idempotent: 404 if nothing is queued or running for this project (already
+    /// finished, never started, or already cancelled), matching this file's existing "not found" convention
     /// elsewhere rather than treating a no-op cancel as an error.
     /// </summary>
-    private static IResult CancelIndex(Guid id, ReindexCancellationRegistry reindexRegistry) =>
-        reindexRegistry.Cancel(id) ? Results.Accepted() : Results.NotFound();
+    private static async Task<IResult> CancelIndex(
+        Guid id, ReindexCancellationRegistry reindexRegistry, IJobRepository jobs, IIndexingProgressReporter progressReporter, CancellationToken ct)
+    {
+        var running = reindexRegistry.Cancel(id);
+        var queued = await jobs.DeleteByStatusAsync(JobStatus.Pending, id, JobType.ReindexProject, null, ct).ConfigureAwait(false);
+        if (queued > 0)
+        {
+            await progressReporter.ReportAsync(new ReindexProgressDto(id, 0, 0, Completed: true, Cancelled: true), ct).ConfigureAwait(false);
+        }
+
+        return running || queued > 0 ? Results.Accepted() : Results.NotFound();
+    }
 
     /// <summary>
     /// Enqueues a <see cref="JobType.RecreateEmbeddings"/> job for <paramref name="id"/> and returns
@@ -264,7 +262,7 @@ public static class ProjectEndpoints
         return Results.NoContent();
     }
 
-    private static async Task<ProjectStatusDto?> BuildStatusDtoAsync(Guid id, IServiceProvider services, CancellationToken ct)
+    internal static async Task<ProjectStatusDto?> BuildStatusDtoAsync(Guid id, IServiceProvider services, CancellationToken ct)
     {
         var projects = services.GetRequiredService<IProjectRepository>();
         var engine = services.GetRequiredService<IContextEngine>();

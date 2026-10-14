@@ -12,4 +12,8 @@ public interface IFileRepository
     Task<DomainFile> UpsertAsync(DomainFile file, CancellationToken ct);
 
     Task MarkDeletedAsync(Guid fileId, CancellationToken ct);
+
+    /// <summary>Records <paramref name="contentHash"/> as the content the file's index now reflects. Written as the
+    /// last step of indexing: while a file's hash is empty its index is incomplete, so a retry redoes everything.</summary>
+    Task SetContentHashAsync(Guid fileId, string contentHash, CancellationToken ct);
 }

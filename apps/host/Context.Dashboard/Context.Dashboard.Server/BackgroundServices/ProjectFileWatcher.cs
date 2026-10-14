@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Enumeration;
 using Context.Application.Abstractions;
+using Context.Application.Indexing;
 using Context.Application.Jobs;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
@@ -34,6 +35,8 @@ namespace Context.Dashboard.Server.BackgroundServices;
 public sealed class ProjectFileWatcher : IDisposable
 {
     private static readonly TimeSpan DebounceDelay = TimeSpan.FromMilliseconds(400);
+    private static readonly TimeSpan DefaultEnqueueRetryDelay = TimeSpan.FromSeconds(5);
+    private const int MaxEnqueueAttempts = 12;
 
     private readonly Guid _projectId;
     private readonly string _root;
@@ -44,6 +47,9 @@ public sealed class ProjectFileWatcher : IDisposable
     private readonly CancellationTokenSource? _pollCts;
 
     private readonly ConcurrentDictionary<string, Timer> _debounceTimers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, int> _enqueueFailures = new(StringComparer.OrdinalIgnoreCase);
+    private readonly TimeSpan _enqueueRetryDelay;
+    private volatile bool _disposed;
 
     /// <summary>
     /// Starts watching immediately; a non-null <paramref name="pollingInterval"/> polls instead of
@@ -58,8 +64,10 @@ public sealed class ProjectFileWatcher : IDisposable
         IServiceScopeFactory scopeFactory,
         Func<string, IIgnoreMatcher> ignoreMatcherFactory,
         ILogger logger,
-        TimeSpan? pollingInterval = null)
+        TimeSpan? pollingInterval = null,
+        TimeSpan? enqueueRetryDelay = null)
     {
+        _enqueueRetryDelay = enqueueRetryDelay ?? DefaultEnqueueRetryDelay;
         _projectId = project.Id;
         _root = project.RootPath;
         _scopeFactory = scopeFactory;
@@ -90,8 +98,7 @@ public sealed class ProjectFileWatcher : IDisposable
         _watcher.Created += OnFileSystemEvent;
         _watcher.Deleted += OnFileSystemEvent;
         _watcher.Renamed += OnRenamed;
-        _watcher.Error += (_, e) =>
-            _logger.LogWarning(e.GetException(), "FileSystemWatcher raised an error for project {ProjectId} root '{Root}'.", _projectId, _root);
+        _watcher.Error += OnWatcherError;
         _watcher.EnableRaisingEvents = true;
 
         _logger.LogInformation(
@@ -100,6 +107,26 @@ public sealed class ProjectFileWatcher : IDisposable
     }
 
     private void OnFileSystemEvent(object sender, FileSystemEventArgs e) => ScheduleIndex(e.FullPath);
+
+    /// <summary>An error (typically an internal buffer overflow) means events were lost, and nothing says which
+    /// files changed: an incremental reindex re-checks every file's hash, which is the only way to catch up.</summary>
+    private void OnWatcherError(object sender, ErrorEventArgs e)
+    {
+        _logger.LogWarning(e.GetException(), "FileSystemWatcher raised an error for project {ProjectId} root '{Root}'; queueing an incremental reindex to catch up.", _projectId, _root);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                await scope.ServiceProvider.GetRequiredService<ReindexRequester>()
+                    .RequestAsync(_projectId, full: false, skipIfActive: true, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Could not queue a catch-up reindex for project {ProjectId} after a file watcher error.", _projectId);
+            }
+        });
+    }
 
     private void OnRenamed(object sender, RenamedEventArgs e)
     {
@@ -267,16 +294,34 @@ public sealed class ProjectFileWatcher : IDisposable
                     new IndexFilePayload(_projectId, relativePath),
                     _projectId,
                     ct: CancellationToken.None).ConfigureAwait(false);
+                _enqueueFailures.TryRemove(relativePath, out _);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to enqueue a reindex of '{RelativePath}' for project {ProjectId} after a file-system change.", relativePath, _projectId);
+                RetryEnqueueLater(relativePath);
             }
         });
     }
 
+    /// <summary>Re-arms the file's debounce timer on a longer delay instead of dropping the change: the debounce
+    /// timers live in memory only, so a swallowed failure would otherwise lose the change until the next edit.</summary>
+    private void RetryEnqueueLater(string relativePath)
+    {
+        if (_disposed || _enqueueFailures.AddOrUpdate(relativePath, 1, (_, failures) => failures + 1) > MaxEnqueueAttempts)
+        {
+            _enqueueFailures.TryRemove(relativePath, out _);
+            return;
+        }
+
+        var timer = _debounceTimers.GetOrAdd(
+            relativePath, _ => new Timer(OnDebounceElapsed, relativePath, Timeout.Infinite, Timeout.Infinite));
+        timer.Change(_enqueueRetryDelay, Timeout.InfiniteTimeSpan);
+    }
+
     public void Dispose()
     {
+        _disposed = true;
         _pollCts?.Cancel();
         _pollCts?.Dispose();
 
