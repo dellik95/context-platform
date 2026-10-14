@@ -65,6 +65,23 @@ public sealed class RememberMemoryJobHandlerTests
     }
 
     [Fact]
+    public async Task HandleAsync_does_not_fail_after_storing_the_memory_when_the_dashboard_push_fails()
+    {
+        _notifier.Setup(n => n.NotifyAsync(It.IsAny<Guid>(), It.IsAny<ProjectActivityKind>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("hub down"));
+        var sut = new RememberMemoryJobHandler(_engine.Object, _notifier.Object);
+
+        await sut.HandleAsync(MakeJob(_projectId, new RememberMemoryPayload("Anything durable.")), CancellationToken.None);
+
+        _engine.Verify(
+            e => e.RememberExplicitlyAsync(
+                _projectId, "Anything durable.", It.IsAny<MemoryType?>(), It.IsAny<CancellationToken>(),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<string>?>(), It.IsAny<IReadOnlyList<string>?>(),
+                It.IsAny<IReadOnlyList<string>?>(), It.IsAny<IReadOnlyList<string>?>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task HandleAsync_rejects_a_job_without_a_project()
     {
         var sut = new RememberMemoryJobHandler(_engine.Object, _notifier.Object);

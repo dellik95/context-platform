@@ -27,9 +27,10 @@ public sealed class ProcessHookJobHandler(
     TimeProvider? timeProvider = null,
     ILogger<ProcessHookJobHandler>? logger = null) : IJobHandler
 {
-    /// <summary>How long a SessionEnd or PostCompact waits for earlier hooks of its project before it
-    /// stops waiting: an earlier job stuck in retries must not hold the barrier up for good.</summary>
-    public static readonly TimeSpan MaxBarrierWait = TimeSpan.FromSeconds(30);
+    /// <summary>How long after being queued a SessionEnd or PostCompact still waits for earlier hooks of its
+    /// project: an earlier job stuck in retries must not hold the barrier up for good. Measured from the job's
+    /// creation, so it is long enough that a backlog (or a short host downtime) does not skip the wait.</summary>
+    public static readonly TimeSpan MaxBarrierWait = TimeSpan.FromMinutes(5);
 
     private static readonly TimeSpan BarrierRecheckDelay = TimeSpan.FromSeconds(2);
 

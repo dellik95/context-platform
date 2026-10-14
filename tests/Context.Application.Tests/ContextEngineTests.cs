@@ -161,11 +161,22 @@ public sealed class ContextEngineTests
 
     private sealed class PassthroughUnitOfWork : IUnitOfWork
     {
+        public bool InTransaction => false;
+
+        public Task<T> InTransactionAsync<T>(Func<Task<T>> work, CancellationToken ct) => work();
+    }
+
+    private sealed class OpenTransactionUnitOfWork : IUnitOfWork
+    {
+        public bool InTransaction => true;
+
         public Task<T> InTransactionAsync<T>(Func<Task<T>> work, CancellationToken ct) => work();
     }
 
     private sealed class RollbackTrackingUnitOfWork : IUnitOfWork
     {
+        public bool InTransaction => false;
+
         public bool Committed { get; private set; }
 
         public async Task<T> InTransactionAsync<T>(Func<Task<T>> work, CancellationToken ct)
@@ -593,6 +604,42 @@ public sealed class ContextEngineTests
         await act.Should().ThrowAsync<KeyNotFoundException>();
         _jobRepository.Verify(r => r.EnqueueAsync(It.IsAny<Job>(), It.IsAny<CancellationToken>()), Times.Never);
         _jobQueue.Verify(q => q.WakeAsync(It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Jobs_inserted_inside_a_callers_open_transaction_are_not_woken_until_that_caller_commits()
+    {
+        var session = new Session { Id = Guid.NewGuid(), ProjectId = Guid.NewGuid(), StartedAt = DateTimeOffset.UtcNow.AddHours(-1), Status = SessionStatus.Active };
+        _sessionRepository.Setup(r => r.GetByIdAsync(session.ProjectId, session.Id, It.IsAny<CancellationToken>())).ReturnsAsync(session);
+        _sessionRepository.Setup(r => r.ClaimEventsForExtractionAsync(session.Id, It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(Guid.NewGuid());
+        var sut = CreateSutWith(new OpenTransactionUnitOfWork());
+
+        await sut.EndSessionAsync(session.ProjectId, session.Id, CancellationToken.None);
+        await sut.RecordEventAsync(session.ProjectId, session.Id, SessionEventType.ToolCall, new { tool = "Edit" }, CancellationToken.None);
+        await sut.ExtractMemoryFromCompactSummaryAsync(session.ProjectId, session.Id, "Switched auth to PKCE.", CancellationToken.None);
+        await sut.RequestSessionSummaryAsync(session.ProjectId, session.Id, CancellationToken.None);
+
+        _jobRepository.Verify(r => r.EnqueueAsync(It.IsAny<Job>(), It.IsAny<CancellationToken>()), Times.AtLeast(4));
+        _jobQueue.Verify(q => q.WakeAsync(It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task StartSessionAsync_fills_in_the_working_directory_of_a_reused_session_that_has_none()
+    {
+        var projectId = Guid.NewGuid();
+        var existing = new Session { Id = Guid.NewGuid(), ProjectId = projectId, ClaudeSessionId = "claude-1", StartedAt = DateTimeOffset.UtcNow, Status = SessionStatus.Active, Cwd = null };
+        _sessionRepository.Setup(r => r.GetByClaudeSessionIdAsync(projectId, "claude-1", It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+
+        var id = await _sut.StartSessionAsync(projectId, "claude-1", CancellationToken.None, cwd: "/repo");
+
+        id.Should().Be(existing.Id);
+        existing.Cwd.Should().Be("/repo");
+        _sessionRepository.Verify(r => r.UpdateAsync(existing, It.IsAny<CancellationToken>()), Times.Once);
+
+        await _sut.StartSessionAsync(projectId, "claude-1", CancellationToken.None, cwd: "/elsewhere");
+
+        existing.Cwd.Should().Be("/repo", "a recorded working directory is never replaced");
+        _sessionRepository.Verify(r => r.UpdateAsync(existing, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ---- 4b. Memory extraction batching ----

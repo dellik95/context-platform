@@ -216,6 +216,21 @@ public sealed class MemoryConsolidatorTests
     }
 
     [Fact]
+    public async Task A_complement_of_another_memory_type_is_not_folded_in_because_the_target_keeps_its_own_type()
+    {
+        _embeddings.Map("timestamp tolerance", Near(0.85)).Map("signature verification", Axis(0)).Map("webhook retries", Axis(1));
+        _chat.UseModel(judge: _ => "1|COMPLEMENTS|a\n2|COMPLEMENTS|b", merge: user => user);
+        Seed(SignatureVerification(), _sessionA, Axis(0), TimeSpan.FromDays(2));
+        var decision = Seed(WebhookRetries() with { Type = MemoryType.Decision }, _sessionB, Axis(1), TimeSpan.FromDays(1));
+
+        var result = await ConsolidateAsync(SignatureTolerance(), Guid.NewGuid());
+
+        result.Outcome.Should().Be(ConsolidationOutcome.Merged);
+        _store.Get(decision.Id).Status.Should().Be(MemoryStatus.Active, "folding a Decision into a Configuration memory would lose the Decision type");
+        _store.Live.Should().HaveCount(2);
+    }
+
+    [Fact]
     public async Task Extra_complement_that_does_not_fit_the_body_limit_stays_separate()
     {
         _embeddings.Map("timestamp tolerance", Near(0.85)).Map("signature verification", Axis(0)).Map("webhook retries", Axis(1));

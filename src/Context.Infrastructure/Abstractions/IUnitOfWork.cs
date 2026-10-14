@@ -13,6 +13,10 @@ namespace Context.Infrastructure.Abstractions;
 /// </remarks>
 public interface IUnitOfWork
 {
+    /// <summary>True while a transaction is open on this scope's context. Code that must not do network I/O or
+    /// wake other workers under the write lock checks this and leaves it to whoever commits.</summary>
+    bool InTransaction { get; }
+
     Task<T> InTransactionAsync<T>(Func<Task<T>> work, CancellationToken ct);
 
     async Task InTransactionAsync(Func<Task> work, CancellationToken ct) =>

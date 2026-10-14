@@ -358,8 +358,10 @@ public sealed class MemoryConsolidator(
                 break;
             }
 
+            // The target keeps its own type, so a complement of another type would silently lose it.
             if (await ReloadLiveAsync(neighbour.Memory.Id, ct).ConfigureAwait(false) is not { Status: MemoryStatus.Active } extra
-                || extra.TopicKey != incoming.TopicKey)
+                || extra.TopicKey != incoming.TopicKey
+                || extra.Type != snapshot.Type)
             {
                 continue;
             }

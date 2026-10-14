@@ -5,6 +5,8 @@ namespace Context.Infrastructure;
 
 public sealed class UnitOfWork(ContextDbContext db) : IUnitOfWork
 {
+    public bool InTransaction => db.Database.CurrentTransaction is not null;
+
     public async Task<T> InTransactionAsync<T>(Func<Task<T>> work, CancellationToken ct)
     {
         if (db.Database.CurrentTransaction is not null)

@@ -2,6 +2,7 @@ using System.Text.Json;
 using Context.Application.Notifications;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
+using Microsoft.Extensions.Logging;
 
 namespace Context.Application.Jobs.Handlers;
 
@@ -9,7 +10,8 @@ namespace Context.Application.Jobs.Handlers;
 /// neighbours and consolidates it. A provider outage fails the job, and the retry budget outlasts it.</summary>
 public sealed class RememberMemoryJobHandler(
     IContextEngine engine,
-    IProjectActivityNotifier? activityNotifier = null) : IJobHandler
+    IProjectActivityNotifier? activityNotifier = null,
+    ILogger<RememberMemoryJobHandler>? logger = null) : IJobHandler
 {
     private readonly IProjectActivityNotifier _activityNotifier = activityNotifier ?? NullProjectActivityNotifier.Instance;
 
@@ -27,6 +29,15 @@ public sealed class RememberMemoryJobHandler(
             projectId, payload.Content, payload.Type, ct,
             payload.Title, payload.Topic, payload.Facts, payload.Concepts, payload.FilesRead, payload.FilesModified).ConfigureAwait(false);
 
-        await _activityNotifier.NotifyAsync(projectId, ProjectActivityKind.MemoryChanged, ct).ConfigureAwait(false);
+        // The memory is stored by now: a failing dashboard push must not fail the job, whose retry would
+        // consolidate the same claim again and inflate its reinforcement.
+        try
+        {
+            await _activityNotifier.NotifyAsync(projectId, ProjectActivityKind.MemoryChanged, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogWarning(ex, "Failed to push the new memory of project {ProjectId} to the dashboard; it was stored.", projectId);
+        }
     }
 }

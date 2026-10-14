@@ -238,6 +238,19 @@ public sealed class ProcessHookJobHandlerTests : IDisposable
         (await QueryAsync(db => db.Jobs.CountAsync(j => j.Type == JobType.ExtractMemory))).Should().Be(1);
         var summary = await QueryAsync(db => db.Jobs.AsNoTracking().SingleAsync(j => j.Type == JobType.SummarizeSession));
         JsonSerializer.Deserialize<SummarizeSessionPayload>(summary.PayloadJson)!.IsSessionEnd.Should().BeTrue();
+        _jobQueue.Verify(q => q.WakeAsync(It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never,
+            "the jobs were inserted under the hook's open transaction: waking the lanes then would run under the write lock, before the commit");
+    }
+
+    [Fact]
+    public async Task A_hook_that_created_the_session_first_leaves_its_working_directory_to_be_filled_in_by_SessionStart()
+    {
+        await RunAsync(MakeJob(HookType.PostToolUse, ToolUse("Read")));
+        (await QueryAsync(db => db.Sessions.AsNoTracking().SingleAsync())).Cwd.Should().BeNull();
+
+        await RunAsync(MakeJob(HookType.SessionStart, new SessionStartInput(_claudeSessionId, "startup", "/late-cwd")));
+
+        (await QueryAsync(db => db.Sessions.AsNoTracking().SingleAsync())).Cwd.Should().Be("/late-cwd");
     }
 
     [Fact]

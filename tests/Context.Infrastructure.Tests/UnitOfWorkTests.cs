@@ -94,6 +94,30 @@ public sealed class UnitOfWorkTests : IDisposable
         (await JobCountAsync()).Should().Be(0);
     }
 
+    [Fact]
+    public async Task InTransaction_is_true_only_while_the_work_runs()
+    {
+        await MigrateAsync();
+        using var db = CreateContext();
+        IUnitOfWork unitOfWork = new UnitOfWork(db);
+        var seen = new List<bool>();
+
+        unitOfWork.InTransaction.Should().BeFalse();
+        await unitOfWork.InTransactionAsync(async () =>
+        {
+            seen.Add(unitOfWork.InTransaction);
+            await unitOfWork.InTransactionAsync(() =>
+            {
+                seen.Add(unitOfWork.InTransaction);
+                return Task.CompletedTask;
+            }, CancellationToken.None);
+            seen.Add(unitOfWork.InTransaction);
+        }, CancellationToken.None);
+
+        seen.Should().Equal(true, true, true);
+        unitOfWork.InTransaction.Should().BeFalse();
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();

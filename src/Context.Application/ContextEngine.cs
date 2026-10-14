@@ -381,11 +381,20 @@ public sealed class ContextEngine(
                 // Ended, so a reused row was always still Active. Now a background timeout can end
                 // a session that later turns out to still be alive (hook traffic resumes after a
                 // network blip, e.g.) -- treat renewed hook traffic as proof of that and un-end it,
-                // rather than silently handing new events to a row stuck in Ended forever.
-                if (existing.Status == SessionStatus.Ended)
+                // rather than silently handing new events to a row stuck in Ended forever. The working
+                // directory is filled in when the row was created by another hook that ran before SessionStart
+                // (hook jobs of a project run in parallel) and so had none to record.
+                var revived = existing.Status == SessionStatus.Ended;
+                var gainedCwd = existing.Cwd is null && cwd is not null;
+                if (revived || gainedCwd)
                 {
-                    existing.Status = SessionStatus.Active;
-                    existing.EndedAt = null;
+                    if (revived)
+                    {
+                        existing.Status = SessionStatus.Active;
+                        existing.EndedAt = null;
+                    }
+
+                    existing.Cwd ??= cwd;
                     await sessionRepository.UpdateAsync(existing, ct).ConfigureAwait(false);
                 }
 
@@ -433,9 +442,16 @@ public sealed class ContextEngine(
 
         if (queued)
         {
-            await jobQueue.WakeAsync(projectId, ct).ConfigureAwait(false);
+            await WakeAfterCommitAsync(projectId, ct).ConfigureAwait(false);
         }
     }
+
+    /// <summary>Wakes the job lanes for jobs this engine just inserted, unless a caller's transaction is still open:
+    /// the rows are not committed yet, and the wake (signal publish, count queries, SignalR push, a lane claiming
+    /// under the write lock) must not run under it. That caller commits first and its job's completion re-kicks
+    /// the lane.</summary>
+    private Task WakeAfterCommitAsync(Guid projectId, CancellationToken ct) =>
+        unitOfWork.InTransaction ? Task.CompletedTask : jobQueue.WakeAsync(projectId, ct);
 
     /// <summary>Claims the unclaimed events as one batch and inserts its <c>ExtractMemory</c> job. Runs inside the
     /// caller's transaction so the claim and the job commit together: a claimed batch without a job would never be
@@ -463,7 +479,7 @@ public sealed class ContextEngine(
         }
 
         await InsertJobAsync(JobType.ExtractMemory, new ExtractMemoryPayload(sessionId, CompactSummary: compactSummary), projectId, ct).ConfigureAwait(false);
-        await jobQueue.WakeAsync(projectId, ct).ConfigureAwait(false);
+        await WakeAfterCommitAsync(projectId, ct).ConfigureAwait(false);
     }
 
     public async Task EndSessionAsync(Guid projectId, Guid sessionId, CancellationToken ct, string? reason = null)
@@ -484,7 +500,7 @@ public sealed class ContextEngine(
             return session.ProjectId;
         }, ct).ConfigureAwait(false);
 
-        await jobQueue.WakeAsync(ownerProjectId, ct).ConfigureAwait(false);
+        await WakeAfterCommitAsync(ownerProjectId, ct).ConfigureAwait(false);
     }
 
     public async Task RequestSessionSummaryAsync(Guid projectId, Guid sessionId, CancellationToken ct)
@@ -493,7 +509,7 @@ public sealed class ContextEngine(
             ?? throw new KeyNotFoundException($"Session {sessionId} was not found.");
 
         await InsertJobAsync(JobType.SummarizeSession, new SummarizeSessionPayload(sessionId, IsSessionEnd: false), session.ProjectId, ct).ConfigureAwait(false);
-        await jobQueue.WakeAsync(session.ProjectId, ct).ConfigureAwait(false);
+        await WakeAfterCommitAsync(session.ProjectId, ct).ConfigureAwait(false);
     }
 
     public async Task<object> ProjectInfoAsync(Guid projectId, CancellationToken ct)

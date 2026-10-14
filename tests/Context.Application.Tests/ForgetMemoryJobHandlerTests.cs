@@ -53,6 +53,19 @@ public sealed class ForgetMemoryJobHandlerTests
     }
 
     [Fact]
+    public async Task HandleAsync_does_not_fail_after_deleting_the_memory_when_the_dashboard_push_fails()
+    {
+        _engine.Setup(e => e.ForgetMemoryAsync(_projectId, _memoryId, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _notifier.Setup(n => n.NotifyAsync(It.IsAny<Guid>(), It.IsAny<ProjectActivityKind>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("hub down"));
+        var sut = new ForgetMemoryJobHandler(_engine.Object, _notifier.Object);
+
+        await sut.HandleAsync(MakeJob(_projectId), CancellationToken.None);
+
+        _engine.Verify(e => e.ForgetMemoryAsync(_projectId, _memoryId, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task HandleAsync_rejects_a_job_without_a_project()
     {
         var sut = new ForgetMemoryJobHandler(_engine.Object, _notifier.Object);
