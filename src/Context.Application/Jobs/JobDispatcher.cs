@@ -79,10 +79,15 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     private readonly IJobCountsNotifier _jobCountsNotifier;
     private readonly IJobSignal _jobSignal;
     private readonly JobWorkerPool _workerPool;
+    private readonly JobWorkerPool _lightPool;
 
     /// <summary>Keyed by project id, <see cref="Guid.Empty"/> for the host-wide lane
     /// (<see cref="ConcurrentDictionary{TKey,TValue}"/> rejects a null key).</summary>
     private readonly ConcurrentDictionary<Guid, JobLane> _lanes = new();
+
+    /// <summary>Same keys, for <see cref="JobRetryPolicy.IsLight"/> jobs: its own lane and slots per project, so a
+    /// project whose ordinary slots are all held by slow jobs still processes its hooks.</summary>
+    private readonly ConcurrentDictionary<Guid, JobLane> _lightLanes = new();
 
     private readonly ConcurrentDictionary<Guid, JobExecution> _executions = new();
 
@@ -111,6 +116,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         _jobSignal = jobSignal ?? new InMemoryJobSignal();
         var dispatcherOptions = options?.Value ?? new JobDispatcherOptions();
         _workerPool = new JobWorkerPool(Math.Max(1, dispatcherOptions.WorkersPerProject), Math.Max(0, dispatcherOptions.SharedWorkers));
+        _lightPool = new JobWorkerPool(Math.Max(1, dispatcherOptions.LightWorkersPerProject), 0);
     }
 
     /// <summary>
@@ -360,7 +366,10 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
             return;
         }
 
-        _lanes.GetOrAdd(projectId ?? Guid.Empty, static (_, state) => new JobLane(state.Dispatcher, state.ProjectId), (Dispatcher: this, ProjectId: projectId))
+        var key = projectId ?? Guid.Empty;
+        _lanes.GetOrAdd(key, static (_, state) => new JobLane(state.Dispatcher, state.ProjectId, light: false), (Dispatcher: this, ProjectId: projectId))
+            .Kick(cts.Token);
+        _lightLanes.GetOrAdd(key, static (_, state) => new JobLane(state.Dispatcher, state.ProjectId, light: true), (Dispatcher: this, ProjectId: projectId))
             .Kick(cts.Token);
     }
 
@@ -387,9 +396,13 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     /// (plus, for a shared slot, the lanes waiting on one), so a backlog drains without waiting on a
     /// signal or poll tick.
     /// </summary>
-    private sealed class JobLane(JobDispatcher owner, Guid? projectId)
+    private sealed class JobLane(JobDispatcher owner, Guid? projectId, bool light)
     {
         private readonly Guid _key = projectId ?? Guid.Empty;
+        private readonly JobWorkerPool _pool = light ? owner._lightPool : owner._workerPool;
+        private readonly JobLaneFilter _filter = light
+            ? new JobLaneFilter(OnlyTypes: JobRetryPolicy.Light)
+            : new JobLaneFilter(ExceptTypes: JobRetryPolicy.Light);
         private int _draining;
         private int _kickPending;
 
@@ -427,7 +440,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         {
             while (!ct.IsCancellationRequested)
             {
-                if (!owner._workerPool.TryAcquire(_key, out var borrowed))
+                if (!_pool.TryAcquire(_key, out var borrowed))
                 {
                     return;
                 }
@@ -437,7 +450,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
                 {
                     using var scope = owner._scopeFactory.CreateScope();
                     var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
-                    job = await jobRepository.DequeueNextForProjectAsync(projectId, ct).ConfigureAwait(false);
+                    job = await jobRepository.DequeueNextForProjectAsync(projectId, _filter, ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -475,7 +488,7 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         }
 
         private void ReleaseSlot(bool borrowed, bool idle, CancellationToken ct) =>
-            owner.KickWaitingLanes(owner._workerPool.Release(_key, borrowed, idle), ct);
+            owner.KickWaitingLanes(_pool.Release(_key, borrowed, idle), ct);
     }
 
     /// <summary>

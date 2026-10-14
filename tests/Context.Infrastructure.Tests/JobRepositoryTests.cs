@@ -316,6 +316,39 @@ public sealed class JobRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task DequeueNextForProjectAsync_claims_only_the_job_types_the_lane_filter_allows()
+    {
+        await MigrateAsync();
+        using var db = CreateContext();
+
+        var projectId = Guid.NewGuid();
+        Job Job(JobType type, int priority)
+        {
+            var job = NewJob(priority: priority, type: type);
+            job.ProjectId = projectId;
+            return job;
+        }
+
+        var hook = Job(JobType.ProcessHook, 1);
+        var embed = Job(JobType.EmbedChunk, 9);
+        var forget = Job(JobType.ForgetMemory, 5);
+        db.Jobs.AddRange(hook, embed, forget);
+        await db.SaveChangesAsync();
+        var repository = new JobRepository(db);
+        JobType[] light = [JobType.ProcessHook, JobType.ForgetMemory];
+
+        var lightFirst = await repository.DequeueNextForProjectAsync(projectId, new JobLaneFilter(OnlyTypes: light), CancellationToken.None);
+        var lightSecond = await repository.DequeueNextForProjectAsync(projectId, new JobLaneFilter(OnlyTypes: light), CancellationToken.None);
+        var lightThird = await repository.DequeueNextForProjectAsync(projectId, new JobLaneFilter(OnlyTypes: light), CancellationToken.None);
+        var ordinary = await repository.DequeueNextForProjectAsync(projectId, new JobLaneFilter(ExceptTypes: light), CancellationToken.None);
+
+        lightFirst!.Id.Should().Be(forget.Id, "the higher priority light job goes first");
+        lightSecond!.Id.Should().Be(hook.Id);
+        lightThird.Should().BeNull("the EmbedChunk job is not light, even though it is still pending");
+        ordinary!.Id.Should().Be(embed.Id);
+    }
+
+    [Fact]
     public async Task GetLastEnqueuedAtAsync_returns_the_newest_job_of_that_type_regardless_of_status()
     {
         await MigrateAsync();

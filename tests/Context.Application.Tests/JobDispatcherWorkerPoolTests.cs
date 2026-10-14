@@ -25,6 +25,8 @@ public sealed class JobDispatcherWorkerPoolTests : IAsyncDisposable
     private readonly Guid _projectA = Guid.NewGuid();
     private readonly Guid _projectB = Guid.NewGuid();
     private readonly GatedHandler _handler = new();
+    private readonly CompletionHandler _lightHandler = new(JobType.ProcessHook);
+    private readonly CompletionHandler _forgetHandler = new(JobType.ForgetMemory);
     private readonly ServiceProvider _provider;
     private readonly JobDispatcher _dispatcher;
 
@@ -34,6 +36,8 @@ public sealed class JobDispatcherWorkerPoolTests : IAsyncDisposable
         services.AddDbContext<ContextDbContext>(o => o.UseSqlite($"Data Source={_dbPath}"));
         services.AddScoped<IJobRepository, JobRepository>();
         services.AddSingleton<IJobHandler>(_handler);
+        services.AddSingleton<IJobHandler>(_lightHandler);
+        services.AddSingleton<IJobHandler>(_forgetHandler);
         _provider = services.BuildServiceProvider();
 
         using (var scope = _provider.CreateScope())
@@ -88,6 +92,43 @@ public sealed class JobDispatcherWorkerPoolTests : IAsyncDisposable
         _handler.HasStarted(aJobs[3]).Should().BeFalse("A is over its even share of the shared slots");
     }
 
+    [Fact]
+    public async Task Light_jobs_run_while_every_ordinary_slot_of_the_project_is_held_by_slow_jobs()
+    {
+        var heavy = new List<Guid>();
+        for (var i = 0; i < 3; i++)
+        {
+            heavy.Add(await SeedAsync(_projectA, priority: 10));
+        }
+
+        await _dispatcher.StartAsync(CancellationToken.None);
+        await _handler.WaitStartedAsync(heavy, WaitTimeout);
+
+        var hook = await _dispatcher.EnqueueAsync(JobType.ProcessHook, new { }, _projectA, JobPriority.Hook);
+        var forget = await _dispatcher.EnqueueAsync(JobType.ForgetMemory, new { }, _projectA, JobPriority.Session);
+
+        await _lightHandler.WaitHandledAsync(hook, WakeTimeout);
+        await _forgetHandler.WaitHandledAsync(forget, WakeTimeout);
+        heavy.Should().OnlyContain(id => !_handler.IsFinished(id), "the slow jobs are still holding their slots");
+    }
+
+    [Fact]
+    public async Task Ordinary_jobs_never_take_a_light_lane_slot_so_a_light_backlog_cannot_be_starved_by_them()
+    {
+        // 1 reserved + 2 shared ordinary slots are held; a 4th ordinary job must wait even though the light slots are free.
+        var heavy = new List<Guid>();
+        for (var i = 0; i < 4; i++)
+        {
+            heavy.Add(await SeedAsync(_projectA, priority: 10 - i));
+        }
+
+        await _dispatcher.StartAsync(CancellationToken.None);
+        await _handler.WaitStartedAsync(heavy[..3], WaitTimeout);
+
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        _handler.HasStarted(heavy[3]).Should().BeFalse("light slots are only for light jobs");
+    }
+
     private async Task<Guid> SeedAsync(Guid projectId, int priority)
     {
         using var scope = _provider.CreateScope();
@@ -117,6 +158,25 @@ public sealed class JobDispatcherWorkerPoolTests : IAsyncDisposable
         }
     }
 
+    /// <summary>Completes at once and records which jobs it handled.</summary>
+    private sealed class CompletionHandler(JobType type) : IJobHandler
+    {
+        private readonly ConcurrentDictionary<Guid, TaskCompletionSource> _handled = new();
+
+        public JobType Type => type;
+
+        public Task HandleAsync(Job job, CancellationToken ct)
+        {
+            Gate(job.Id).TrySetResult();
+            return Task.CompletedTask;
+        }
+
+        public Task WaitHandledAsync(Guid jobId, TimeSpan timeout) => Gate(jobId).Task.WaitAsync(timeout);
+
+        private TaskCompletionSource Gate(Guid jobId) =>
+            _handled.GetOrAdd(jobId, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+    }
+
     /// <summary>Each job runs until the test calls <see cref="Finish"/> for it.</summary>
     private sealed class GatedHandler : IJobHandler
     {
@@ -132,6 +192,8 @@ public sealed class JobDispatcherWorkerPoolTests : IAsyncDisposable
         }
 
         public bool HasStarted(Guid jobId) => _started.TryGetValue(jobId, out var started) && started.Task.IsCompleted;
+
+        public bool IsFinished(Guid jobId) => _finish.TryGetValue(jobId, out var finish) && finish.Task.IsCompleted;
 
         public Task WaitStartedAsync(IEnumerable<Guid> jobIds, TimeSpan timeout) =>
             Task.WhenAll(jobIds.Select(id => Gate(_started, id).Task)).WaitAsync(timeout);

@@ -55,9 +55,23 @@ public class JobRepository(ContextDbContext db) : IJobRepository
     public Task<Job?> DequeueNextAsync(CancellationToken ct) =>
         DequeueNextCoreAsync(db.Jobs.AsNoTracking().Where(j => j.Status == JobStatus.Pending), ct);
 
-    public Task<Job?> DequeueNextForProjectAsync(Guid? projectId, CancellationToken ct) =>
-        DequeueNextCoreAsync(
-            db.Jobs.AsNoTracking().Where(j => j.Status == JobStatus.Pending && j.ProjectId == projectId), ct);
+    public Task<Job?> DequeueNextForProjectAsync(Guid? projectId, JobLaneFilter filter, CancellationToken ct)
+    {
+        var pending = db.Jobs.AsNoTracking().Where(j => j.Status == JobStatus.Pending && j.ProjectId == projectId);
+        if (filter.OnlyTypes is { Count: > 0 } only)
+        {
+            var allowed = only.ToArray();
+            pending = pending.Where(j => allowed.Contains(j.Type));
+        }
+
+        if (filter.ExceptTypes is { Count: > 0 } except)
+        {
+            var excluded = except.ToArray();
+            pending = pending.Where(j => !excluded.Contains(j.Type));
+        }
+
+        return DequeueNextCoreAsync(pending, ct);
+    }
 
     public async Task<Job?> ForceClaimAsync(Guid id, JobStatus expectedStatus, CancellationToken ct)
     {

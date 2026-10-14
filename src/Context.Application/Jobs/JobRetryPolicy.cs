@@ -30,6 +30,14 @@ public static class JobRetryPolicy
 
     public static IReadOnlyList<JobType> UserData => UserDataTypes;
 
+    private static readonly JobType[] LightTypes = [JobType.ProcessHook, JobType.ForgetMemory];
+
+    /// <summary>Jobs that only touch the database and finish in well under a second. They run in a lane of their
+    /// own so they never wait behind LLM and embedding jobs that hold every ordinary slot for minutes.</summary>
+    public static IReadOnlyList<JobType> Light => LightTypes;
+
+    public static bool IsLight(JobType type) => Array.IndexOf(LightTypes, type) >= 0;
+
     public static bool IsUserData(JobType type) => Array.IndexOf(UserDataTypes, type) >= 0;
 
     public static JobRetryBudget For(JobType type) => type switch

@@ -18,9 +18,9 @@ public interface IJobRepository
     Task<Job?> DequeueNextAsync(CancellationToken ct);
 
     /// <summary><see cref="DequeueNextAsync"/> restricted to jobs whose <see cref="Job.ProjectId"/>
-    /// equals <paramref name="projectId"/> exactly — null claims only host-wide jobs, not "any".
-    /// Backs the dispatcher's per-project lanes.</summary>
-    Task<Job?> DequeueNextForProjectAsync(Guid? projectId, CancellationToken ct);
+    /// equals <paramref name="projectId"/> exactly — null claims only host-wide jobs, not "any" — and to the
+    /// job types <paramref name="filter"/> allows. Backs the dispatcher's per-project lanes.</summary>
+    Task<Job?> DequeueNextForProjectAsync(Guid? projectId, JobLaneFilter filter, CancellationToken ct);
 
     /// <summary>Claims one job regardless of priority, retry backoff or lane capacity, as a fresh
     /// first attempt — only if it is still in <paramref name="expectedStatus"/>, else null.</summary>
@@ -78,6 +78,12 @@ public interface IJobRepository
     /// its first tick and silently skip backups forever.
     /// </summary>
     Task<DateTimeOffset?> GetLastEnqueuedAtAsync(JobType type, CancellationToken ct);
+}
+
+/// <summary>Which job types a dispatcher lane may claim. Unset members match everything.</summary>
+public sealed record JobLaneFilter(IReadOnlyCollection<JobType>? OnlyTypes = null, IReadOnlyCollection<JobType>? ExceptTypes = null)
+{
+    public static readonly JobLaneFilter All = new();
 }
 
 /// <summary>Narrows a retention sweep. Unset members match everything.</summary>

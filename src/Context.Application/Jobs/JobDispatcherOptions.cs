@@ -11,4 +11,9 @@ public sealed class JobDispatcherOptions
     /// <summary>Host-wide slots on top, borrowed by lanes with a backlog and split evenly between them:
     /// a lone busy project gets them all while the others are idle.</summary>
     public int SharedWorkers { get; set; } = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
+
+    /// <summary>Slots each project has for light jobs (<see cref="JobRetryPolicy.IsLight"/>: hook processing, memory
+    /// deletes), kept apart from the ordinary slots so a project whose LLM or embedding jobs hold all of those for
+    /// minutes still records its hooks promptly. These jobs finish in milliseconds, so a couple is plenty.</summary>
+    public int LightWorkersPerProject { get; set; } = 2;
 }
