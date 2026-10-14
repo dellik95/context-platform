@@ -29,12 +29,13 @@ public sealed class MemoryReconsolidatorTests
     private readonly ReconsolidationChat _chat = new();
     private readonly FakeEmbeddingGenerator _embeddings = new();
     private readonly FakeUsageRecorder _usage = new();
+    private readonly FixedMergeOptionsProvider _mergeOptions = new();
     private readonly MemoryReconsolidator _sut;
     private DateTimeOffset _clock = DateTimeOffset.UtcNow.AddDays(-1);
 
     public MemoryReconsolidatorTests()
     {
-        _sut = new MemoryReconsolidator(_store, _codeVerifier, new FakeProviderResolver(_chat, _embeddings), _usage);
+        _sut = new MemoryReconsolidator(_store, _codeVerifier, new FakeProviderResolver(_chat, _embeddings), _usage, _mergeOptions);
     }
 
     [Fact]
@@ -203,20 +204,43 @@ public sealed class MemoryReconsolidatorTests
     }
 
     [Fact]
-    public async Task Canonical_that_drops_a_fact_makes_the_group_ambiguous_and_it_is_never_applied()
+    public async Task Canonical_that_drops_a_fact_gets_it_back_so_the_group_stays_applicable()
     {
         var refresh = Seed(SessionAmountRefresh(), Shared(1));
         var rules = Seed(RefreshRules(), Shared(2));
         var reuse = Seed(SessionReuse(), Shared(3));
         const string dropped = "Same upsert path is used in expired re‑arm logic";
-        var keptFacts = new[] { refresh, rules, reuse }.SelectMany(Facts).Where(f => f != dropped).ToList();
+        var allFacts = new[] { refresh, rules, reuse }.SelectMany(Facts).ToList();
+        var keptFacts = allFacts.Where(f => f != dropped).ToList();
         _chat.Answer = user => PaymentsCanonical(user, keptFacts, refresh, rules, reuse);
+        _embeddings.Map("", Axis(7));
+
+        var plan = await PlanAsync();
+
+        var group = plan.Groups.Should().ContainSingle().Subject;
+        group.Ambiguous.Should().BeFalse(group.Note);
+        group.Canonicals.Should().ContainSingle().Which.Facts.Should().BeEquivalentTo(allFacts);
+
+        await ApplyAsync(plan);
+
+        Facts(_store.Live.Should().ContainSingle().Subject).Should().Contain(dropped);
+    }
+
+    [Fact]
+    public async Task Canonical_that_cannot_keep_every_fact_within_the_limit_makes_the_group_ambiguous_and_it_is_never_applied()
+    {
+        var refresh = Seed(SessionAmountRefresh(), Shared(1));
+        var rules = Seed(RefreshRules(), Shared(2));
+        var reuse = Seed(SessionReuse(), Shared(3));
+        var allFacts = new[] { refresh, rules, reuse }.SelectMany(Facts).ToList();
+        _mergeOptions.Options = _mergeOptions.Options with { MaxFacts = 3 };
+        _chat.Answer = user => PaymentsCanonical(user, allFacts, refresh, rules, reuse);
 
         var plan = await PlanAsync();
 
         var group = plan.Groups.Should().ContainSingle().Subject;
         group.Ambiguous.Should().BeTrue();
-        group.Note.Should().Contain("drops a fact").And.Contain(dropped);
+        group.Note.Should().Contain("3-fact limit");
         plan.Stats.AmbiguousGroups.Should().Be(1);
         plan.Untouched.Should().Be(3);
 
@@ -225,6 +249,40 @@ public sealed class MemoryReconsolidatorTests
         applied.Outcome!.SkippedGroups.Should().Equal(new SkippedGroup(group.Index, "ambiguous"));
         _store.All.Should().HaveCount(3);
         _store.Live.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public async Task Canonical_body_that_leaves_out_a_source_identifier_gets_a_closing_line_naming_it()
+    {
+        var refresh = Seed(SessionAmountRefresh(), Shared(1));
+        var rules = Seed(RefreshRules(), Shared(2));
+        var reuse = Seed(SessionReuse(), Shared(3));
+        var allFacts = new[] { refresh, rules, reuse }.SelectMany(Facts).ToList();
+        _chat.Answer = user => PaymentsCanonical(user, allFacts, refresh, rules, reuse);
+
+        var plan = await PlanAsync();
+
+        var group = plan.Groups.Should().ContainSingle().Subject;
+        group.Ambiguous.Should().BeFalse(group.Note);
+        group.Canonicals.Should().ContainSingle().Which.Body.Should().Contain("Also referenced:").And.Contain("checkoutSessionInput");
+    }
+
+    [Fact]
+    public async Task Canonical_body_over_the_limit_makes_the_group_ambiguous_instead_of_being_cut()
+    {
+        var refresh = Seed(SessionAmountRefresh(), Shared(1));
+        var rules = Seed(RefreshRules(), Shared(2));
+        var reuse = Seed(SessionReuse(), Shared(3));
+        var allFacts = new[] { refresh, rules, reuse }.SelectMany(Facts).ToList();
+        _mergeOptions.Options = _mergeOptions.Options with { MaxBodyChars = 120 };
+        _chat.Answer = user => PaymentsCanonical(user, allFacts, refresh, rules, reuse);
+
+        var plan = await PlanAsync();
+
+        var group = plan.Groups.Should().ContainSingle().Subject;
+        group.Ambiguous.Should().BeTrue();
+        group.Note.Should().Contain("120-character limit");
+        group.Canonicals.Should().BeEmpty();
     }
 
     [Fact]
@@ -387,14 +445,62 @@ public sealed class MemoryReconsolidatorTests
                 [$"Refund rule {i} is enforced by RefundPolicy.cs"]), Shared(1 + (i % 7)));
         }
 
+        _mergeOptions.Options = _mergeOptions.Options with { ReconsolidationMaxGroupSize = 8 };
         _chat.Answer = _ => NoneSections;
 
         var plan = await PlanAsync();
 
         plan.Groups.Should().BeEmpty("a group the model leaves untouched is not reported");
         _chat.Calls.Should().HaveCount(2);
-        _chat.Calls.Select(c => SourceTitles(c).Count).Should().AllSatisfy(n => n.Should().BeLessThanOrEqualTo(MemoryReconsolidator.MaxGroupSize));
+        _chat.Calls.Select(c => SourceTitles(c).Count).Should().AllSatisfy(n => n.Should().BeLessThanOrEqualTo(8));
         _chat.Calls.Sum(c => SourceTitles(c).Count).Should().Be(10);
+    }
+
+    [Fact]
+    public async Task Group_size_setting_lets_a_larger_component_be_reconsolidated_as_one_group()
+    {
+        for (var i = 0; i < 10; i++)
+        {
+            Seed(Knowledge(MemoryType.Fact, $"RefundPolicy rule {i}", $"RefundPolicy.cs applies refund rule {i}.", $"Refund rule {i}",
+                [$"Refund rule {i} is enforced by RefundPolicy.cs"]), Shared(1 + (i % 7)));
+        }
+
+        _mergeOptions.Options = _mergeOptions.Options with { ReconsolidationMaxGroupSize = 12 };
+        _chat.Answer = _ => NoneSections;
+
+        await PlanAsync();
+
+        _chat.Calls.Should().ContainSingle();
+        SourceTitles(_chat.Calls[0]).Should().HaveCount(10);
+    }
+
+    [Theory]
+    [InlineData(0.60, 1)]
+    [InlineData(0.90, 0)]
+    public async Task Cluster_similarity_setting_decides_whether_topic_sharing_memories_are_grouped(double minSimilarity, int expectedCalls)
+    {
+        Seed(Knowledge(MemoryType.Fact, "Alpha rule", "AlphaPolicy.cs applies the alpha rule.", "Shared topic", ["Alpha rule is enforced by AlphaPolicy.cs"]), Shared(1));
+        Seed(Knowledge(MemoryType.Fact, "Beta rule", "BetaPolicy.cs applies the beta rule.", "Shared topic", ["Beta rule is enforced by BetaPolicy.cs"]), Shared(2));
+        _mergeOptions.Options = _mergeOptions.Options with { ReconsolidationMinSimilarity = minSimilarity };
+        _chat.Answer = _ => NoneSections;
+
+        await PlanAsync();
+
+        _chat.Calls.Should().HaveCount(expectedCalls);
+    }
+
+    [Fact]
+    public async Task Source_excerpt_setting_bounds_how_much_of_each_body_the_model_sees()
+    {
+        Seed(Knowledge(MemoryType.Fact, "Alpha rule", "AlphaPolicy.cs " + new string('a', 2000), "Shared topic", ["Alpha rule is enforced by AlphaPolicy.cs"]), Shared(1));
+        Seed(Knowledge(MemoryType.Fact, "Beta rule", "BetaPolicy.cs " + new string('b', 2000), "Shared topic", ["Beta rule is enforced by BetaPolicy.cs"]), Shared(2));
+        _mergeOptions.Options = _mergeOptions.Options with { ReconsolidationSourceExcerptChars = 600 };
+        _chat.Answer = _ => NoneSections;
+
+        await PlanAsync();
+
+        var prompt = _chat.Calls.Should().ContainSingle().Subject;
+        prompt.Should().Contain(new string('a', 400)).And.NotContain(new string('a', 700));
     }
 
     private Task<ReconsolidationReport> PlanAsync() => _sut.PlanAsync(_projectId, CancellationToken.None);

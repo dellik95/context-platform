@@ -1,5 +1,6 @@
 import { CommonModule } from '@angular/common';
-import { Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
+import { Component, DestroyRef, Injector, afterNextRender, computed, effect, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCheckboxChange, MatCheckboxModule } from '@angular/material/checkbox';
@@ -11,15 +12,38 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { ApiService } from '../../core/api.service';
-import { ReconsolidationGroup, ReconsolidationStats } from '../../core/models';
+import {
+  ConsolidationReportStatus,
+  ReconsolidationGroup,
+  ReconsolidationReportSummaryDto,
+  ReconsolidationStats,
+} from '../../core/models';
 import { SignalrService } from '../../core/signalr.service';
 import { ProjectContextService } from '../projects/project-context.service';
+
+const FINISHED_STATUSES: readonly ConsolidationReportStatus[] = ['Applied', 'Discarded', 'Failed'];
+
+function isFinished(status: ConsolidationReportStatus): boolean {
+  return FINISHED_STATUSES.includes(status);
+}
+
+function deleteFailureMessage(httpStatus: number): string {
+  switch (httpStatus) {
+    case 404:
+      return 'The report no longer exists.';
+    case 409:
+      return 'The report is being applied and cannot be deleted yet.';
+    default:
+      return 'Failed to delete the report.';
+  }
+}
 
 /**
  * Batch memory reconsolidation: queue a dry run, review its report group by group, then apply it
  * with some groups excluded or discard it. Runs are background jobs, so after queueing one the
- * reports list refetches on every job-count push until it changes. Opened from the Memories page
- * with that page's injector, so it shares the page's ProjectContextService.
+ * reports list refetches on every job-count push until it changes. A report's details expand
+ * inline under its row, one at a time. Opened from the Memories page with that page's injector,
+ * so it shares the page's ProjectContextService.
  */
 @Component({
   selector: 'app-consolidation-dialog',
@@ -43,6 +67,7 @@ export class ConsolidationDialogComponent {
   private readonly signalr = inject(SignalrService);
   private readonly destroyRef = inject(DestroyRef);
   private readonly ctx = inject(ProjectContextService);
+  private readonly injector = inject(Injector);
 
   private readonly reportsResource = this.api.reconsolidationReportsResource(this.ctx.projectId);
   protected readonly reports = computed(() => (this.reportsResource.hasValue() ? this.reportsResource.value() : []));
@@ -50,7 +75,11 @@ export class ConsolidationDialogComponent {
 
   protected readonly selectedReportId = signal<string | null>(null);
   private readonly reportResource = this.api.reconsolidationReportResource(this.selectedReportId);
-  protected readonly selected = computed(() => (this.reportResource.hasValue() ? this.reportResource.value() ?? null : null));
+  // A report that is not the selected one is never shown: it would flash under the wrong row.
+  protected readonly selected = computed(() => {
+    const dto = this.reportResource.hasValue() ? this.reportResource.value() ?? null : null;
+    return dto?.id === this.selectedReportId() ? dto : null;
+  });
   protected readonly selectedLoading = this.reportResource.isLoading;
   // Reloads keep the list and report on screen; a first load replaces them with a full bar instead.
   protected readonly refreshing = computed(
@@ -60,8 +89,10 @@ export class ConsolidationDialogComponent {
   );
 
   protected readonly excluded = signal<ReadonlySet<number>>(new Set());
-  protected readonly busyAction = signal<'dryRun' | 'apply' | 'discard' | null>(null);
+  protected readonly busyAction = signal<'dryRun' | 'apply' | 'discard' | 'delete' | 'clear' | null>(null);
   protected readonly busy = computed(() => this.busyAction() !== null);
+  protected readonly deletingId = signal<string | null>(null);
+  protected readonly finishedCount = computed(() => this.reports().filter((r) => isFinished(r.status)).length);
 
   /** Report ids and statuses when a job was queued; null when nothing is awaited. */
   private readonly awaitedSignature = signal<string | null>(null);
@@ -125,9 +156,18 @@ export class ConsolidationDialogComponent {
     this.reportsResource.reload();
   }
 
-  protected select(reportId: string): void {
+  protected select(reportId: string, row: HTMLElement): void {
+    const opening = this.selectedReportId() !== reportId;
+    this.setSelected(opening ? reportId : null);
+    if (opening) {
+      // Collapsing the previously open report moves this row, so bring it back to the top once rendered.
+      afterNextRender(() => row.scrollIntoView({ block: 'start', behavior: 'smooth' }), { injector: this.injector });
+    }
+  }
+
+  private setSelected(reportId: string | null): void {
     this.excluded.set(new Set());
-    this.selectedReportId.set(this.selectedReportId() === reportId ? null : reportId);
+    this.selectedReportId.set(reportId);
   }
 
   protected toggleGroup(group: ReconsolidationGroup, event: MatCheckboxChange): void {
@@ -178,6 +218,58 @@ export class ConsolidationDialogComponent {
       error: () => {
         this.busyAction.set(null);
         this.snackBar.open('Failed to discard the report — it may no longer be pending.', 'Dismiss');
+      },
+    });
+  }
+
+  protected deleteReport(report: ReconsolidationReportSummaryDto): void {
+    if (!confirm(`Delete this ${report.status.toLowerCase()} report permanently?`)) {
+      return;
+    }
+
+    this.busyAction.set('delete');
+    this.deletingId.set(report.id);
+    this.api.deleteReconsolidationReport(report.id).subscribe({
+      next: () => {
+        this.busyAction.set(null);
+        this.deletingId.set(null);
+        if (this.selectedReportId() === report.id) {
+          this.setSelected(null);
+        }
+        this.reportsResource.reload();
+        this.snackBar.open('Report deleted.', 'Dismiss', { duration: 3000 });
+      },
+      error: (err: HttpErrorResponse) => {
+        this.busyAction.set(null);
+        this.deletingId.set(null);
+        if (err.status === 404) {
+          this.reportsResource.reload();
+        }
+        this.snackBar.open(deleteFailureMessage(err.status), 'Dismiss');
+      },
+    });
+  }
+
+  protected clearFinished(): void {
+    const count = this.finishedCount();
+    if (!confirm(`Delete ${count} applied, discarded and failed ${count === 1 ? 'report' : 'reports'}? Pending reports are kept.`)) {
+      return;
+    }
+
+    this.busyAction.set('clear');
+    this.api.cleanupReconsolidationReports().subscribe({
+      next: (result) => {
+        this.busyAction.set(null);
+        const open = this.reports().find((r) => r.id === this.selectedReportId());
+        if (open && isFinished(open.status)) {
+          this.setSelected(null);
+        }
+        this.reportsResource.reload();
+        this.snackBar.open(`Removed ${result.removed} ${result.removed === 1 ? 'report' : 'reports'}.`, 'Dismiss', { duration: 3000 });
+      },
+      error: () => {
+        this.busyAction.set(null);
+        this.snackBar.open('Failed to clear the finished reports.', 'Dismiss');
       },
     });
   }

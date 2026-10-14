@@ -130,6 +130,69 @@ public sealed class ProjectSettingsValidatorTests
             .Should().ContainSingle(e => e.Contains(nameof(ProjectSettingsDto.EmbeddingBatchSize)));
     }
 
+    [Fact]
+    public void Validate_accepts_the_default_merge_settings()
+    {
+        ProjectSettingsValidator.Validate(BuildValidSettings()).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(nameof(ProjectSettingsDto.OnlineMergeMaxSources), 1, true)]
+    [InlineData(nameof(ProjectSettingsDto.OnlineMergeMaxSources), 2, false)]
+    [InlineData(nameof(ProjectSettingsDto.OnlineMergeMaxSources), 10, false)]
+    [InlineData(nameof(ProjectSettingsDto.OnlineMergeMaxSources), 11, true)]
+    [InlineData(nameof(ProjectSettingsDto.MergedMemoryMaxBodyChars), 999, true)]
+    [InlineData(nameof(ProjectSettingsDto.MergedMemoryMaxBodyChars), 1000, false)]
+    [InlineData(nameof(ProjectSettingsDto.MergedMemoryMaxBodyChars), 32000, false)]
+    [InlineData(nameof(ProjectSettingsDto.MergedMemoryMaxBodyChars), 32001, true)]
+    [InlineData(nameof(ProjectSettingsDto.MergedMemoryMaxFacts), 4, true)]
+    [InlineData(nameof(ProjectSettingsDto.MergedMemoryMaxFacts), 5, false)]
+    [InlineData(nameof(ProjectSettingsDto.MergedMemoryMaxFacts), 100, false)]
+    [InlineData(nameof(ProjectSettingsDto.MergedMemoryMaxFacts), 101, true)]
+    [InlineData(nameof(ProjectSettingsDto.ReconsolidationMaxGroupSize), 1, true)]
+    [InlineData(nameof(ProjectSettingsDto.ReconsolidationMaxGroupSize), 2, false)]
+    [InlineData(nameof(ProjectSettingsDto.ReconsolidationMaxGroupSize), 50, false)]
+    [InlineData(nameof(ProjectSettingsDto.ReconsolidationMaxGroupSize), 51, true)]
+    [InlineData(nameof(ProjectSettingsDto.ReconsolidationSourceExcerptChars), 499, true)]
+    [InlineData(nameof(ProjectSettingsDto.ReconsolidationSourceExcerptChars), 500, false)]
+    [InlineData(nameof(ProjectSettingsDto.ReconsolidationSourceExcerptChars), 16000, false)]
+    [InlineData(nameof(ProjectSettingsDto.ReconsolidationSourceExcerptChars), 16001, true)]
+    public void Validate_enforces_the_merge_setting_ranges(string field, int value, bool rejected)
+    {
+        var settings = field switch
+        {
+            nameof(ProjectSettingsDto.OnlineMergeMaxSources) => BuildValidSettings() with { OnlineMergeMaxSources = value },
+            nameof(ProjectSettingsDto.MergedMemoryMaxBodyChars) => BuildValidSettings() with { MergedMemoryMaxBodyChars = value },
+            nameof(ProjectSettingsDto.MergedMemoryMaxFacts) => BuildValidSettings() with { MergedMemoryMaxFacts = value },
+            nameof(ProjectSettingsDto.ReconsolidationMaxGroupSize) => BuildValidSettings() with { ReconsolidationMaxGroupSize = value },
+            _ => BuildValidSettings() with { ReconsolidationSourceExcerptChars = value },
+        };
+
+        var errors = ProjectSettingsValidator.Validate(settings);
+
+        if (rejected)
+        {
+            errors.Should().ContainSingle(e => e.Contains(field));
+        }
+        else
+        {
+            errors.Should().BeEmpty();
+        }
+    }
+
+    [Theory]
+    [InlineData(0.29, true)]
+    [InlineData(0.30, false)]
+    [InlineData(0.95, false)]
+    [InlineData(0.96, true)]
+    [InlineData(double.NaN, true)]
+    public void Validate_enforces_the_cluster_similarity_range(double value, bool rejected)
+    {
+        var errors = ProjectSettingsValidator.Validate(BuildValidSettings() with { ReconsolidationClusterMinSimilarity = value });
+
+        errors.Should().HaveCount(rejected ? 1 : 0);
+    }
+
     private static ProjectSettingsDto BuildValidSettings() =>
         new(
             EmbeddingProvider: "noop",

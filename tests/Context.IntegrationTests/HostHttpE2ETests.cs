@@ -73,6 +73,7 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
         await AssertCrossProjectAccessIsRejectedAsync(client, project);
         await AssertPendingCleanupKeepsUserDataJobsAsync(client, project);
         await AssertMemoryDeleteIsQueuedThenAppliedAsync(client, project);
+        await AssertConsolidationReportsCanBeDeletedAsync(client, project);
         await AssertHubJoinIsScopedToTheTokensProjectAsync(project);
         await AssertHookAuthAsync(client);
         await AssertSearchSmokeAsync(client, project);
@@ -394,6 +395,56 @@ public sealed class HostHttpE2ETests : IClassFixture<HostHttpE2ETests.HostHttpWe
             DateTimeOffset.UtcNow.Should().BeBefore(deadline, "the ForgetMemory job should have deleted the memory by now");
             await Task.Delay(100);
         }
+    }
+
+    /// <summary>Reports leave the consolidation list one at a time or in bulk, except while they are being applied.</summary>
+    private async Task AssertConsolidationReportsCanBeDeletedAsync(HttpClient client, ProjectDto project)
+    {
+        async Task<Guid> SeedAsync(ConsolidationReportStatus status)
+        {
+            using var scope = _factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ContextDbContext>();
+            var report = new MemoryConsolidationReport { Id = Guid.NewGuid(), ProjectId = project.Id, CreatedAt = DateTimeOffset.UtcNow, ReportJson = "{}", Status = status };
+            db.MemoryConsolidationReports.Add(report);
+            await db.SaveChangesAsync();
+            return report.Id;
+        }
+
+        async Task<bool> ExistsAsync(Guid id)
+        {
+            using var scope = _factory.Services.CreateScope();
+            return await scope.ServiceProvider.GetRequiredService<ContextDbContext>().MemoryConsolidationReports.AsNoTracking().AnyAsync(r => r.Id == id);
+        }
+
+        async Task<HttpStatusCode> DeleteAsync(string url)
+        {
+            using var request = CreateAuthorizedRequest(HttpMethod.Delete, url, project.Token!);
+            return (await client.SendAsync(request)).StatusCode;
+        }
+
+        var discarded = await SeedAsync(ConsolidationReportStatus.Discarded);
+        var applied = await SeedAsync(ConsolidationReportStatus.Applied);
+        var pending = await SeedAsync(ConsolidationReportStatus.Pending);
+        var applying = await SeedAsync(ConsolidationReportStatus.Applying);
+        const string reports = "/api/memories/reconsolidation/reports";
+
+        (await DeleteAsync($"{reports}/{Guid.NewGuid()}")).Should().Be(HttpStatusCode.NotFound);
+        (await DeleteAsync($"{reports}/{applying}")).Should().Be(HttpStatusCode.Conflict);
+        (await DeleteAsync($"{reports}/{discarded}")).Should().Be(HttpStatusCode.NoContent);
+        (await ExistsAsync(discarded)).Should().BeFalse();
+
+        (await DeleteAsync($"{reports}?status=Applying")).Should().Be(HttpStatusCode.BadRequest);
+
+        using (var bulk = CreateAuthorizedRequest(HttpMethod.Delete, reports, project.Token!))
+        {
+            var response = await client.SendAsync(bulk);
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("removed").GetInt32().Should().Be(1);
+        }
+
+        (await ExistsAsync(applied)).Should().BeFalse("finished reports are cleared");
+        (await ExistsAsync(pending)).Should().BeTrue("a Pending report still awaits review");
+        (await ExistsAsync(applying)).Should().BeTrue();
     }
 
     // Both transports: long polling hands the hub a cloned HttpContext, not the authenticated request's own.

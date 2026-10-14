@@ -76,9 +76,22 @@ public sealed class ReconsolidationPromptTests
             new Context.Domain.Entities.Memory { Type = MemoryType.Issue, Title = "Second", Body = "second body", FilesReadJson = "[\"src/A.cs\"]" },
         };
 
-        var prompt = ReconsolidationPrompt.BuildUserPrompt(memories).Replace("\r\n", "\n");
+        var prompt = ReconsolidationPrompt.BuildUserPrompt(memories, 1500).Replace("\r\n", "\n");
 
         prompt.Should().Contain("SOURCE 1\nTYPE: Fact\nTITLE: First").And.Contain("- a fact").And.Contain("SOURCE 2\nTYPE: Issue\nTITLE: Second")
             .And.Contain("FILES: src/A.cs");
+    }
+
+    [Fact]
+    public void User_prompt_cuts_each_body_at_the_excerpt_length()
+    {
+        var memories = new[]
+        {
+            new Context.Domain.Entities.Memory { Type = MemoryType.Fact, Title = "First", Body = new string('a', 900) },
+        };
+
+        var prompt = ReconsolidationPrompt.BuildUserPrompt(memories, 400);
+
+        prompt.Should().Contain(new string('a', 400) + "…").And.NotContain(new string('a', 401));
     }
 }

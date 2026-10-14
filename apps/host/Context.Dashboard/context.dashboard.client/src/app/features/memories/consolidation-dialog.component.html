@@ -21,6 +21,17 @@
         <mat-icon>refresh</mat-icon>
         Refresh
       </button>
+      <button
+        mat-button
+        color="warn"
+        [disabled]="busy() || finishedCount() === 0"
+        [showProgress]="busyAction() === 'clear'"
+        (click)="clearFinished()"
+      >
+        <mat-spinner progressIndicator diameter="18" />
+        <mat-icon>delete_sweep</mat-icon>
+        Clear finished
+      </button>
       @if (refreshing()) {
         <mat-progress-bar mode="indeterminate" class="inline-progress" />
       }
@@ -33,176 +44,190 @@
     } @else {
       <ul class="report-list">
         @for (report of reports(); track report.id) {
-          <li class="report-row" [class.selected]="report.id === selectedReportId()">
-            <span class="status-chip" [ngClass]="'status--' + report.status.toLowerCase()">{{ report.status }}</span>
-            <span class="report-date">{{ report.createdAt | date: 'short' }}</span>
-            <span class="muted report-stats">{{ statsLine(report.stats) }}</span>
-            <button mat-button (click)="select(report.id)">{{ report.id === selectedReportId() ? 'Hide' : 'View' }}</button>
+          <li #item class="report-item" [class.selected]="report.id === selectedReportId()">
+            <div class="report-row">
+              <span class="status-chip" [ngClass]="'status--' + report.status.toLowerCase()">{{ report.status }}</span>
+              <span class="report-date">{{ report.createdAt | date: 'short' }}</span>
+              <span class="muted report-stats">{{ statsLine(report.stats) }}</span>
+              <button mat-button (click)="select(report.id, item)">{{ report.id === selectedReportId() ? 'Hide' : 'View' }}</button>
+              <button
+                mat-icon-button
+                matTooltip="Delete this report"
+                [disabled]="busy() || report.status === 'Applying'"
+                [showProgress]="deletingId() === report.id"
+                (click)="deleteReport(report)"
+              >
+                <mat-spinner progressIndicator diameter="18" />
+                <mat-icon>delete_outline</mat-icon>
+              </button>
+            </div>
+
+            @if (report.id === selectedReportId()) {
+              <div class="report-detail-panel">
+                @if (selectedLoading() && !selected()) {
+                  <mat-progress-bar mode="indeterminate" />
+                } @else if (selected(); as dto) {
+                  <section class="report-detail">
+                    <div class="report-summary">
+                      <span>{{ dto.report.stats.liveKnowledge }} live knowledge memories</span>
+                      <span>{{ dto.report.stats.reembedded }} re-embedded</span>
+                      <span>{{ dto.report.untouched }} untouched</span>
+                      @if (dto.report.stats.ambiguousGroups > 0) {
+                        <span>{{ dto.report.stats.ambiguousGroups }} ambiguous groups (never applied)</span>
+                      }
+                    </div>
+
+                    @if (dto.status === 'Pending') {
+                      <div class="toolbar">
+                        <button
+                          mat-flat-button
+                          color="primary"
+                          [disabled]="busy()"
+                          [showProgress]="busyAction() === 'apply'"
+                          (click)="apply()"
+                        >
+                          <mat-spinner progressIndicator diameter="18" />
+                          Apply {{ applicableGroups() }} {{ applicableGroups() === 1 ? 'group' : 'groups' }}
+                        </button>
+                        <button
+                          mat-button
+                          color="warn"
+                          [disabled]="busy()"
+                          [showProgress]="busyAction() === 'discard'"
+                          (click)="discard()"
+                        >
+                          <mat-spinner progressIndicator diameter="18" />
+                          Discard
+                        </button>
+                      </div>
+                    }
+
+                    @if (dto.report.outcome; as outcome) {
+                      <div class="outcome">
+                        Applied {{ outcome.appliedAt | date: 'short' }}: groups {{ outcome.appliedGroups.join(', ') || 'none' }}
+                        @if (outcome.excludedGroups.length > 0) {
+                          · excluded {{ outcome.excludedGroups.join(', ') }}
+                        }
+                        · {{ outcome.retiredChangeLogs }} change logs retired
+                        @for (skipped of outcome.skippedGroups; track skipped.index) {
+                          <div class="muted">Group {{ skipped.index }} skipped: {{ skipped.reason }}</div>
+                        }
+                      </div>
+                    }
+
+                    <mat-accordion multi>
+                      @for (group of dto.report.groups; track group.index) {
+                        <mat-expansion-panel>
+                          <mat-expansion-panel-header>
+                            <mat-panel-title>
+                              @if (dto.status === 'Pending') {
+                                <mat-checkbox
+                                  [checked]="!group.ambiguous && !excluded().has(group.index)"
+                                  [disabled]="group.ambiguous"
+                                  (click)="$event.stopPropagation()"
+                                  (change)="toggleGroup(group, $event)"
+                                  matTooltip="Include this group when applying"
+                                />
+                              }
+                              Group {{ group.index }}
+                            </mat-panel-title>
+                            <mat-panel-description>
+                              {{ group.sources.length }} sources → {{ group.canonicals.length }} canonical
+                              @if (group.contradictions.length > 0) {
+                                <span class="flag flag--contradiction">{{ group.contradictions.length }} contradictions</span>
+                              }
+                              @if (group.ambiguous) {
+                                <span class="flag flag--ambiguous">ambiguous</span>
+                              }
+                            </mat-panel-description>
+                          </mat-expansion-panel-header>
+
+                          <div class="group-body">
+                            <div class="group-column">
+                              <span class="detail-label">Sources</span>
+                              <ul>
+                                @for (source of group.sources; track source.id) {
+                                  <li [class.muted]="group.keepSeparate.includes(source.id)">
+                                    <strong>{{ source.type }}</strong> {{ source.title }}
+                                    @if (source.status !== 'Active') {
+                                      <span class="muted">({{ source.status }})</span>
+                                    }
+                                    @if (group.keepSeparate.includes(source.id)) {
+                                      <span class="muted">· kept separate</span>
+                                    }
+                                  </li>
+                                }
+                              </ul>
+                            </div>
+                            <mat-icon class="arrow">arrow_forward</mat-icon>
+                            <div class="group-column">
+                              <span class="detail-label">Canonicals</span>
+                              @for (canonical of group.canonicals; track $index) {
+                                <div class="canonical">
+                                  <div>
+                                    <strong>{{ canonical.type }}</strong>
+                                    @if (canonical.topic) {
+                                      <span class="muted">· {{ canonical.topic }}</span>
+                                    }
+                                    {{ canonical.title }}
+                                  </div>
+                                  <p class="canonical-body">{{ canonical.body }}</p>
+                                  @if (canonical.facts.length > 0) {
+                                    <ul>
+                                      @for (fact of canonical.facts; track $index) {
+                                        <li>{{ fact }}</li>
+                                      }
+                                    </ul>
+                                  }
+                                  <span class="muted">from {{ canonical.sourceIds.length }} sources</span>
+                                </div>
+                              } @empty {
+                                <span class="muted">None</span>
+                              }
+                            </div>
+                          </div>
+
+                          @if (group.contradictions.length > 0) {
+                            <span class="detail-label">Contradictions</span>
+                            <ul>
+                              @for (contradiction of group.contradictions; track $index) {
+                                <li>
+                                  "{{ titleOf(contradiction.a) }}" vs "{{ titleOf(contradiction.b) }}"
+                                  @if (contradiction.reason) {
+                                    — {{ contradiction.reason }}
+                                  }
+                                  @if (contradiction.codeCheck; as check) {
+                                    <span class="muted">
+                                      (code: {{ check.a }} / {{ check.b }}{{ check.winnerId ? '; keeps "' + titleOf(check.winnerId) + '"' : '' }})
+                                    </span>
+                                  }
+                                </li>
+                              }
+                            </ul>
+                          }
+
+                          @if (group.note) {
+                            <p class="muted">{{ group.note }}</p>
+                          }
+                        </mat-expansion-panel>
+                      }
+                    </mat-accordion>
+
+                    @if (dto.report.retiredChangeLogs.length > 0) {
+                      <span class="detail-label">Change logs to retire</span>
+                      <ul>
+                        @for (log of dto.report.retiredChangeLogs; track log.id) {
+                          <li>{{ log.title }} <span class="muted">— {{ log.reason }}</span></li>
+                        }
+                      </ul>
+                    }
+                  </section>
+                }
+              </div>
+            }
           </li>
         }
       </ul>
-    }
-
-    @if (selectedReportId()) {
-      @if (selectedLoading() && !selected()) {
-        <mat-progress-bar mode="indeterminate" />
-      } @else if (selected(); as dto) {
-        <section class="report-detail">
-          <div class="report-summary">
-            <span>{{ dto.report.stats.liveKnowledge }} live knowledge memories</span>
-            <span>{{ dto.report.stats.reembedded }} re-embedded</span>
-            <span>{{ dto.report.untouched }} untouched</span>
-            @if (dto.report.stats.ambiguousGroups > 0) {
-              <span>{{ dto.report.stats.ambiguousGroups }} ambiguous groups (never applied)</span>
-            }
-          </div>
-
-          @if (dto.status === 'Pending') {
-            <div class="toolbar">
-              <button
-                mat-flat-button
-                color="primary"
-                [disabled]="busy()"
-                [showProgress]="busyAction() === 'apply'"
-                (click)="apply()"
-              >
-                <mat-spinner progressIndicator diameter="18" />
-                Apply {{ applicableGroups() }} {{ applicableGroups() === 1 ? 'group' : 'groups' }}
-              </button>
-              <button
-                mat-button
-                color="warn"
-                [disabled]="busy()"
-                [showProgress]="busyAction() === 'discard'"
-                (click)="discard()"
-              >
-                <mat-spinner progressIndicator diameter="18" />
-                Discard
-              </button>
-            </div>
-          }
-
-          @if (dto.report.outcome; as outcome) {
-            <div class="outcome">
-              Applied {{ outcome.appliedAt | date: 'short' }}: groups {{ outcome.appliedGroups.join(', ') || 'none' }}
-              @if (outcome.excludedGroups.length > 0) {
-                · excluded {{ outcome.excludedGroups.join(', ') }}
-              }
-              · {{ outcome.retiredChangeLogs }} change logs retired
-              @for (skipped of outcome.skippedGroups; track skipped.index) {
-                <div class="muted">Group {{ skipped.index }} skipped: {{ skipped.reason }}</div>
-              }
-            </div>
-          }
-
-          <mat-accordion multi>
-            @for (group of dto.report.groups; track group.index) {
-              <mat-expansion-panel>
-                <mat-expansion-panel-header>
-                  <mat-panel-title>
-                    @if (dto.status === 'Pending') {
-                      <mat-checkbox
-                        [checked]="!group.ambiguous && !excluded().has(group.index)"
-                        [disabled]="group.ambiguous"
-                        (click)="$event.stopPropagation()"
-                        (change)="toggleGroup(group, $event)"
-                        matTooltip="Include this group when applying"
-                      />
-                    }
-                    Group {{ group.index }}
-                  </mat-panel-title>
-                  <mat-panel-description>
-                    {{ group.sources.length }} sources → {{ group.canonicals.length }} canonical
-                    @if (group.contradictions.length > 0) {
-                      <span class="flag flag--contradiction">{{ group.contradictions.length }} contradictions</span>
-                    }
-                    @if (group.ambiguous) {
-                      <span class="flag flag--ambiguous">ambiguous</span>
-                    }
-                  </mat-panel-description>
-                </mat-expansion-panel-header>
-
-                <div class="group-body">
-                  <div class="group-column">
-                    <span class="detail-label">Sources</span>
-                    <ul>
-                      @for (source of group.sources; track source.id) {
-                        <li [class.muted]="group.keepSeparate.includes(source.id)">
-                          <strong>{{ source.type }}</strong> {{ source.title }}
-                          @if (source.status !== 'Active') {
-                            <span class="muted">({{ source.status }})</span>
-                          }
-                          @if (group.keepSeparate.includes(source.id)) {
-                            <span class="muted">· kept separate</span>
-                          }
-                        </li>
-                      }
-                    </ul>
-                  </div>
-                  <mat-icon class="arrow">arrow_forward</mat-icon>
-                  <div class="group-column">
-                    <span class="detail-label">Canonicals</span>
-                    @for (canonical of group.canonicals; track $index) {
-                      <div class="canonical">
-                        <div>
-                          <strong>{{ canonical.type }}</strong>
-                          @if (canonical.topic) {
-                            <span class="muted">· {{ canonical.topic }}</span>
-                          }
-                          {{ canonical.title }}
-                        </div>
-                        <p class="canonical-body">{{ canonical.body }}</p>
-                        @if (canonical.facts.length > 0) {
-                          <ul>
-                            @for (fact of canonical.facts; track $index) {
-                              <li>{{ fact }}</li>
-                            }
-                          </ul>
-                        }
-                        <span class="muted">from {{ canonical.sourceIds.length }} sources</span>
-                      </div>
-                    } @empty {
-                      <span class="muted">None</span>
-                    }
-                  </div>
-                </div>
-
-                @if (group.contradictions.length > 0) {
-                  <span class="detail-label">Contradictions</span>
-                  <ul>
-                    @for (contradiction of group.contradictions; track $index) {
-                      <li>
-                        "{{ titleOf(contradiction.a) }}" vs "{{ titleOf(contradiction.b) }}"
-                        @if (contradiction.reason) {
-                          — {{ contradiction.reason }}
-                        }
-                        @if (contradiction.codeCheck; as check) {
-                          <span class="muted">
-                            (code: {{ check.a }} / {{ check.b }}{{ check.winnerId ? '; keeps "' + titleOf(check.winnerId) + '"' : '' }})
-                          </span>
-                        }
-                      </li>
-                    }
-                  </ul>
-                }
-
-                @if (group.note) {
-                  <p class="muted">{{ group.note }}</p>
-                }
-              </mat-expansion-panel>
-            }
-          </mat-accordion>
-
-          @if (dto.report.retiredChangeLogs.length > 0) {
-            <span class="detail-label">Change logs to retire</span>
-            <ul>
-              @for (log of dto.report.retiredChangeLogs; track log.id) {
-                <li>{{ log.title }} <span class="muted">— {{ log.reason }}</span></li>
-              }
-            </ul>
-          }
-        </section>
-      }
     }
 </mat-dialog-content>
 

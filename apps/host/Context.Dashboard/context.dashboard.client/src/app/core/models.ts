@@ -276,6 +276,11 @@ export interface ReconsolidationReportDto {
   report: ReconsolidationReport;
 }
 
+// Response of DELETE /api/memories/reconsolidation/reports.
+export interface CleanupReconsolidationReportsResponse {
+  removed: number;
+}
+
 // Raw Context.Domain.Entities.GraphNode.
 export interface GraphNode {
   id: string;
@@ -508,6 +513,13 @@ export interface ProjectSettingsDto {
   hookInvocationRetentionDays: number; // <= 0 disables cleanup of HookInvocations rows
   memoryReconsolidationIntervalMinutes: number; // <= 0 disables periodic memory reconsolidation
   lastMemoryReconsolidationScheduledAt: string | null; // ISO-8601
+  onlineMergeEnabled: boolean; // merge an extracted memory into existing ones on arrival
+  onlineMergeMaxSources: number; // 2..10; memories one online merge combines, the new one included (2 = pairwise)
+  mergedMemoryMaxBodyChars: number; // 1000..32000; a merge result past this stays separate instead of being cut
+  mergedMemoryMaxFacts: number; // 5..100
+  reconsolidationMaxGroupSize: number; // 2..50; memories one canonical may absorb in periodic reconsolidation
+  reconsolidationClusterMinSimilarity: number; // 0.30..0.95
+  reconsolidationSourceExcerptChars: number; // 500..16000; how much of each source body the model sees
   llmTimeoutSeconds: number; // budget for one provider call, retries included
   llmMaxRetries: number; // 0 = never retry a failed provider call
   llmRetryBaseDelaySeconds: number; // first retry delay, doubled per retry

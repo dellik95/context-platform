@@ -1,3 +1,4 @@
+using Context.Memory.Consolidation;
 using Context.Providers;
 
 namespace Context.Application.Settings;
@@ -60,7 +61,7 @@ public sealed record ProjectSettingsDto(
     int HookInvocationRetentionDays = 30,
     // Cadence of the periodic memory reconsolidation pass (JobType.ReconsolidateMemory). <= 0
     // disables it. LastMemoryReconsolidationScheduledAt is scheduler state, stamped before enqueueing.
-    int MemoryReconsolidationIntervalMinutes = 0,
+    int MemoryReconsolidationIntervalMinutes = 360,
     DateTimeOffset? LastMemoryReconsolidationScheduledAt = null,
     // Foundry Local endpoint/models, used when EmbeddingProvider/LlmProvider is "foundry". Null
     // falls back to CONTEXT_FOUNDRY_* / FoundryLocalOptions' defaults.
@@ -78,8 +79,29 @@ public sealed record ProjectSettingsDto(
     int RateLimitMaxCooldownMinutes = ProviderResilienceOptions.DefaultRateLimitMaxCooldownMinutes,
     // Texts per embedding request, and per EmbedChunk job. 0 = the provider's default
     // (EmbeddingBatchLimits.ForProvider), 1 = no batching.
-    int EmbeddingBatchSize = 0)
+    int EmbeddingBatchSize = 0,
+    // Memory merging (see MemoryMergeOptions for the ranges). OnlineMergeMaxSources counts the memory being
+    // stored plus the existing ones folded into it, so 2 is the old pairwise merge. A merged memory never
+    // exceeds MergedMemoryMaxBodyChars / MergedMemoryMaxFacts: past either, the new memory stays separate.
+    bool OnlineMergeEnabled = true,
+    int OnlineMergeMaxSources = 5,
+    int MergedMemoryMaxBodyChars = 8000,
+    int MergedMemoryMaxFacts = 40,
+    // Periodic reconsolidation: how many memories one canonical may absorb, how related two memories
+    // must be to share a group, and how much of each source body the model sees.
+    int ReconsolidationMaxGroupSize = 12,
+    double ReconsolidationClusterMinSimilarity = 0.60,
+    int ReconsolidationSourceExcerptChars = 3000)
 {
+    public MemoryMergeOptions ToMergeOptions() => new MemoryMergeOptions(
+        OnlineMergeEnabled,
+        OnlineMergeMaxSources,
+        MergedMemoryMaxBodyChars,
+        MergedMemoryMaxFacts,
+        ReconsolidationMaxGroupSize,
+        ReconsolidationClusterMinSimilarity,
+        ReconsolidationSourceExcerptChars).Normalized();
+
     public ProviderResilienceOptions ToResilienceOptions() => new()
     {
         Timeout = TimeSpan.FromSeconds(LlmTimeoutSeconds),

@@ -26,12 +26,10 @@ public sealed partial class MemoryReconsolidator(
     ICodeVerifier codeVerifier,
     IProviderResolver providerResolver,
     IUsageRecorder usageRecorder,
+    IMemoryMergeOptionsProvider mergeOptionsProvider,
     ILogger<MemoryReconsolidator>? logger = null)
 {
-    public const double EdgeMinCosine = 0.60;
     public const int EdgeMinSharedStrong = 2;
-    public const int MaxGroupSize = 8;
-    public const int MaxCanonicalFacts = 40;
 
     private const string MergedNote = "reconsolidated into a canonical memory";
 
@@ -39,6 +37,7 @@ public sealed partial class MemoryReconsolidator(
 
     public async Task<ReconsolidationReport> PlanAsync(Guid projectId, CancellationToken ct)
     {
+        var options = await mergeOptionsProvider.GetAsync(projectId, ct).ConfigureAwait(false);
         var live = (await store.ListLiveKnowledgeAsync(projectId, ct).ConfigureAwait(false))
             .OrderBy(m => m.CreatedAt)
             .ThenBy(m => m.Id)
@@ -80,16 +79,16 @@ public sealed partial class MemoryReconsolidator(
         var usedModel = false;
         var groups = new List<ReconsolidationGroup>();
 
-        foreach (var cluster in Cluster(items))
+        foreach (var cluster in Cluster(items, options))
         {
             GroupPlan? plan = null;
             if (!chatClient.IsNoOp())
             {
-                plan = await PlanWithModelAsync(projectId, chatClient, cluster, ct).ConfigureAwait(false);
+                plan = await PlanWithModelAsync(projectId, chatClient, cluster, options, ct).ConfigureAwait(false);
                 usedModel |= plan is not null;
             }
 
-            plan ??= PlanOffline(cluster, chatClient.IsNoOp() ? "offline: no chat model, duplicates merged by fact union" : "offline: the chat model failed, duplicates merged by fact union");
+            plan ??= PlanOffline(cluster, chatClient.IsNoOp() ? "offline: no chat model, duplicates merged by fact union" : "offline: the chat model failed, duplicates merged by fact union", options);
             if (plan.Canonicals.Count == 0 && plan.Contradictions.Count == 0 && !plan.Ambiguous)
             {
                 continue;
@@ -275,9 +274,9 @@ public sealed partial class MemoryReconsolidator(
     /// <summary>
     /// Connected components of the relatedness graph, in creation order. An edge needs a shared strong
     /// entity or topic key, and either embedding similarity or a second shared strong entity; a
-    /// component larger than <see cref="MaxGroupSize"/> is split along its most similar edges.
+    /// component larger than <see cref="MemoryMergeOptions.ReconsolidationMaxGroupSize"/> is split along its most similar edges.
     /// </summary>
-    private static List<List<Item>> Cluster(IReadOnlyList<Item> items)
+    private static List<List<Item>> Cluster(IReadOnlyList<Item> items, MemoryMergeOptions options)
     {
         var postings = new Dictionary<string, List<int>>(StringComparer.Ordinal);
         for (var i = 0; i < items.Count; i++)
@@ -310,7 +309,7 @@ public sealed partial class MemoryReconsolidator(
         foreach (var (a, b) in pairs)
         {
             var cosine = Cosine(items[a], items[b]);
-            if (cosine >= EdgeMinCosine || items[a].Strong.Count(items[b].Strong.Contains) >= EdgeMinSharedStrong)
+            if (cosine >= options.ReconsolidationMinSimilarity || items[a].Strong.Count(items[b].Strong.Contains) >= EdgeMinSharedStrong)
             {
                 edges.Add((a, b, cosine));
             }
@@ -325,7 +324,7 @@ public sealed partial class MemoryReconsolidator(
         var clusters = new List<List<int>>();
         foreach (var component in components.Groups().Where(g => g.Count >= 2))
         {
-            if (component.Count <= MaxGroupSize)
+            if (component.Count <= options.ReconsolidationMaxGroupSize)
             {
                 clusters.Add(component);
                 continue;
@@ -335,7 +334,7 @@ public sealed partial class MemoryReconsolidator(
             var split = new DisjointSets(items.Count);
             foreach (var (a, b, _) in edges.Where(e => members.Contains(e.A)).OrderByDescending(e => e.Cosine).ThenBy(e => e.A).ThenBy(e => e.B))
             {
-                if (split.Find(a) != split.Find(b) && split.SizeOf(a) + split.SizeOf(b) <= MaxGroupSize)
+                if (split.Find(a) != split.Find(b) && split.SizeOf(a) + split.SizeOf(b) <= options.ReconsolidationMaxGroupSize)
                 {
                     split.Union(a, b);
                 }
@@ -347,19 +346,20 @@ public sealed partial class MemoryReconsolidator(
         return [.. clusters.OrderBy(c => c.Min()).Select(c => c.Order().Select(i => items[i]).ToList())];
     }
 
-    private async Task<GroupPlan?> PlanWithModelAsync(Guid projectId, IChatClient chatClient, IReadOnlyList<Item> cluster, CancellationToken ct)
+    private async Task<GroupPlan?> PlanWithModelAsync(
+        Guid projectId, IChatClient chatClient, IReadOnlyList<Item> cluster, MemoryMergeOptions options, CancellationToken ct)
     {
         List<ChatMessage> messages =
         [
             new(ChatRole.System, ReconsolidationPrompt.SystemPrompt),
-            new(ChatRole.User, ReconsolidationPrompt.BuildUserPrompt([.. cluster.Select(i => i.Memory)])),
+            new(ChatRole.User, ReconsolidationPrompt.BuildUserPrompt([.. cluster.Select(i => i.Memory)], options.ReconsolidationSourceExcerptChars)),
         ];
 
         try
         {
             var response = await chatClient.GetResponseAsync(messages, cancellationToken: ct).ConfigureAwait(false);
             await usageRecorder.RecordChatUsageAsync(projectId, null, "MemoryReconsolidation", chatClient, response.Usage, logger, ct).ConfigureAwait(false);
-            return Validate(cluster, ReconsolidationPrompt.Parse(response.Text, cluster.Count));
+            return Validate(cluster, ReconsolidationPrompt.Parse(response.Text, cluster.Count), options);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -370,11 +370,13 @@ public sealed partial class MemoryReconsolidator(
     }
 
     /// <summary>
-    /// Turns the model's answer into a plan. The group is ambiguous when a canonical would lose a fact of
-    /// one of its sources, when a source is claimed twice, or when the answer is malformed. A canonical
-    /// backed by fewer than two sources merges nothing, so those sources stay as they are.
+    /// Turns the model's answer into a plan. A fact or concrete name a canonical lost from one of its
+    /// sources is put back, as long as the canonical stays within the fact and body limits; the group is
+    /// ambiguous when it cannot (or when a canonical's body overruns the limit), when a source is claimed
+    /// twice, or when the answer is malformed. A canonical backed by fewer than two sources merges
+    /// nothing, so those sources stay as they are.
     /// </summary>
-    private static GroupPlan Validate(IReadOnlyList<Item> cluster, ReconsolidationResponse response)
+    private static GroupPlan Validate(IReadOnlyList<Item> cluster, ReconsolidationResponse response, MemoryMergeOptions options)
     {
         var problems = new List<string>(response.Problems);
         var canonicals = new List<ReconsolidationCanonical>();
@@ -389,7 +391,13 @@ public sealed partial class MemoryReconsolidator(
                 continue;
             }
 
-            var candidate = MemoryCandidateValidator.Normalize(parsed.Candidate, out var reason, maxFacts: MaxCanonicalFacts);
+            if (parsed.Candidate.Body.Trim().Length > options.MaxBodyChars)
+            {
+                problems.Add($"canonical {n + 1} has a body over the {options.MaxBodyChars}-character limit");
+                continue;
+            }
+
+            var candidate = MemoryCandidateValidator.Normalize(parsed.Candidate, out var reason, options.MaxFacts, options.MaxBodyChars);
             if (candidate is null)
             {
                 problems.Add($"canonical {n + 1} is not knowledge ({reason})");
@@ -402,16 +410,10 @@ public sealed partial class MemoryReconsolidator(
             }
 
             var sources = sourceIndexes.Select(i => cluster[i]).ToList();
-            foreach (var source in sources)
+            if (Restore(candidate, sources, options, n + 1, problems) is { } restored)
             {
-                var lost = source.Facts.FirstOrDefault(fact => !candidate.Facts.Any(kept => Covers(kept, fact)));
-                if (lost is not null)
-                {
-                    problems.Add($"canonical {n + 1} drops a fact of \"{source.Memory.Title}\": {lost}");
-                }
+                canonicals.Add(ToCanonical(restored, sources));
             }
-
-            canonicals.Add(ToCanonical(candidate, sources));
         }
 
         var contradictions = new List<(Item A, Item B, string? Reason)>();
@@ -446,14 +448,40 @@ public sealed partial class MemoryReconsolidator(
         bool InRange(int number) => number >= 1 && number <= cluster.Count;
     }
 
-    /// <summary>Near-duplicate wording, or the source fact contained word for word in a longer canonical fact.</summary>
-    private static bool Covers(string canonicalFact, string sourceFact) =>
-        FactMerger.AreNearDuplicates(canonicalFact, sourceFact)
-        || $" {FactMerger.NormalizeFact(canonicalFact)} ".Contains($" {FactMerger.NormalizeFact(sourceFact)} ", StringComparison.Ordinal);
+    /// <summary>The canonical with every source fact and concrete name it lost put back, or null (with a problem
+    /// recorded) when that would break the fact or body limit.</summary>
+    private static MemoryCandidate? Restore(
+        MemoryCandidate candidate, IReadOnlyList<Item> sources, MemoryMergeOptions options, int number, List<string> problems)
+    {
+        var facts = candidate.Facts.ToList();
+        var missingFacts = MergeVerifier.MissingFacts(sources.SelectMany(s => s.Facts), facts);
+        if (facts.Count + missingFacts.Count > options.MaxFacts)
+        {
+            problems.Add($"canonical {number} cannot keep every source fact within the {options.MaxFacts}-fact limit");
+            return null;
+        }
+
+        facts.AddRange(missingFacts);
+
+        // ToCanonical unions every source's files into the canonical, so they already count as named.
+        var files = candidate.FilesRead.Concat(candidate.FilesModified).Concat(sources.SelectMany(s =>
+            EntityExtractor.ParseList(s.Memory.FilesReadJson).Concat(EntityExtractor.ParseList(s.Memory.FilesModifiedJson))));
+        var missingNames = MergeVerifier.MissingNames(
+            sources.SelectMany(s => s.Facts.Prepend(s.Memory.Body)),
+            facts.Prepend(candidate.Body).Concat(files));
+        var body = MergeVerifier.AppendNames(candidate.Body, missingNames, options.MaxBodyChars);
+        if (body is null)
+        {
+            problems.Add($"canonical {number} cannot name every source identifier within the {options.MaxBodyChars}-character limit");
+            return null;
+        }
+
+        return candidate with { Facts = facts, Body = body };
+    }
 
     /// <summary>Without a model only near-identical memories naming a common strong entity merge: the most
     /// confident one keeps its wording and gains the others' facts and files.</summary>
-    private static GroupPlan PlanOffline(IReadOnlyList<Item> cluster, string note)
+    private static GroupPlan PlanOffline(IReadOnlyList<Item> cluster, string note, MemoryMergeOptions options)
     {
         var duplicates = new DisjointSets(cluster.Count);
         for (var a = 0; a < cluster.Count; a++)
@@ -478,13 +506,16 @@ public sealed partial class MemoryReconsolidator(
                 .ThenByDescending(i => i.Memory.LastReinforcedAt)
                 .ToList();
             var facts = sources.Aggregate((IReadOnlyList<string>)[], (acc, s) => FactMerger.Merge(acc, s.Facts));
-            if (facts.Count > MaxCanonicalFacts)
+            var best = sources[0].Memory;
+            var body = MergeVerifier.MissingNames(sources.Skip(1).Select(s => s.Memory.Body), [best.Body]).Count > 0
+                ? MemoryMergePrompt.Fallback(sources.Select(s => s.Memory.Body))
+                : best.Body;
+            if (facts.Count > options.MaxFacts || body.Length > options.MaxBodyChars)
             {
                 continue;
             }
 
-            var best = sources[0].Memory;
-            var candidate = new MemoryCandidate(best.Type, best.Title, best.Body, EvidenceSource.Consolidation, facts, [], [], [], best.Topic);
+            var candidate = new MemoryCandidate(best.Type, best.Title, body, EvidenceSource.Consolidation, facts, [], [], [], best.Topic);
             canonicals.Add(ToCanonical(candidate, sources));
         }
 

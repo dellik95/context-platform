@@ -12,8 +12,6 @@ namespace Context.Memory.Consolidation;
 /// </summary>
 internal static partial class ReconsolidationPrompt
 {
-    public const int MaxBodyExcerpt = 1500;
-
     public const string SystemPrompt =
         """
         You reconsolidate the long-term memory of a code repository. You receive a numbered group of
@@ -58,7 +56,7 @@ internal static partial class ReconsolidationPrompt
         Write "CONTRADICTIONS: none" and "KEEP_SEPARATE: none" when there are none.
         """;
 
-    public static string BuildUserPrompt(IReadOnlyList<Context.Domain.Entities.Memory> sources)
+    public static string BuildUserPrompt(IReadOnlyList<Context.Domain.Entities.Memory> sources, int excerptChars)
     {
         var sb = new StringBuilder();
         for (var i = 0; i < sources.Count; i++)
@@ -94,7 +92,7 @@ internal static partial class ReconsolidationPrompt
             }
 
             var body = source.Body.Trim();
-            sb.Append("BODY: ").AppendLine(body.Length <= MaxBodyExcerpt ? body : string.Concat(body.AsSpan(0, MaxBodyExcerpt), "…"));
+            sb.Append("BODY: ").AppendLine(body.Length <= excerptChars ? body : string.Concat(body.AsSpan(0, excerptChars), "…"));
         }
 
         return sb.ToString();

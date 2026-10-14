@@ -26,19 +26,19 @@ public sealed class MemoryConsolidator(
     ICodeVerifier codeVerifier,
     IProviderResolver providerResolver,
     IUsageRecorder usageRecorder,
+    IMemoryMergeOptionsProvider mergeOptionsProvider,
     ILogger<MemoryConsolidator>? logger = null) : IMemoryConsolidator
 {
     public const int MaxNeighbours = 5;
     public const double NeighbourMinCosine = 0.60;
     public const double FastDuplicateCosine = 0.97;
-    public const int MaxMergedFacts = 12;
-    public const int MaxMergedBodyLength = 2500;
 
     private const int MaxEntityNeighbours = 10;
     private const int MaxTopicNeighbours = 10;
     private const int SimilaritySearchLimit = 16;
     private const int MaxSimilarNeighbours = 8;
     private const string ConcurrentDuplicateNote = "same claim stored concurrently";
+    private const string MergedIntoNote = "merged into a broader memory";
 
     // How far back a concurrent consolidation's CreatedAt can lie: it is stamped before the model calls.
     private static readonly TimeSpan ConcurrentWindow = TimeSpan.FromHours(1);
@@ -86,7 +86,8 @@ public sealed class MemoryConsolidator(
         var embedder = new Embedder(generator, options);
         incoming = incoming with { Embedding = new MemoryVector(generator.GetProviderModelKey(), embedding.Vector.ToArray()) };
 
-        var neighbours = await FindNeighboursAsync(incoming, embedder, ct).ConfigureAwait(false);
+        var mergeOptions = await mergeOptionsProvider.GetAsync(incoming.ProjectId, ct).ConfigureAwait(false);
+        var neighbours = await FindNeighboursAsync(incoming, embedder, Math.Max(MaxNeighbours, mergeOptions.OnlineMaxSources), ct).ConfigureAwait(false);
         incoming = AdoptTopic(incoming, neighbours);
         incoming = incoming with { CodeCheck = await codeChecker.CheckAsync(incoming.ProjectId, incoming.Candidate, incoming.Entities, ct).ConfigureAwait(false) };
 
@@ -95,7 +96,8 @@ public sealed class MemoryConsolidator(
             return await InsertNewAsync(incoming, ct).ConfigureAwait(false);
         }
 
-        var (relation, neighbour, reason) = await JudgeAsync(incoming, neighbours, ct).ConfigureAwait(false);
+        var judgement = await JudgeAsync(incoming, neighbours, ct).ConfigureAwait(false);
+        var (relation, neighbour, reason) = (judgement.Relation, judgement.Target, judgement.Reason);
         if (neighbour is null)
         {
             return await InsertNewAsync(incoming, ct).ConfigureAwait(false);
@@ -103,7 +105,9 @@ public sealed class MemoryConsolidator(
 
         if (relation == MemoryRelation.Complements)
         {
-            return await MergeAsync(incoming, neighbour.Memory.Id, reason, embedder, ct).ConfigureAwait(false);
+            return mergeOptions.OnlineMergeEnabled
+                ? await MergeAsync(incoming, judgement.Complements, reason, mergeOptions, embedder, ct).ConfigureAwait(false)
+                : await InsertAlongsideAsync(incoming, neighbour.Memory, ct).ConfigureAwait(false);
         }
 
         // Model and code-index work stays outside the write transaction; the target is re-read inside it.
@@ -134,7 +138,7 @@ public sealed class MemoryConsolidator(
         }, ct).ConfigureAwait(false);
     }
 
-    private async Task<IReadOnlyList<Neighbour>> FindNeighboursAsync(Incoming incoming, Embedder embedder, CancellationToken ct)
+    private async Task<IReadOnlyList<Neighbour>> FindNeighboursAsync(Incoming incoming, Embedder embedder, int limit, CancellationToken ct)
     {
         var query = incoming.Embedding!;
         var candidateStrong = EntityExtractor.StrongKeys(incoming.Entities.Select(e => e.Key));
@@ -192,7 +196,7 @@ public sealed class MemoryConsolidator(
                 return new Neighbour(m, cosine, strong, score);
             })
             .OrderByDescending(n => n.Score)
-            .Take(MaxNeighbours)];
+            .Take(limit)];
     }
 
     /// <summary>Reuses an existing topic so the same subject keeps one TopicKey: the neighbour with an
@@ -209,7 +213,7 @@ public sealed class MemoryConsolidator(
         return sharing is null ? incoming : incoming with { Topic = sharing.Memory.Topic, TopicKey = sharing.Memory.TopicKey };
     }
 
-    private async Task<(MemoryRelation Relation, Neighbour? Target, string? Reason)> JudgeAsync(
+    private async Task<Judgement> JudgeAsync(
         Incoming incoming, IReadOnlyList<Neighbour> neighbours, CancellationToken ct)
     {
         var candidate = RelationSubject.From(incoming.Candidate);
@@ -220,7 +224,7 @@ public sealed class MemoryConsolidator(
         {
             if (neighbours[i].Cosine >= FastDuplicateCosine && neighbours[i].Memory.Type == incoming.Candidate.Type && !negation[i])
             {
-                return (MemoryRelation.Duplicate, neighbours[i], "near-identical embedding");
+                return new Judgement(MemoryRelation.Duplicate, neighbours[i], "near-identical embedding", []);
             }
         }
 
@@ -233,12 +237,16 @@ public sealed class MemoryConsolidator(
             {
                 if (verdicts[i].Relation == relation)
                 {
-                    return (relation, neighbours[i], verdicts[i].Reason);
+                    // The first complement in score order is the merge target; the rest fold into it.
+                    IReadOnlyList<Neighbour> complements = relation == MemoryRelation.Complements
+                        ? [.. neighbours.Where((_, j) => verdicts[j].Relation == MemoryRelation.Complements)]
+                        : [];
+                    return new Judgement(relation, neighbours[i], verdicts[i].Reason, complements);
                 }
             }
         }
 
-        return (MemoryRelation.Unrelated, null, null);
+        return new Judgement(MemoryRelation.Unrelated, null, null, []);
     }
 
     /// <summary>The model's verdicts, or null when no chat model is configured or the call failed.</summary>
@@ -317,89 +325,171 @@ public sealed class MemoryConsolidator(
         return new ConsolidationResult(target, ConsolidationOutcome.Reinforced);
     }
 
-    /// <summary>The merged body and its embedding are produced outside the write transaction from a
-    /// snapshot of the target; if the target's title, body or topic changed meanwhile (or it is no longer
-    /// live), the candidate becomes a sibling under the same topic instead.</summary>
-    private async Task<ConsolidationResult> MergeAsync(Incoming incoming, Guid targetId, string? reason, Embedder embedder, CancellationToken ct)
+    /// <summary>
+    /// Folds the candidate and as many complementing memories of the same topic as fit the size limits
+    /// into the best-scored one. The merged body and its embedding are produced outside the write
+    /// transaction from snapshots; if any source changed meanwhile (or is no longer live), the candidate
+    /// becomes a sibling under the same topic instead. A merge never cuts text: over the body or fact
+    /// limit, the memory that does not fit stays separate.
+    /// </summary>
+    private async Task<ConsolidationResult> MergeAsync(
+        Incoming incoming, IReadOnlyList<Neighbour> complements, string? reason, MemoryMergeOptions options, Embedder embedder, CancellationToken ct)
     {
-        if (await ReloadLiveAsync(targetId, ct).ConfigureAwait(false) is not { } snapshot
-            || incoming.TopicKey is null
+        if (incoming.TopicKey is null
+            || await ReloadLiveAsync(complements[0].Memory.Id, ct).ConfigureAwait(false) is not { } snapshot
             || incoming.TopicKey != snapshot.TopicKey)
         {
             return await InsertNewAsync(incoming, ct).ConfigureAwait(false);
         }
 
         var facts = FactMerger.Merge(EntityExtractor.ParseList(snapshot.FactsJson), incoming.Candidate.Facts);
-        if (facts.Count > MaxMergedFacts || snapshot.Body.Length + 2 + incoming.Candidate.Body.Length > MaxMergedBodyLength)
+        var bodyLength = snapshot.Body.Length + 2 + incoming.Candidate.Body.Length;
+        if (facts.Count > options.MaxFacts || bodyLength > options.MaxBodyChars)
         {
             // Too big to grow further: a sibling under the same topic keeps the subject together.
             return await InsertSiblingAsync(incoming, snapshot, ct).ConfigureAwait(false);
         }
 
-        var body = await MergeBodiesAsync(incoming, snapshot, facts, ct).ConfigureAwait(false);
+        List<DomainMemory> extras = [];
+        foreach (var neighbour in complements.Skip(1))
+        {
+            if (extras.Count >= options.OnlineMaxSources - 2)
+            {
+                break;
+            }
+
+            if (await ReloadLiveAsync(neighbour.Memory.Id, ct).ConfigureAwait(false) is not { Status: MemoryStatus.Active } extra
+                || extra.TopicKey != incoming.TopicKey)
+            {
+                continue;
+            }
+
+            var withExtra = FactMerger.Merge(facts, EntityExtractor.ParseList(extra.FactsJson));
+            var withExtraLength = bodyLength + 2 + extra.Body.Length;
+            if (withExtra.Count <= options.MaxFacts && withExtraLength <= options.MaxBodyChars)
+            {
+                extras.Add(extra);
+                facts = withExtra;
+                bodyLength = withExtraLength;
+            }
+        }
+
+        var body = await MergeBodiesAsync(incoming, snapshot, extras, facts, options, ct).ConfigureAwait(false);
         var reembedding = await embedder.Generator.GenerateAsync(MemoryEmbeddingText.For(snapshot.Title, body), embedder.Options, ct).ConfigureAwait(false);
         var vector = new MemoryVector(incoming.Embedding!.ModelKey, reembedding.Vector.ToArray());
 
         return await store.InTransactionAsync(async () =>
         {
-            var target = await ReloadLiveAsync(targetId, ct).ConfigureAwait(false);
-            if (target is null
-                || target.Title != snapshot.Title
-                || target.Body != snapshot.Body
-                || target.TopicKey != snapshot.TopicKey)
+            if (await ReloadLiveAsync(snapshot.Id, ct).ConfigureAwait(false) is not { } target || HasChanged(target, snapshot))
             {
                 return await InsertSiblingAsync(incoming, snapshot, ct).ConfigureAwait(false);
             }
 
-            var mergedFacts = FactMerger.Merge(EntityExtractor.ParseList(target.FactsJson), incoming.Candidate.Facts);
-            if (mergedFacts.Count > MaxMergedFacts)
+            List<DomainMemory> sources = [];
+            foreach (var extra in extras)
+            {
+                if (await ReloadLiveAsync(extra.Id, ct).ConfigureAwait(false) is not { Status: MemoryStatus.Active } current || HasChanged(current, extra))
+                {
+                    return await InsertSiblingAsync(incoming, snapshot, ct).ConfigureAwait(false);
+                }
+
+                sources.Add(current);
+            }
+
+            var mergedFacts = sources.Aggregate(
+                FactMerger.Merge(EntityExtractor.ParseList(target.FactsJson), incoming.Candidate.Facts),
+                (acc, source) => FactMerger.Merge(acc, EntityExtractor.ParseList(source.FactsJson)));
+            if (mergedFacts.Count > options.MaxFacts)
             {
                 return await InsertSiblingAsync(incoming, snapshot, ct).ConfigureAwait(false);
             }
 
-            var evidence = await store.ListEvidenceAsync([target.Id], ct).ConfigureAwait(false);
-            var entityRows = await store.ListEntitiesAsync([target.Id], ct).ConfigureAwait(false);
+            List<Guid> ids = [target.Id, .. sources.Select(m => m.Id)];
+            var allEvidence = await store.ListEvidenceAsync(ids, ct).ConfigureAwait(false);
+            var entityRows = await store.ListEntitiesAsync(ids, ct).ConfigureAwait(false);
+            var targetEvidence = allEvidence.Where(e => e.MemoryId == target.Id).ToList();
+
             List<MemoryEvidence> added = [NewEvidence(incoming, target.Id, EvidenceRelation.Merged, note: reason)];
+            foreach (var source in sources)
+            {
+                added.AddRange(allEvidence.Where(e => e.MemoryId == source.Id).Select(e => CopyEvidence(e, target.Id, source.Id)));
+                added.Add(NewEvidence(incoming, target.Id, EvidenceRelation.Merged, source.Id, MergedIntoNote));
+            }
 
             target.Body = body;
             Absorb(target, incoming.Candidate, mergedFacts);
-            target.ReinforcementCount++;
+            foreach (var source in sources)
+            {
+                AbsorbMemory(target, source);
+            }
+
+            target.ReinforcementCount += 1 + sources.Sum(m => m.ReinforcementCount);
             target.LastReinforcedAt = incoming.Now;
-            AddCodeEvidence(added, evidence, incoming, target.Id, incoming.CodeCheck);
-            ConfidenceModel.Recompute(target, [.. evidence, .. added]);
+            AddCodeEvidence(added, targetEvidence, incoming, target.Id, incoming.CodeCheck);
+            ConfidenceModel.Recompute(target, [.. targetEvidence, .. added]);
 
             await store.UpdateAsync(target, vector, MemoryFields.UnionEntities(target, entityRows, incoming.Entities), added, ct).ConfigureAwait(false);
+            foreach (var source in sources)
+            {
+                await SupersedeAndReleaseAsync(source, target.Id, incoming, MergedIntoNote, ct).ConfigureAwait(false);
+            }
+
             return new ConsolidationResult(target, ConsolidationOutcome.Merged);
         }, ct).ConfigureAwait(false);
     }
 
-    private async Task<string> MergeBodiesAsync(Incoming incoming, DomainMemory target, IReadOnlyList<string> facts, CancellationToken ct)
+    private static bool HasChanged(DomainMemory current, DomainMemory snapshot) =>
+        current.Title != snapshot.Title || current.Body != snapshot.Body || current.TopicKey != snapshot.TopicKey;
+
+    /// <summary>The merged body: the model's when it stays within the limit and keeps every concrete name
+    /// of every source, otherwise the plain concatenation of the bodies, which loses nothing and fits by construction.</summary>
+    private async Task<string> MergeBodiesAsync(
+        Incoming incoming, DomainMemory target, IReadOnlyList<DomainMemory> extras, IReadOnlyList<string> facts, MemoryMergeOptions options, CancellationToken ct)
     {
-        var fallback = MemoryMergePrompt.Fallback(target.Body, incoming.Candidate.Body, MaxMergedBodyLength);
+        List<DomainMemory> memories = [target, .. extras];
+        List<string> bodies = [.. memories.Select(m => m.Body), incoming.Candidate.Body];
+        var fallback = MemoryMergePrompt.Fallback(bodies);
         var chatClient = await providerResolver.GetChatClientAsync(incoming.ProjectId, ct).ConfigureAwait(false);
         if (chatClient.IsNoOp())
         {
             return fallback;
         }
 
+        List<RelationSubject> subjects = [.. memories.Select(RelationSubject.From), RelationSubject.From(incoming.Candidate)];
         List<ChatMessage> messages =
         [
             new(ChatRole.System, MemoryMergePrompt.SystemPrompt),
-            new(ChatRole.User, MemoryMergePrompt.BuildUserPrompt(
-                RelationSubject.From(target), RelationSubject.From(incoming.Candidate), facts, MaxMergedBodyLength)),
+            new(ChatRole.User, MemoryMergePrompt.BuildUserPrompt(subjects, facts, options.MaxBodyChars)),
         ];
 
         try
         {
             var response = await chatClient.GetResponseAsync(messages, cancellationToken: ct).ConfigureAwait(false);
             await usageRecorder.RecordChatUsageAsync(incoming.ProjectId, incoming.SessionId, "MemoryMerge", chatClient, response.Usage, logger, ct).ConfigureAwait(false);
-            return MemoryMergePrompt.Clean(response.Text, MaxMergedBodyLength) ?? fallback;
+            return AcceptMergedBody(MemoryMergePrompt.Clean(response.Text), bodies, facts, options) ?? fallback;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger?.LogWarning(ex, "LLM provider {Provider} failed to merge memory {MemoryId}; concatenating bodies.", chatClient.GetProviderName(), target.Id);
             return fallback;
         }
+    }
+
+    private string? AcceptMergedBody(string? merged, IReadOnlyList<string> sourceBodies, IReadOnlyList<string> facts, MemoryMergeOptions options)
+    {
+        if (merged is null || merged.Length > options.MaxBodyChars)
+        {
+            return null;
+        }
+
+        var missing = MergeVerifier.MissingNames([.. sourceBodies, .. facts], [merged, .. facts]);
+        if (missing.Count > 0)
+        {
+            logger?.LogInformation("Merged memory body dropped {Count} concrete names ({Names}); concatenating bodies instead.", missing.Count, string.Join(", ", missing.Take(5)));
+            return null;
+        }
+
+        return merged;
     }
 
     /// <summary>A claim replaces the target only when it was observed after the target's newest support,
@@ -574,6 +664,12 @@ public sealed class MemoryConsolidator(
     private Task<ConsolidationResult> InsertSiblingAsync(Incoming incoming, DomainMemory target, CancellationToken ct) =>
         InsertNewAsync(incoming with { Topic = target.Topic, TopicKey = target.TopicKey }, ct);
 
+    /// <summary>Online merging is off: a complement is stored next to its neighbour, under the same topic when they share one.</summary>
+    private Task<ConsolidationResult> InsertAlongsideAsync(Incoming incoming, DomainMemory neighbour, CancellationToken ct) =>
+        incoming.TopicKey is not null && incoming.TopicKey == neighbour.TopicKey
+            ? InsertSiblingAsync(incoming, neighbour, ct)
+            : InsertNewAsync(incoming, ct);
+
     private Task SupersedeAndReleaseAsync(DomainMemory loser, Guid winnerId, Incoming incoming, string? note, CancellationToken ct) =>
         MemoryContests.SupersedeAndReleaseAsync(
             store, loser, winnerId, incoming.Now, NewEvidence(incoming, loser.Id, EvidenceRelation.Superseded, winnerId, note), ct);
@@ -602,6 +698,30 @@ public sealed class MemoryConsolidator(
         memory.FilesModifiedJson = MemoryFields.UnionJson(memory.FilesModifiedJson, candidate.FilesModified);
         memory.ScopePath ??= candidate.ScopePath;
     }
+
+    /// <summary>Folds another memory's concepts, files, scope, tier and pin into <paramref name="memory"/>.</summary>
+    private static void AbsorbMemory(DomainMemory memory, DomainMemory other)
+    {
+        memory.ConceptsJson = MemoryFields.UnionJson(memory.ConceptsJson, EntityExtractor.ParseList(other.ConceptsJson));
+        memory.FilesReadJson = MemoryFields.UnionJson(memory.FilesReadJson, EntityExtractor.ParseList(other.FilesReadJson));
+        memory.FilesModifiedJson = MemoryFields.UnionJson(memory.FilesModifiedJson, EntityExtractor.ParseList(other.FilesModifiedJson));
+        memory.ScopePath ??= other.ScopePath;
+        memory.Tier = (MemoryTier)Math.Max((int)memory.Tier, (int)other.Tier);
+        memory.Pinned |= other.Pinned;
+    }
+
+    private static MemoryEvidence CopyEvidence(MemoryEvidence evidence, Guid memoryId, Guid fromMemoryId) => new()
+    {
+        Id = Guid.NewGuid(),
+        ProjectId = evidence.ProjectId,
+        MemoryId = memoryId,
+        Relation = evidence.Relation,
+        Source = evidence.Source,
+        SessionId = evidence.SessionId,
+        SourceMemoryId = evidence.SourceMemoryId ?? fromMemoryId,
+        ObservedAt = evidence.ObservedAt,
+        Note = evidence.Note,
+    };
 
     private static MemoryEvidence NewEvidence(
         Incoming incoming, Guid memoryId, EvidenceRelation relation, Guid? sourceMemoryId = null, string? note = null) => new()
@@ -659,6 +779,10 @@ public sealed class MemoryConsolidator(
     }
 
     private sealed record Neighbour(DomainMemory Memory, double Cosine, HashSet<string> StrongKeys, double Score);
+
+    /// <summary><paramref name="Complements"/> lists every neighbour judged complementary (the target first) when
+    /// <paramref name="Relation"/> is Complements, empty otherwise.</summary>
+    private sealed record Judgement(MemoryRelation Relation, Neighbour? Target, string? Reason, IReadOnlyList<Neighbour> Complements);
 
     private sealed record Embedder(IEmbeddingGenerator<string, Embedding<float>> Generator, EmbeddingGenerationOptions? Options);
 }

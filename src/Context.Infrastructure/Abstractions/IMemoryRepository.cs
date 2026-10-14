@@ -53,4 +53,12 @@ public interface IMemoryRepository
     /// <paramref name="from"/>, so two callers can never both claim the same transition.</summary>
     Task<bool> SetReportStatusAsync(
         Guid id, ConsolidationReportStatus from, ConsolidationReportStatus to, DateTimeOffset? appliedAt, string? reportJson, CancellationToken ct);
+
+    /// <summary>Deletes the report unless it is Applying (its apply job still owns it). False when it is
+    /// missing or Applying.</summary>
+    Task<bool> DeleteReportAsync(Guid id, CancellationToken ct);
+
+    /// <summary>Deletes the project's reports in any of <paramref name="statuses"/> (Applying is never
+    /// deleted), returning how many went.</summary>
+    Task<int> DeleteReportsAsync(Guid projectId, IReadOnlyCollection<ConsolidationReportStatus> statuses, CancellationToken ct);
 }

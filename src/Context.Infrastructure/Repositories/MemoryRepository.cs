@@ -198,6 +198,19 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
         return affected > 0;
     }
 
+    public async Task<bool> DeleteReportAsync(Guid id, CancellationToken ct) =>
+        await db.MemoryConsolidationReports
+            .Where(r => r.Id == id && r.Status != ConsolidationReportStatus.Applying)
+            .ExecuteDeleteAsync(ct) > 0;
+
+    public Task<int> DeleteReportsAsync(Guid projectId, IReadOnlyCollection<ConsolidationReportStatus> statuses, CancellationToken ct)
+    {
+        var deletable = statuses.Where(s => s != ConsolidationReportStatus.Applying).ToArray();
+        return db.MemoryConsolidationReports
+            .Where(r => r.ProjectId == projectId && deletable.Contains(r.Status))
+            .ExecuteDeleteAsync(ct);
+    }
+
     private static IQueryable<Memory> LiveOnly(IQueryable<Memory> q) =>
         q.Where(m => m.Status == MemoryStatus.Active || m.Status == MemoryStatus.Contested);
 

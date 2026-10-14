@@ -328,6 +328,44 @@
               </span>
             </p>
 
+            <h3 class="subsection-title">Online merging</h3>
+            <mat-slide-toggle
+              [checked]="settingsForm.onlineMergeEnabled().value()"
+              (change)="setOnlineMergeEnabled($event)"
+            >
+              Merge complementary memories on arrival
+            </mat-slide-toggle>
+
+            <div class="field-grid">
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Max memories per merge</mat-label>
+                <input matInput type="number" [formField]="settingsForm.onlineMergeMaxSources" />
+                <mat-hint
+                  >Memories one merge combines, the new one included (2–10); 2 merges pairwise</mat-hint
+                >
+              </mat-form-field>
+            </div>
+
+            <h3 class="subsection-title">Merged memory size</h3>
+            <p class="note">
+              <mat-icon>info</mat-icon>
+              <span>Past either limit the new memory stays separate instead of being cut.</span>
+            </p>
+
+            <div class="field-grid">
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Max body length (characters)</mat-label>
+                <input matInput type="number" [formField]="settingsForm.mergedMemoryMaxBodyChars" />
+                <mat-hint>Longest body a merged memory may have (1000–32000)</mat-hint>
+              </mat-form-field>
+
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Max facts</mat-label>
+                <input matInput type="number" [formField]="settingsForm.mergedMemoryMaxFacts" />
+                <mat-hint>Most facts a merged memory may hold (5–100)</mat-hint>
+              </mat-form-field>
+            </div>
+
             <h3 class="subsection-title">Periodic reconsolidation</h3>
             <mat-slide-toggle
               [checked]="settingsForm.memoryReconsolidationEnabled().value()"
@@ -345,6 +383,33 @@
                   [formField]="settingsForm.memoryReconsolidationIntervalMinutes"
                 />
                 <mat-hint>How often the reconsolidation pass runs</mat-hint>
+              </mat-form-field>
+
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Max group size</mat-label>
+                <input matInput type="number" [formField]="settingsForm.reconsolidationMaxGroupSize" />
+                <mat-hint>Memories one canonical may absorb (2–50)</mat-hint>
+              </mat-form-field>
+
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Min. cluster similarity</mat-label>
+                <input
+                  matInput
+                  type="number"
+                  step="0.05"
+                  [formField]="settingsForm.reconsolidationClusterMinSimilarity"
+                />
+                <mat-hint>How alike memories must be to be grouped (0.30–0.95)</mat-hint>
+              </mat-form-field>
+
+              <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                <mat-label>Source excerpt (characters)</mat-label>
+                <input
+                  matInput
+                  type="number"
+                  [formField]="settingsForm.reconsolidationSourceExcerptChars"
+                />
+                <mat-hint>How much of each source body the model sees (500–16000)</mat-hint>
               </mat-form-field>
             </div>
           </div>

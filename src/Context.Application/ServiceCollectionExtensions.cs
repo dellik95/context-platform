@@ -158,6 +158,7 @@ public static class ServiceCollectionExtensions
         // LlmMemoryExtractor can record token usage without depending on
         // Context.Infrastructure/EF Core directly.
         services.AddScoped<Context.Memory.Abstractions.IUsageRecorder, UsageRecorderAdapter>();
+        services.AddScoped<Context.Memory.Consolidation.IMemoryMergeOptionsProvider, MemoryMergeOptionsAdapter>();
 
         services.AddScoped<ICodeVerifier, CodeVerifier>();
 

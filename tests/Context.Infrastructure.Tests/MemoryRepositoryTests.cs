@@ -242,6 +242,54 @@ public sealed class MemoryRepositoryTests : IDisposable
         (await repository.SetReportStatusAsync(Guid.NewGuid(), ConsolidationReportStatus.Pending, ConsolidationReportStatus.Discarded, null, null, CancellationToken.None)).Should().BeFalse();
     }
 
+    [Fact]
+    public async Task A_report_is_deleted_unless_it_is_being_applied()
+    {
+        var (db, project) = await SeedProjectAsync();
+        await using var _ = db;
+        var repository = new MemoryRepository(db);
+        var done = await repository.AddReportAsync(new MemoryConsolidationReport { ProjectId = project.Id, CreatedAt = DateTimeOffset.UtcNow, ReportJson = "{}", Status = ConsolidationReportStatus.Applied }, CancellationToken.None);
+        var applying = await repository.AddReportAsync(new MemoryConsolidationReport { ProjectId = project.Id, CreatedAt = DateTimeOffset.UtcNow, ReportJson = "{}", Status = ConsolidationReportStatus.Applying }, CancellationToken.None);
+
+        (await repository.DeleteReportAsync(done.Id, CancellationToken.None)).Should().BeTrue();
+        (await repository.DeleteReportAsync(done.Id, CancellationToken.None)).Should().BeFalse("it is already gone");
+        (await repository.DeleteReportAsync(applying.Id, CancellationToken.None)).Should().BeFalse("its apply job still owns it");
+
+        (await repository.GetReportAsync(done.Id, CancellationToken.None)).Should().BeNull();
+        (await repository.GetReportAsync(applying.Id, CancellationToken.None)).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Reports_are_deleted_in_bulk_by_status_for_one_project_and_never_while_applying()
+    {
+        var (db, project) = await SeedProjectAsync();
+        await using var _ = db;
+        var repository = new MemoryRepository(db);
+        var other = new Project { Id = Guid.NewGuid(), Name = "other", RootPath = "/other", CreatedAt = DateTimeOffset.UtcNow };
+        db.Projects.Add(other);
+        await db.SaveChangesAsync();
+
+        async Task<Guid> AddAsync(Guid projectId, ConsolidationReportStatus status) =>
+            (await repository.AddReportAsync(new MemoryConsolidationReport { ProjectId = projectId, CreatedAt = DateTimeOffset.UtcNow, ReportJson = "{}", Status = status }, CancellationToken.None)).Id;
+
+        var applied = await AddAsync(project.Id, ConsolidationReportStatus.Applied);
+        var failed = await AddAsync(project.Id, ConsolidationReportStatus.Failed);
+        var pending = await AddAsync(project.Id, ConsolidationReportStatus.Pending);
+        var applying = await AddAsync(project.Id, ConsolidationReportStatus.Applying);
+        var foreign = await AddAsync(other.Id, ConsolidationReportStatus.Applied);
+
+        var removed = await repository.DeleteReportsAsync(
+            project.Id,
+            [ConsolidationReportStatus.Applied, ConsolidationReportStatus.Failed, ConsolidationReportStatus.Applying],
+            CancellationToken.None);
+
+        removed.Should().Be(2);
+        (await repository.ListReportsAsync(project.Id, CancellationToken.None)).Select(r => r.Id).Should().BeEquivalentTo(new[] { pending, applying });
+        (await repository.GetReportAsync(foreign, CancellationToken.None)).Should().NotBeNull("another project's reports are untouched");
+        applied.Should().NotBeEmpty();
+        failed.Should().NotBeEmpty();
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();

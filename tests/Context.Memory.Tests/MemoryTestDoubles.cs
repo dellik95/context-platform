@@ -1,3 +1,4 @@
+using Context.Memory.Consolidation;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
 using Context.Memory.Abstractions;
@@ -257,4 +258,12 @@ internal sealed class FakeUsageRecorder : IUsageRecorder
         Purposes.Add(record.Purpose);
         return Task.CompletedTask;
     }
+}
+
+/// <summary>Serves <see cref="Options"/> as given (not normalized) so a test can pick limits below the settings floors.</summary>
+internal sealed class FixedMergeOptionsProvider : IMemoryMergeOptionsProvider
+{
+    public MemoryMergeOptions Options { get; set; } = MemoryMergeOptions.Default;
+
+    public Task<MemoryMergeOptions> GetAsync(Guid projectId, CancellationToken ct) => Task.FromResult(Options);
 }

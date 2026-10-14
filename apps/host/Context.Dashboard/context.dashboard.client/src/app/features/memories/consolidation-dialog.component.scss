@@ -26,6 +26,10 @@
   padding: 0;
 }
 
+.report-item + .report-item {
+  margin-top: 2px;
+}
+
 .report-row {
   display: flex;
   align-items: center;
@@ -33,14 +37,20 @@
   padding: 6px 8px;
   border-radius: 6px;
 
-  &.selected {
-    background: var(--mat-sys-surface-container-high);
-  }
-
   .report-stats {
     flex: 1 1 auto;
     font-size: 0.85rem;
   }
+}
+
+.report-item.selected > .report-row {
+  background: var(--mat-sys-surface-container-high);
+}
+
+.report-detail-panel {
+  margin: 4px 0 12px 12px;
+  padding: 8px 0 4px 16px;
+  border-left: 2px solid var(--mat-sys-outline-variant);
 }
 
 .status-chip {

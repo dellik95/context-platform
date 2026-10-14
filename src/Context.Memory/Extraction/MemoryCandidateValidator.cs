@@ -21,7 +21,7 @@ internal static partial class MemoryCandidateValidator
     /// when it carries too little to be worth storing. A non-explicit pure change log is rejected:
     /// memory describes how things are now, not what a session did.
     /// </summary>
-    public static MemoryCandidate? Normalize(MemoryCandidate candidate, out string? reason, int maxFacts = MaxFacts)
+    public static MemoryCandidate? Normalize(MemoryCandidate candidate, out string? reason, int maxFacts = MaxFacts, int maxBodyLength = MaxBodyLength)
     {
         var title = candidate.Title.Trim();
         var body = candidate.Body.Trim();
@@ -48,7 +48,7 @@ internal static partial class MemoryCandidateValidator
         return candidate with
         {
             Title = Truncate(title, MaxTitleLength),
-            Body = Truncate(body, MaxBodyLength),
+            Body = Truncate(body, maxBodyLength),
             Facts = [.. candidate.Facts
                 .Select(f => f.Trim())
                 .Where(f => f.Length > 0)

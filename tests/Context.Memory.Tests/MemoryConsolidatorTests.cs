@@ -30,11 +30,12 @@ public sealed class MemoryConsolidatorTests
     private readonly FakeChatClient _chat = new();
     private readonly FakeEmbeddingGenerator _embeddings = new();
     private readonly FakeUsageRecorder _usage = new();
+    private readonly FixedMergeOptionsProvider _mergeOptions = new();
     private readonly MemoryConsolidator _sut;
 
     public MemoryConsolidatorTests()
     {
-        _sut = new MemoryConsolidator(_store, _codeVerifier, new FakeProviderResolver(_chat, _embeddings), _usage);
+        _sut = new MemoryConsolidator(_store, _codeVerifier, new FakeProviderResolver(_chat, _embeddings), _usage, _mergeOptions);
     }
 
     [Fact]
@@ -136,9 +137,11 @@ public sealed class MemoryConsolidatorTests
     {
         _embeddings.Map("timestamp tolerance", Near(0.85)).Map("signature verification", Axis(0));
         _chat.UseModel(judge: _ => "1|COMPLEMENTS|adds the timestamp tolerance");
+        const int factCap = 12;
+        _mergeOptions.Options = _mergeOptions.Options with { MaxFacts = factCap };
         var full = SignatureVerification() with
         {
-            Facts = [.. Enumerable.Range(1, MemoryConsolidator.MaxMergedFacts).Select(i => $"Verification rule number {i} holds")],
+            Facts = [.. Enumerable.Range(1, factCap).Select(i => $"Verification rule number {i} holds")],
         };
         var target = Seed(full, _sessionA, Axis(0), TimeSpan.FromDays(1));
 
@@ -148,7 +151,7 @@ public sealed class MemoryConsolidatorTests
         _store.Live.Should().HaveCount(2);
         result.Memory.TopicKey.Should().Be(target.TopicKey);
         result.Memory.Topic.Should().Be(target.Topic);
-        Facts(_store.Get(target.Id)).Should().HaveCount(MemoryConsolidator.MaxMergedFacts);
+        Facts(_store.Get(target.Id)).Should().HaveCount(factCap);
     }
 
     [Fact]
@@ -156,8 +159,10 @@ public sealed class MemoryConsolidatorTests
     {
         _embeddings.Map("timestamp tolerance", Near(0.85)).Map("signature verification", Axis(0));
         _chat.UseModel(judge: _ => "1|COMPLEMENTS|adds the timestamp tolerance", merge: _ => "merged");
+        const int bodyCap = 2500;
+        _mergeOptions.Options = _mergeOptions.Options with { MaxBodyChars = bodyCap };
         var filler = string.Concat(Enumerable.Repeat(" WebhookVerifier logs each rejected header.", 100));
-        var longBody = (SignatureVerification().Body + filler)[..(MemoryConsolidator.MaxMergedBodyLength - SignatureTolerance().Body.Length)];
+        var longBody = (SignatureVerification().Body + filler)[..(bodyCap - SignatureTolerance().Body.Length)];
         var target = Seed(SignatureVerification() with { Body = longBody }, _sessionA, Axis(0), TimeSpan.FromDays(1));
 
         var result = await ConsolidateAsync(SignatureTolerance(), _sessionB);
@@ -166,6 +171,114 @@ public sealed class MemoryConsolidatorTests
         result.Memory.TopicKey.Should().Be(target.TopicKey);
         _store.Get(target.Id).Body.Should().Be(longBody);
         _chat.Calls.Should().Equal(FakeChatClient.JudgeCall);
+    }
+
+    [Fact]
+    public async Task Candidate_complementing_several_memories_folds_them_all_into_one()
+    {
+        const string mergedBody =
+            "WebhookVerifier checks the Stripe-Signature header with HMAC-SHA256 using PAYMENTS_WEBHOOK_SECRET and rejects signatures older than five minutes. " +
+            "PaymentsWebhookClient retries failed deliveries five times with exponential backoff.";
+        _embeddings.Map("timestamp tolerance", Near(0.85)).Map("signature verification", Axis(0)).Map("webhook retries", Axis(1));
+        _chat.UseModel(judge: _ => "1|COMPLEMENTS|adds the timestamp tolerance\n2|COMPLEMENTS|same webhook subject", merge: _ => mergedBody);
+        var verification = Seed(SignatureVerification(), _sessionA, Axis(0), TimeSpan.FromDays(2));
+        var retries = Seed(WebhookRetries(), _sessionB, Axis(1), TimeSpan.FromDays(1));
+
+        var result = await ConsolidateAsync(SignatureTolerance(), Guid.NewGuid());
+
+        result.Outcome.Should().Be(ConsolidationOutcome.Merged);
+        var live = _store.Live.Should().ContainSingle().Subject;
+        live.Id.Should().Be(result.Memory.Id);
+        live.Body.Should().Be(mergedBody);
+        Facts(live).Should().HaveCount(5).And.Contain(Facts(verification)).And.Contain(Facts(retries));
+        var folded = _store.All.Single(m => m.Id != live.Id);
+        folded.Status.Should().Be(MemoryStatus.Superseded);
+        folded.SupersededById.Should().Be(live.Id);
+        _store.EvidenceFor(live.Id).Count(e => e.Relation == EvidenceRelation.Merged).Should().BeGreaterThanOrEqualTo(2);
+        live.SourceCount.Should().Be(3, "the folded memory's sessions count as evidence of the merged one");
+        _chat.Calls.Should().Equal(FakeChatClient.JudgeCall, FakeChatClient.MergeCall);
+    }
+
+    [Fact]
+    public async Task Pairwise_limit_folds_only_the_best_scored_complement()
+    {
+        _embeddings.Map("timestamp tolerance", Near(0.85)).Map("signature verification", Axis(0)).Map("webhook retries", Axis(1));
+        _chat.UseModel(judge: _ => "1|COMPLEMENTS|a\n2|COMPLEMENTS|b", merge: user => user);
+        _mergeOptions.Options = _mergeOptions.Options with { OnlineMaxSources = 2 };
+        Seed(SignatureVerification(), _sessionA, Axis(0), TimeSpan.FromDays(2));
+        var retries = Seed(WebhookRetries(), _sessionB, Axis(1), TimeSpan.FromDays(1));
+
+        var result = await ConsolidateAsync(SignatureTolerance(), Guid.NewGuid());
+
+        result.Outcome.Should().Be(ConsolidationOutcome.Merged);
+        _store.Live.Should().HaveCount(2);
+        _store.Get(retries.Id).Status.Should().Be(MemoryStatus.Active, "the second complement is beyond the two-memory limit");
+    }
+
+    [Fact]
+    public async Task Extra_complement_that_does_not_fit_the_body_limit_stays_separate()
+    {
+        _embeddings.Map("timestamp tolerance", Near(0.85)).Map("signature verification", Axis(0)).Map("webhook retries", Axis(1));
+        _chat.UseModel(judge: _ => "1|COMPLEMENTS|a\n2|COMPLEMENTS|b", merge: user => user);
+        var verification = Seed(SignatureVerification(), _sessionA, Axis(0), TimeSpan.FromDays(2));
+        var retries = Seed(WebhookRetries(), _sessionB, Axis(1), TimeSpan.FromDays(1));
+        var candidate = SignatureTolerance();
+        _mergeOptions.Options = _mergeOptions.Options with { MaxBodyChars = verification.Body.Length + 2 + candidate.Body.Length + 10 };
+
+        var result = await ConsolidateAsync(candidate, Guid.NewGuid());
+
+        result.Outcome.Should().Be(ConsolidationOutcome.Merged);
+        result.Memory.Id.Should().Be(verification.Id);
+        _store.Get(retries.Id).Status.Should().Be(MemoryStatus.Active);
+        _store.Live.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task Disabled_online_merging_stores_the_complement_next_to_its_neighbour_under_the_same_topic()
+    {
+        _embeddings.Map("timestamp tolerance", Near(0.85)).Map("signature verification", Axis(0));
+        _chat.UseModel(judge: _ => "1|COMPLEMENTS|adds the timestamp tolerance");
+        _mergeOptions.Options = _mergeOptions.Options with { OnlineMergeEnabled = false };
+        var original = Seed(SignatureVerification(), _sessionA, Axis(0), TimeSpan.FromDays(1));
+
+        var result = await ConsolidateAsync(SignatureTolerance(), _sessionB);
+
+        result.Outcome.Should().Be(ConsolidationOutcome.Created);
+        _store.Live.Should().HaveCount(2);
+        result.Memory.TopicKey.Should().Be(original.TopicKey);
+        _store.Get(original.Id).Body.Should().Be(original.Body);
+        _chat.Calls.Should().Equal(FakeChatClient.JudgeCall);
+    }
+
+    [Fact]
+    public async Task Model_merge_that_drops_a_concrete_name_is_replaced_by_the_lossless_concatenation()
+    {
+        _embeddings.Map("timestamp tolerance", Near(0.85)).Map("signature verification", Axis(0));
+        _chat.UseModel(judge: _ => "1|COMPLEMENTS|adds the timestamp tolerance", merge: _ => "Verification also rejects signatures older than five minutes.");
+        var original = Seed(SignatureVerification(), _sessionA, Axis(0), TimeSpan.FromDays(1));
+        var complement = SignatureTolerance();
+
+        var result = await ConsolidateAsync(complement, _sessionB);
+
+        result.Outcome.Should().Be(ConsolidationOutcome.Merged);
+        _store.Live.Should().ContainSingle().Which.Body.Should().Be($"{original.Body}\n\n{complement.Body}");
+    }
+
+    [Fact]
+    public async Task Model_merge_over_the_body_limit_is_replaced_by_the_lossless_concatenation()
+    {
+        _embeddings.Map("timestamp tolerance", Near(0.85)).Map("signature verification", Axis(0));
+        var original = Seed(SignatureVerification(), _sessionA, Axis(0), TimeSpan.FromDays(1));
+        var complement = SignatureTolerance();
+        _mergeOptions.Options = _mergeOptions.Options with { MaxBodyChars = original.Body.Length + 2 + complement.Body.Length + 20 };
+        _chat.UseModel(
+            judge: _ => "1|COMPLEMENTS|adds the timestamp tolerance",
+            merge: _ => $"{original.Body} {complement.Body} {new string('x', 200)}");
+
+        var result = await ConsolidateAsync(complement, _sessionB);
+
+        result.Outcome.Should().Be(ConsolidationOutcome.Merged);
+        _store.Live.Should().ContainSingle().Which.Body.Should().Be($"{original.Body}\n\n{complement.Body}");
     }
 
     [Fact]

@@ -265,7 +265,7 @@ public sealed class ReconsolidateMemoryJobHandlerTests : IDisposable
         var store = new MemoryStoreAdapter(memories, db, vectorIndex);
         var codeVerifier = new CodeVerifier(new FileRepository(db), new SymbolRepository(db), new ProjectRepository(db));
         var embeddings = new FixedEmbeddingGenerator();
-        var reconsolidator = new MemoryReconsolidator(store, codeVerifier, new FakeProviderResolver(embeddings), new FakeUsageRecorder());
+        var reconsolidator = new MemoryReconsolidator(store, codeVerifier, new FakeProviderResolver(embeddings), new FakeUsageRecorder(), new FixedMergeOptionsProvider());
         return new Fixture(db, vectorIndex, memories, store, embeddings, new ReconsolidateMemoryJobHandler(reconsolidator, memories));
     }
 

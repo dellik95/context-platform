@@ -74,7 +74,14 @@ export class SettingsPanelComponent {
     hookInvocationRetentionEnabled: true,
     hookInvocationRetentionDays: 30,
     memoryReconsolidationEnabled: false,
-    memoryReconsolidationIntervalMinutes: 60,
+    memoryReconsolidationIntervalMinutes: 360,
+    onlineMergeEnabled: true,
+    onlineMergeMaxSources: 5,
+    mergedMemoryMaxBodyChars: 8000,
+    mergedMemoryMaxFacts: 40,
+    reconsolidationMaxGroupSize: 12,
+    reconsolidationClusterMinSimilarity: 0.6,
+    reconsolidationSourceExcerptChars: 3000,
     llmTimeoutSeconds: 1200,
     llmRetryEnabled: false,
     llmMaxRetries: 2,
@@ -94,6 +101,18 @@ export class SettingsPanelComponent {
     min(path.staleSessionTimeoutMinutes, 1);
     min(path.hookInvocationRetentionDays, 1);
     min(path.memoryReconsolidationIntervalMinutes, 1);
+    min(path.onlineMergeMaxSources, 2);
+    max(path.onlineMergeMaxSources, 10);
+    min(path.mergedMemoryMaxBodyChars, 1000);
+    max(path.mergedMemoryMaxBodyChars, 32000);
+    min(path.mergedMemoryMaxFacts, 5);
+    max(path.mergedMemoryMaxFacts, 100);
+    min(path.reconsolidationMaxGroupSize, 2);
+    max(path.reconsolidationMaxGroupSize, 50);
+    min(path.reconsolidationClusterMinSimilarity, 0.3);
+    max(path.reconsolidationClusterMinSimilarity, 0.95);
+    min(path.reconsolidationSourceExcerptChars, 500);
+    max(path.reconsolidationSourceExcerptChars, 16000);
     min(path.llmTimeoutSeconds, 1);
     min(path.llmMaxRetries, 1);
     min(path.llmRetryBaseDelaySeconds, 1);
@@ -159,9 +178,13 @@ export class SettingsPanelComponent {
 
   protected readonly memoryMergingSummary = computed(() => {
     const m = this.settingsModel();
-    return m.memoryReconsolidationEnabled
-      ? `Reconsolidation every ${m.memoryReconsolidationIntervalMinutes} min`
-      : 'Reconsolidation off';
+    const online = m.onlineMergeEnabled
+      ? `Online merge up to ${m.onlineMergeMaxSources} memories`
+      : 'Online merge off';
+    const periodic = m.memoryReconsolidationEnabled
+      ? `reconsolidation every ${m.memoryReconsolidationIntervalMinutes} min`
+      : 'reconsolidation off';
+    return `${online} · ${periodic}`;
   });
 
   protected readonly resilienceSummary = computed(() => {
@@ -228,7 +251,14 @@ export class SettingsPanelComponent {
         memoryReconsolidationIntervalMinutes:
           settings.memoryReconsolidationIntervalMinutes > 0
             ? settings.memoryReconsolidationIntervalMinutes
-            : 60,
+            : 360,
+        onlineMergeEnabled: settings.onlineMergeEnabled,
+        onlineMergeMaxSources: settings.onlineMergeMaxSources,
+        mergedMemoryMaxBodyChars: settings.mergedMemoryMaxBodyChars,
+        mergedMemoryMaxFacts: settings.mergedMemoryMaxFacts,
+        reconsolidationMaxGroupSize: settings.reconsolidationMaxGroupSize,
+        reconsolidationClusterMinSimilarity: settings.reconsolidationClusterMinSimilarity,
+        reconsolidationSourceExcerptChars: settings.reconsolidationSourceExcerptChars,
         llmTimeoutSeconds: settings.llmTimeoutSeconds,
         llmRetryEnabled: settings.llmMaxRetries > 0,
         llmMaxRetries: settings.llmMaxRetries > 0 ? settings.llmMaxRetries : 2,
@@ -289,6 +319,10 @@ export class SettingsPanelComponent {
     }));
   }
 
+  protected setOnlineMergeEnabled(event: MatSlideToggleChange): void {
+    this.settingsModel.update((current) => ({ ...current, onlineMergeEnabled: event.checked }));
+  }
+
   protected setMemoryReconsolidationEnabled(event: MatSlideToggleChange): void {
     this.settingsModel.update((current) => ({
       ...current,
@@ -340,6 +374,13 @@ export class SettingsPanelComponent {
         ? raw.memoryReconsolidationIntervalMinutes
         : 0,
       lastMemoryReconsolidationScheduledAt: this.lastMemoryReconsolidationScheduledAt,
+      onlineMergeEnabled: raw.onlineMergeEnabled,
+      onlineMergeMaxSources: raw.onlineMergeMaxSources,
+      mergedMemoryMaxBodyChars: raw.mergedMemoryMaxBodyChars,
+      mergedMemoryMaxFacts: raw.mergedMemoryMaxFacts,
+      reconsolidationMaxGroupSize: raw.reconsolidationMaxGroupSize,
+      reconsolidationClusterMinSimilarity: raw.reconsolidationClusterMinSimilarity,
+      reconsolidationSourceExcerptChars: raw.reconsolidationSourceExcerptChars,
       llmTimeoutSeconds: raw.llmTimeoutSeconds,
       llmMaxRetries: raw.llmRetryEnabled ? raw.llmMaxRetries : 0,
       llmRetryBaseDelaySeconds: raw.llmRetryBaseDelaySeconds,

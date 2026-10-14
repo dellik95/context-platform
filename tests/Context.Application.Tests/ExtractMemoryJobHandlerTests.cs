@@ -53,7 +53,7 @@ public sealed class ExtractMemoryJobHandlerTests : IDisposable
         var codeVerifier = new CodeVerifier(new FileRepository(db), new SymbolRepository(db), new ProjectRepository(db));
         var resolver = new FakeProviderResolver(CandidateResponse());
         var usage = new FakeUsageRecorder();
-        var extractor = new LlmMemoryExtractor(new MemoryConsolidator(store, codeVerifier, resolver, usage), resolver, usage);
+        var extractor = new LlmMemoryExtractor(new MemoryConsolidator(store, codeVerifier, resolver, usage, new FixedMergeOptionsProvider()), resolver, usage);
         var sut = new ExtractMemoryJobHandler(extractor, new Mock<ISessionRepository>().Object);
 
         await sut.HandleAsync(MakeJob(projectId, payload), CancellationToken.None);

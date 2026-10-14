@@ -9,7 +9,7 @@ namespace Context.Dashboard.Server.Api;
 
 /// <summary>
 /// Batch memory reconsolidation: enqueue a run (a dry run by default, which only stores a Pending
-/// report), review reports, and apply or discard a Pending one. Apply claims the report (Pending to
+/// report), review reports, apply or discard a Pending one, and delete finished ones from the list. Apply claims the report (Pending to
 /// Applying) before enqueueing, so a report is applied at most once. A report of another project
 /// reports 404, like <see cref="MemoryEndpoints"/>.
 /// </summary>
@@ -23,6 +23,8 @@ public static class MemoryReconsolidationEndpoints
         group.MapGet("/reports/{id:guid}", GetAsync);
         group.MapPost("/reports/{id:guid}/apply", ApplyAsync);
         group.MapPost("/reports/{id:guid}/discard", DiscardAsync);
+        group.MapDelete("/reports/{id:guid}", DeleteReportAsync);
+        group.MapDelete("/reports", CleanupReportsAsync);
     }
 
     private static async Task<IResult> EnqueueAsync(
@@ -93,6 +95,37 @@ public static class MemoryReconsolidationEndpoints
         return await memories.SetReportStatusAsync(id, ConsolidationReportStatus.Pending, ConsolidationReportStatus.Discarded, null, null, ct).ConfigureAwait(false)
             ? Results.NoContent()
             : Results.Conflict(new { message = $"Report '{id}' is no longer Pending; only a Pending report can be discarded." });
+    }
+
+    /// <summary>Removes one report from the list. An Applying report is owned by its apply job, so it answers 409.</summary>
+    private static async Task<IResult> DeleteReportAsync(
+        Guid id, IMemoryRepository memories, CurrentProjectAccessor currentProject, CancellationToken ct)
+    {
+        if (await FindAsync(id, memories, currentProject, ct).ConfigureAwait(false) is null)
+        {
+            return Results.NotFound();
+        }
+
+        return await memories.DeleteReportAsync(id, ct).ConfigureAwait(false)
+            ? Results.NoContent()
+            : Results.Conflict(new { message = $"Report '{id}' is being applied and cannot be deleted yet." });
+    }
+
+    /// <summary>Clears finished reports from the list: with no <paramref name="status"/> every Applied, Discarded and
+    /// Failed one, keeping Pending reports that still await review. Applying is never deletable.</summary>
+    private static async Task<IResult> CleanupReportsAsync(
+        ConsolidationReportStatus? status, Guid? projectId, IMemoryRepository memories, CurrentProjectAccessor currentProject, CancellationToken ct)
+    {
+        if (status == ConsolidationReportStatus.Applying)
+        {
+            return Results.BadRequest(new { message = "A report that is being applied cannot be deleted." });
+        }
+
+        IReadOnlyCollection<ConsolidationReportStatus> statuses = status is { } one
+            ? [one]
+            : [ConsolidationReportStatus.Applied, ConsolidationReportStatus.Discarded, ConsolidationReportStatus.Failed];
+        var removed = await memories.DeleteReportsAsync(projectId ?? currentProject.ProjectId, statuses, ct).ConfigureAwait(false);
+        return Results.Ok(new { removed });
     }
 
     private static async Task<MemoryConsolidationReport?> FindAsync(

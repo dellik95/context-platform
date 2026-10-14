@@ -1,3 +1,4 @@
+using Context.Memory.Consolidation;
 using Context.Providers.Embeddings;
 
 namespace Context.Application.Settings;
@@ -67,6 +68,26 @@ public static class ProjectSettingsValidator
             errors.Add($"{nameof(dto.EmbeddingBatchSize)} must be between 0 (provider default) and {EmbeddingBatchLimits.MaxConfigurableInputs}.");
         }
 
+        RequireRange(errors, nameof(dto.OnlineMergeMaxSources), dto.OnlineMergeMaxSources, MemoryMergeOptions.MinOnlineMaxSources, MemoryMergeOptions.MaxOnlineMaxSources);
+        RequireRange(errors, nameof(dto.MergedMemoryMaxBodyChars), dto.MergedMemoryMaxBodyChars, MemoryMergeOptions.MinBodyChars, MemoryMergeOptions.MaxBodyCharsLimit);
+        RequireRange(errors, nameof(dto.MergedMemoryMaxFacts), dto.MergedMemoryMaxFacts, MemoryMergeOptions.MinFacts, MemoryMergeOptions.MaxFactsLimit);
+        RequireRange(errors, nameof(dto.ReconsolidationMaxGroupSize), dto.ReconsolidationMaxGroupSize, MemoryMergeOptions.MinGroupSize, MemoryMergeOptions.MaxGroupSizeLimit);
+        RequireRange(errors, nameof(dto.ReconsolidationSourceExcerptChars), dto.ReconsolidationSourceExcerptChars, MemoryMergeOptions.MinSourceExcerptChars, MemoryMergeOptions.MaxSourceExcerptCharsLimit);
+
+        if (!(dto.ReconsolidationClusterMinSimilarity >= MemoryMergeOptions.MinSimilarity
+            && dto.ReconsolidationClusterMinSimilarity <= MemoryMergeOptions.MaxSimilarity))
+        {
+            errors.Add($"{nameof(dto.ReconsolidationClusterMinSimilarity)} must be between {MemoryMergeOptions.MinSimilarity} and {MemoryMergeOptions.MaxSimilarity}.");
+        }
+
         return errors;
+    }
+
+    private static void RequireRange(List<string> errors, string name, int value, int min, int max)
+    {
+        if (value < min || value > max)
+        {
+            errors.Add($"{name} must be between {min} and {max}.");
+        }
     }
 }

@@ -5,7 +5,9 @@ import { environment } from '../../environments/environment';
 import {
   BrowseDirectoryResponse,
   CleanupJobsResponse,
+  CleanupReconsolidationReportsResponse,
   ClaudeInstallResponse,
+  ConsolidationReportStatus,
   ContextPack,
   CreateProjectRequest,
   ForceRunningJobsResponse,
@@ -150,6 +152,21 @@ export class ApiService {
 
   discardReconsolidation(reportId: string): Observable<void> {
     return this.http.post<void>(`${this.base}/api/memories/reconsolidation/reports/${reportId}/discard`, {});
+  }
+
+  /** Backend responds 404 when the report is gone and 409 while it is Applying. */
+  deleteReconsolidationReport(reportId: string): Observable<void> {
+    return this.http.delete<void>(`${this.base}/api/memories/reconsolidation/reports/${reportId}`);
+  }
+
+  /** Without a status removes every Applied, Discarded and Failed report; Pending ones are kept. */
+  cleanupReconsolidationReports(status?: ConsolidationReportStatus): Observable<CleanupReconsolidationReportsResponse> {
+    const params: Record<string, string> = {};
+    if (status) {
+      params['status'] = status;
+    }
+    return this.http.delete<CleanupReconsolidationReportsResponse>(
+      `${this.base}/api/memories/reconsolidation/reports`, { params });
   }
 
   graphImpact(symbolId: string, maxHops = 3): Observable<ImpactSet> {
