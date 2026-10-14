@@ -29,6 +29,7 @@
          of large doc/markdown/config files, instead of one whole-file chunk. -->
     <PackageReference Include="Microsoft.Extensions.DataIngestion" />
     <PackageReference Include="Microsoft.ML.Tokenizers" />
+    <PackageReference Include="Microsoft.ML.Tokenizers.Data.O200kBase" />
   </ItemGroup>
 
   <PropertyGroup>

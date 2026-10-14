@@ -246,6 +246,29 @@ public sealed class IndexingPipelineTests : IDisposable
     [Theory]
     [InlineData("previous-hash", false)]
     [InlineData("", true)]
+    public async Task IndexFileAsync_queues_the_graph_update_for_an_unparsed_file_only_on_a_first_or_unfinished_index(string existingHash, bool expectGraphJob)
+    {
+        var projectId = Guid.NewGuid();
+        _projectRepository.Setup(p => p.GetByIdAsync(projectId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Project { Id = projectId, Name = "Demo", RootPath = _root, CreatedAt = DateTimeOffset.UtcNow });
+        System.IO.File.WriteAllText(Path.Combine(_root, "notes.txt"), "Some notes about retries.");
+        _fileRepository.Setup(f => f.GetByRelativePathAsync(projectId, "notes.txt", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DomainFile { Id = Guid.NewGuid(), ProjectId = projectId, RelativePath = "notes.txt", ContentHash = existingHash, UpdatedAt = DateTimeOffset.UtcNow });
+
+        // A file with no language parser is split by the tokenizer-backed chunker. This used to throw "tokenizer data
+        // file Microsoft.ML.Tokenizers.Data.O200kBase.dll could not be loaded" because the data package was not
+        // referenced, which failed every markdown/JSON/config file in production.
+        await BuildPipeline(new ThrowingFakeParser()).IndexFileAsync(projectId, "notes.txt", CancellationToken.None);
+
+        _chunkRepository.Verify(c => c.ReplaceForFileAsync(It.IsAny<Guid>(), It.Is<IReadOnlyList<Chunk>>(l => l.Count > 0 && l[0].Text.Contains("Some notes")), It.IsAny<CancellationToken>()), Times.Once);
+        _jobQueue.Verify(
+            q => q.EnqueueAsync(JobType.UpdateGraph, It.IsAny<object>(), projectId, It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            expectGraphJob ? Times.Once() : Times.Never());
+    }
+
+    [Theory]
+    [InlineData("previous-hash", false)]
+    [InlineData("", true)]
     public async Task IndexFileAsync_redoes_the_graph_and_embedding_work_for_an_unfinished_index_even_when_no_symbol_changed(string existingHash, bool redone)
     {
         var projectId = Guid.NewGuid();

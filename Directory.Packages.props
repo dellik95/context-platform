@@ -81,6 +81,9 @@
          Microsoft.Extensions.AI packages above; still preview-only, no stable release exists yet. -->
     <PackageVersion Include="Microsoft.Extensions.DataIngestion" Version="10.10.0-preview.1.26459.2" />
     <PackageVersion Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
+    <!-- The vocabulary data TiktokenTokenizer.CreateForModel loads at runtime: without it every file that has
+         no language parser (markdown, JSON, config) fails to chunk with "tokenizer data file ... could not be loaded". -->
+    <PackageVersion Include="Microsoft.ML.Tokenizers.Data.O200kBase" Version="2.0.0" />
     <!-- Context.Host: run as a native OS service on either platform (both packages are no-ops
          when the process isn't actually launched by that platform's service manager). -->
     <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
