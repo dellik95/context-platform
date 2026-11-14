@@ -356,4 +356,96 @@ public sealed class TreeSitterCSharpParserTests
             && r.SourceQualifiedName == "Acme.Widgets.Button.Wire"
             && r.TargetName == "OnClicked");
     }
+
+    [Fact]
+    public void ExtractSymbols_RecordAndRecordStruct_AreCapturedWithCorrectKindsAndMembers()
+    {
+        const string source = """
+            namespace Acme.Orders;
+
+            public interface IOrder { }
+
+            public sealed record OrderDto(Guid Id, string Name) : IOrder
+            {
+                public bool IsValid() => Id != Guid.Empty;
+            }
+
+            public readonly record struct Money(decimal Amount, string Currency) : IOrder;
+            """;
+        using var parser = new TreeSitterCSharpParser();
+
+        var ast = parser.Parse(source);
+        var symbols = parser.ExtractSymbols(ast);
+
+        symbols.Should().Contain(s => s.Name == "OrderDto" && s.Kind == SymbolKind.Class && s.QualifiedName == "Acme.Orders.OrderDto");
+        symbols.Should().Contain(s => s.Name == "IsValid" && s.Kind == SymbolKind.Method && s.QualifiedName == "Acme.Orders.OrderDto.IsValid");
+        symbols.Should().Contain(s => s.Name == "Money" && s.Kind == SymbolKind.Struct && s.QualifiedName == "Acme.Orders.Money");
+
+        var relations = parser.ExtractRelations(parser.Parse(source));
+        relations.Should().Contain(r => r.Kind == RelationKind.Implements && r.SourceQualifiedName == "Acme.Orders.OrderDto" && r.TargetName == "IOrder");
+        relations.Should().Contain(r => r.Kind == RelationKind.Implements && r.SourceQualifiedName == "Acme.Orders.Money" && r.TargetName == "IOrder");
+    }
+
+    [Fact]
+    public void ExtractRelations_PropertyAccessorCall_References_AndTests_AreCaptured()
+    {
+        const string source = """
+            using Xunit;
+
+            namespace Acme.Orders;
+
+            public sealed record OrderId(int Value);
+
+            public class OrderService
+            {
+                private readonly OrderId _defaultId = new(1);
+
+                public bool HasOrder => CheckValid();
+
+                public OrderId Create(OrderId id) => id;
+
+                private bool CheckValid() => true;
+            }
+
+            public class OrderServiceTests
+            {
+                [Fact]
+                public void Create_ReturnsOrderId()
+                {
+                    var svc = new OrderService();
+                    svc.Create(new OrderId(1));
+                }
+            }
+            """;
+        using var parser = new TreeSitterCSharpParser();
+
+        var relations = parser.ExtractRelations(
+            parser.Parse(source),
+            projectSymbolNames: new HashSet<string> { "OrderId", "OrderService", "Create", "CheckValid" });
+
+        relations.Should().Contain(r =>
+            r.Kind == RelationKind.Calls
+            && r.SourceQualifiedName == "Acme.Orders.OrderService.HasOrder"
+            && r.TargetName == "CheckValid");
+
+        relations.Should().Contain(r =>
+            r.Kind == RelationKind.References
+            && r.SourceQualifiedName == "Acme.Orders.OrderService._defaultId"
+            && r.TargetName == "OrderId");
+
+        relations.Should().Contain(r =>
+            r.Kind == RelationKind.References
+            && r.SourceQualifiedName == "Acme.Orders.OrderService.Create"
+            && r.TargetName == "OrderId");
+
+        relations.Should().Contain(r =>
+            r.Kind == RelationKind.Tests
+            && r.SourceQualifiedName == "Acme.Orders.OrderServiceTests.Create_ReturnsOrderId"
+            && r.TargetName == "Create");
+
+        relations.Should().Contain(r =>
+            r.Kind == RelationKind.Tests
+            && r.SourceQualifiedName == "Acme.Orders.OrderServiceTests.Create_ReturnsOrderId"
+            && r.TargetName == "OrderService");
+    }
 }

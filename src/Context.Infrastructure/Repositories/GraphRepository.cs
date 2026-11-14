@@ -31,7 +31,9 @@ public class GraphRepository(ContextDbContext db) : IGraphRepository
 
     public async Task UpsertAsync(IEnumerable<GraphNode> nodes, IEnumerable<GraphEdge> edges, CancellationToken ct)
     {
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await using var tx = db.Database.CurrentTransaction is null
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
 
         foreach (var node in nodes)
         {
@@ -79,12 +81,69 @@ public class GraphRepository(ContextDbContext db) : IGraphRepository
         }
 
         await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
+        if (tx is not null)
+        {
+            await tx.CommitAsync(ct);
+        }
+    }
+
+    public async Task ReplaceForFileAsync(
+        Guid projectId, Guid fileId, IEnumerable<GraphNode> nodes, IEnumerable<GraphEdge> edges, CancellationToken ct)
+    {
+        var nodeList = nodes as IReadOnlyCollection<GraphNode> ?? nodes.ToList();
+        var edgeList = edges as IReadOnlyCollection<GraphEdge> ?? edges.ToList();
+
+        var keptOwnedNodeIds = nodeList.Where(n => n.OwningFileId == fileId).Select(n => n.Id).ToHashSet();
+        var keptOwnedEdgeIds = edgeList.Where(e => e.OwningFileId == fileId).Select(e => e.Id).ToHashSet();
+
+        await using var tx = db.Database.CurrentTransaction is null
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
+
+        var existingOwnedNodes = await db.GraphNodes
+            .Where(n => n.ProjectId == projectId && n.OwningFileId == fileId)
+            .ToListAsync(ct);
+        var removedNodes = existingOwnedNodes.Where(n => !keptOwnedNodeIds.Contains(n.Id)).ToList();
+        var removedNodeIds = removedNodes.Select(n => n.Id).ToHashSet();
+
+        var existingFileEdges = await db.GraphEdges
+            .Where(e => e.ProjectId == projectId
+                && (e.OwningFileId == fileId || removedNodeIds.Contains(e.SourceNodeId) || removedNodeIds.Contains(e.TargetNodeId)))
+            .ToListAsync(ct);
+        var staleEdges = existingFileEdges
+            .Where(e => (e.OwningFileId == fileId && !keptOwnedEdgeIds.Contains(e.Id))
+                || removedNodeIds.Contains(e.SourceNodeId)
+                || removedNodeIds.Contains(e.TargetNodeId))
+            .ToList();
+
+        if (staleEdges.Count > 0)
+        {
+            db.GraphEdges.RemoveRange(staleEdges);
+        }
+
+        if (removedNodes.Count > 0)
+        {
+            db.GraphNodes.RemoveRange(removedNodes);
+        }
+
+        if (staleEdges.Count > 0 || removedNodes.Count > 0)
+        {
+            await db.SaveChangesAsync(ct);
+        }
+
+        await UpsertAsync(nodeList, edgeList, ct);
+
+        if (tx is not null)
+        {
+            await tx.CommitAsync(ct);
+        }
     }
 
     public async Task InvalidateByOwningFileAsync(Guid projectId, Guid fileId, CancellationToken ct)
     {
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await using var tx = db.Database.CurrentTransaction is null
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
 
         var nodes = await db.GraphNodes
             .Where(n => n.ProjectId == projectId && n.OwningFileId == fileId)
@@ -103,7 +162,10 @@ public class GraphRepository(ContextDbContext db) : IGraphRepository
         db.GraphNodes.RemoveRange(nodes);
 
         await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
+        if (tx is not null)
+        {
+            await tx.CommitAsync(ct);
+        }
     }
 
     public async Task DeleteNodeAsync(Guid id, CancellationToken ct)

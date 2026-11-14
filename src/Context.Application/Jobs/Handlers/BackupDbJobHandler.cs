@@ -1,7 +1,6 @@
 using Context.Domain.Entities;
 using Context.Domain.Enums;
-using Context.Infrastructure;
-using Microsoft.EntityFrameworkCore;
+using Context.Infrastructure.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Context.Application.Jobs.Handlers;
@@ -12,7 +11,7 @@ namespace Context.Application.Jobs.Handlers;
 /// <c>{ProjectDataDir}/backups/</c>, per the task brief §2.
 /// </summary>
 public sealed class BackupDbJobHandler(
-    ContextDbContext db,
+    IStorageMaintenanceService storageMaintenance,
     ContextApplicationOptions options,
     ILogger<BackupDbJobHandler>? logger = null) : IJobHandler
 {
@@ -32,10 +31,7 @@ public sealed class BackupDbJobHandler(
         Directory.CreateDirectory(backupsDir);
 
         var backupPath = Path.Combine(backupsDir, $"context-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}.db");
-
-        // Parameterized via FormattableString -> ExecuteSqlAsync so the path is never
-        // string-concatenated into the SQL text, even though it's a process-generated path here.
-        await db.Database.ExecuteSqlAsync($"VACUUM INTO {backupPath}", ct).ConfigureAwait(false);
+        await storageMaintenance.BackupToAsync(backupPath, ct).ConfigureAwait(false);
 
         PruneOldBackups(backupsDir);
     }

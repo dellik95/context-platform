@@ -22,6 +22,21 @@ public static class Hashing
         return Convert.ToHexStringLower(hash);
     }
 
+    /// <summary>Computes the lowercase hex SHA-256 hash of a stream without buffering it in memory.</summary>
+    public static string HashStream(Stream stream)
+    {
+        Span<byte> hash = stackalloc byte[SHA256.HashSizeInBytes];
+        SHA256.HashData(stream, hash);
+        return Convert.ToHexStringLower(hash);
+    }
+
+    /// <summary>Asynchronously computes the lowercase hex SHA-256 hash of a stream.</summary>
+    public static async ValueTask<string> HashStreamAsync(Stream stream, CancellationToken ct = default)
+    {
+        var hash = await SHA256.HashDataAsync(stream, ct).ConfigureAwait(false);
+        return Convert.ToHexStringLower(hash);
+    }
+
     /// <summary>
     /// Computes the base64 SHA-256 hash of a raw bearer token, for storage/lookup of
     /// <c>Project.BearerTokenHash</c> without persisting the token itself.

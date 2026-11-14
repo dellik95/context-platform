@@ -31,7 +31,8 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<Context.Graph.Abstractions.IGraphTraversal>(),
                 sp.GetRequiredService<IReranker>(),
                 sp.GetRequiredService<IHybridScorer>(),
-                sp.GetRequiredService<IOptionsMonitor<HybridSearchOptions>>()));
+                sp.GetRequiredService<IOptionsMonitor<HybridSearchOptions>>(),
+                sp.GetService<Context.Graph.Abstractions.IGraphCacheProvider>()));
 
         services.AddSingleton<IContextPackBuilder>(sp =>
             new ContextPackBuilder(

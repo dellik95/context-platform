@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Context.Domain.Entities;
 using Context.Infrastructure.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,22 +16,55 @@ internal sealed class JobLane(
     JobWorkerPool pool,
     IServiceScopeFactory scopeFactory,
     Func<Job, CancellationToken, Task> processClaimedJobAsync,
-    Action<IReadOnlyList<Guid>, CancellationToken> kickWaitingLanes,
+    Action<IReadOnlyList<Guid>, bool, CancellationToken> kickWaitingLanes,
     ILogger logger)
 {
     private readonly Guid _key = projectId ?? Guid.Empty;
     private readonly JobLaneFilter _filter = light
         ? new JobLaneFilter(OnlyTypes: JobRetryPolicy.Light)
         : new JobLaneFilter(ExceptTypes: JobRetryPolicy.Light);
+    private readonly ConcurrentDictionary<Task, byte> _inFlight = new();
+    private volatile Task _drainTask = Task.CompletedTask;
     private int _draining;
     private int _kickPending;
 
     public void Kick(CancellationToken ct)
     {
+        if (ct.IsCancellationRequested)
+        {
+            return;
+        }
+
         Interlocked.Exchange(ref _kickPending, 1);
         if (Interlocked.CompareExchange(ref _draining, 1, 0) == 0)
         {
-            _ = Task.Run(() => DrainLoopAsync(ct), CancellationToken.None);
+            var task = Task.Run(() => DrainLoopAsync(ct), CancellationToken.None);
+            _drainTask = task;
+            _inFlight[task] = 0;
+            _ = task.ContinueWith(
+                static (t, state) => ((ConcurrentDictionary<Task, byte>)state!).TryRemove(t, out _),
+                _inFlight,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+    }
+
+    public async Task WaitForIdleAsync(CancellationToken ct)
+    {
+        while (true)
+        {
+            var pending = _inFlight.Keys.ToArray();
+            if (pending.Length == 0)
+            {
+                await _drainTask.WaitAsync(ct).ConfigureAwait(false);
+                if (_inFlight.IsEmpty)
+                {
+                    return;
+                }
+            }
+
+            await Task.WhenAll(pending).WaitAsync(ct).ConfigureAwait(false);
         }
     }
 
@@ -89,21 +123,38 @@ internal sealed class JobLane(
                 return;
             }
 
-            _ = processClaimedJobAsync(job, ct).ContinueWith(
-                _ =>
-                {
-                    ReleaseSlot(borrowed, idle: false, ct);
-                    if (!ct.IsCancellationRequested)
-                    {
-                        Kick(ct);
-                    }
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+            TrackJobExecution(job, borrowed, ct);
+        }
+    }
+
+    private void TrackJobExecution(Job job, bool borrowed, CancellationToken ct)
+    {
+        var task = RunClaimedAndReleaseAsync(job, borrowed, ct);
+        _inFlight[task] = 0;
+        _ = task.ContinueWith(
+            static (t, state) => ((ConcurrentDictionary<Task, byte>)state!).TryRemove(t, out _),
+            _inFlight,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private async Task RunClaimedAndReleaseAsync(Job job, bool borrowed, CancellationToken ct)
+    {
+        try
+        {
+            await processClaimedJobAsync(job, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            ReleaseSlot(borrowed, idle: false, ct);
+            if (!ct.IsCancellationRequested)
+            {
+                Kick(ct);
+            }
         }
     }
 
     private void ReleaseSlot(bool borrowed, bool idle, CancellationToken ct) =>
-        kickWaitingLanes(pool.Release(_key, borrowed, idle), ct);
+        kickWaitingLanes(pool.Release(_key, borrowed, idle), light, ct);
 }

@@ -322,4 +322,60 @@ public class GraphTraversalTests
         impact.Implementers.Should().BeEmpty();
         impact.CoveringTests.Should().BeEmpty();
     }
+
+    [Fact]
+    public async Task BlastRadiusAsync_TypeNode_RollsUpCallersAndTestsOfContainedMembers()
+    {
+        var persistence = new Fakes.FakeGraphPersistence();
+        var projectId = Guid.NewGuid();
+        var fileId = Guid.NewGuid();
+        var callerFileId = Guid.NewGuid();
+        var testFileId = Guid.NewGuid();
+
+        var serviceType = new Context.Domain.Entities.GraphNode
+        {
+            Id = Guid.NewGuid(), ProjectId = projectId, Kind = GraphNodeKind.Class, Label = "OrderService", OwningFileId = fileId
+        };
+        var processMethod = new Context.Domain.Entities.GraphNode
+        {
+            Id = Guid.NewGuid(), ProjectId = projectId, Kind = GraphNodeKind.Method, Label = "OrderService.Process", OwningFileId = fileId
+        };
+        var controllerMethod = new Context.Domain.Entities.GraphNode
+        {
+            Id = Guid.NewGuid(), ProjectId = projectId, Kind = GraphNodeKind.Method, Label = "OrdersController.Post", OwningFileId = callerFileId
+        };
+        var unitTest = new Context.Domain.Entities.GraphNode
+        {
+            Id = Guid.NewGuid(), ProjectId = projectId, Kind = GraphNodeKind.Method, Label = "OrderServiceTests.Process_Works", OwningFileId = testFileId
+        };
+
+        persistence.Seed(
+            [serviceType, processMethod, controllerMethod, unitTest],
+            [
+                new Context.Domain.Entities.GraphEdge
+                {
+                    Id = Guid.NewGuid(), ProjectId = projectId, SourceNodeId = serviceType.Id, TargetNodeId = processMethod.Id,
+                    Kind = GraphEdgeKind.Contains, OwningFileId = fileId
+                },
+                new Context.Domain.Entities.GraphEdge
+                {
+                    Id = Guid.NewGuid(), ProjectId = projectId, SourceNodeId = controllerMethod.Id, TargetNodeId = processMethod.Id,
+                    Kind = GraphEdgeKind.Calls, OwningFileId = callerFileId
+                },
+                new Context.Domain.Entities.GraphEdge
+                {
+                    Id = Guid.NewGuid(), ProjectId = projectId, SourceNodeId = unitTest.Id, TargetNodeId = processMethod.Id,
+                    Kind = GraphEdgeKind.Tests, OwningFileId = testFileId
+                },
+            ]);
+
+        var cacheProvider = new Context.Graph.GraphCacheProvider(persistence);
+        await cacheProvider.GetOrCreateAsync(projectId, CancellationToken.None);
+        var traversal = new Context.Graph.GraphTraversal(cacheProvider);
+
+        var impact = await traversal.BlastRadiusAsync(serviceType.Id, maxHops: 2, CancellationToken.None);
+
+        impact.Callers.Should().ContainSingle(c => c.Node.Id == controllerMethod.Id && c.Hops == 1);
+        impact.CoveringTests.Should().ContainSingle(t => t.Node.Id == unitTest.Id);
+    }
 }

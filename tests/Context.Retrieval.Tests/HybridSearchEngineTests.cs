@@ -227,6 +227,77 @@ public sealed class HybridSearchEngineTests
             "a graph neighbor carries no path, so it cannot be shown to satisfy the scope the caller asked for");
     }
 
+    [Fact]
+    public async Task SearchAsync_warms_cold_graph_cache_and_uses_reranker_scores_and_index_label()
+    {
+        var projectId = Guid.NewGuid();
+        var secondSymbol = Guid.NewGuid();
+        var firstSymbol = Guid.NewGuid();
+        var neighborNode = Guid.NewGuid();
+
+        var searchIndex = new FakeSearchIndex(
+            lexical:
+            [
+                (Guid.NewGuid(), (Guid?)null, firstSymbol, SymbolKind.Method, "first snippet", 10.0, "App.First", "src/First.cs"),
+                (Guid.NewGuid(), (Guid?)null, secondSymbol, SymbolKind.Method, "second snippet", 9.0, "App.Second", "src/Second.cs")
+            ],
+            vector: []);
+
+        var scorer = new HybridScorer(new HybridScoringOptions
+        {
+            LexicalWeight = 1.0,
+            VectorWeight = 0,
+            GraphWeight = 0.2,
+            RecencyWeight = 0,
+            MemoryWeight = 0
+        });
+
+        var graphCacheProvider = new TrackingGraphCacheProvider();
+        var sut = new HybridSearchEngine(
+            searchIndex,
+            new FakeEmbeddingLookup(),
+            new SingleNeighborGraphTraversal(neighborNode),
+            new ReverseReranker(),
+            scorer,
+            new HybridSearchOptions { RerankTopK = 2 },
+            graphCacheProvider);
+
+        var hits = await sut.SearchAsync(new SearchQuery(projectId, "second query", null, 1024), CancellationToken.None);
+
+        graphCacheProvider.WarmedProjects.Should().ContainSingle().Which.Should().Be(projectId);
+        hits.Should().Contain(h => h.NodeId == neighborNode);
+        hits[0].NodeId.Should().Be(secondSymbol, "reranker promoted the second candidate to rank 0");
+        hits[0].Label.Should().Be("App.Second");
+        hits[0].Score.Should().BeGreaterThan(hits[1].Score, "non-identity reranker order must update descending scores for ContextPackBuilder");
+    }
+
+    private sealed class TrackingGraphCacheProvider : IGraphCacheProvider
+    {
+        public List<Guid> WarmedProjects { get; } = [];
+
+        public Task<Context.Graph.InMemoryGraphCache> GetOrCreateAsync(Guid projectId, CancellationToken ct)
+        {
+            WarmedProjects.Add(projectId);
+            return Task.FromResult(new Context.Graph.InMemoryGraphCache(projectId));
+        }
+
+        public bool TryGetLoaded(Guid projectId, out Context.Graph.InMemoryGraphCache? cache)
+        {
+            cache = null;
+            return false;
+        }
+
+        public Context.Graph.InMemoryGraphCache? FindCacheContaining(Guid nodeId) => null;
+
+        public IReadOnlyCollection<Context.Graph.InMemoryGraphCache> LoadedCaches => [];
+    }
+
+    private sealed class ReverseReranker : IReranker
+    {
+        public Task<IReadOnlyList<int>> RerankAsync(string query, IReadOnlyList<string> candidates, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<int>>([.. Enumerable.Range(0, candidates.Count).Reverse()]);
+    }
+
     private static HybridSearchEngine NewEngine(ISearchIndex searchIndex, HybridSearchOptions options) =>
         new(searchIndex,
             new FakeEmbeddingLookup(),
@@ -264,13 +335,22 @@ public sealed class HybridSearchEngineTests
     }
 
     private sealed class FakeSearchIndex(
-        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score)> lexical,
-        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore)> vector) : ISearchIndex
+        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score, string? Label, string? RelativePath)> lexical,
+        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore, string? Label, string? RelativePath)> vector) : ISearchIndex
     {
-        public Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score)>> LexicalSearchAsync(
+        public FakeSearchIndex(
+            IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score)> lexical,
+            IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore)> vector)
+            : this(
+                [.. lexical.Select(x => (x.ChunkId, x.FileId, x.SymbolId, x.SymbolKind, x.Snippet, x.BM25Score, (string?)null, (string?)null))],
+                [.. vector.Select(x => (x.ChunkId, x.FileId, x.SymbolId, x.SymbolKind, x.Snippet, x.CosineScore, (string?)null, (string?)null))])
+        {
+        }
+
+        public Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score, string? Label, string? RelativePath)>> LexicalSearchAsync(
             Guid projectId, string text, IReadOnlyList<string>? scope, CancellationToken ct) => Task.FromResult(lexical);
 
-        public Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore)>> VectorSearchAsync(
+        public Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore, string? Label, string? RelativePath)>> VectorSearchAsync(
             Guid projectId, float[] queryEmbedding, IReadOnlyList<string>? scope, CancellationToken ct) => Task.FromResult(vector);
     }
 

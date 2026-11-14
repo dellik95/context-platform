@@ -48,6 +48,13 @@ public sealed class GraphPersistenceAdapter(IDbContextFactory<ContextDbContext> 
         await new GraphRepository(db).InvalidateByOwningFileAsync(projectId, fileId, ct).ConfigureAwait(false);
     }
 
+    public async Task ReplaceForFileAsync(
+        Guid projectId, Guid fileId, IEnumerable<GraphNode> nodes, IEnumerable<GraphEdge> edges, CancellationToken ct)
+    {
+        await using var db = await dbContextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        await new GraphRepository(db).ReplaceForFileAsync(projectId, fileId, nodes, edges, ct).ConfigureAwait(false);
+    }
+
     public async Task<GraphSnapshot> GetAllAsync(Guid projectId, CancellationToken ct)
     {
         await using var db = await dbContextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);

@@ -99,5 +99,37 @@ public sealed class MemoryRelationJudgeTests
         prompt.Should().NotContain(new string('x', MemoryRelationJudge.MaxBodyExcerpt + 1));
     }
 
+    [Fact]
+    public void JudgeOffline_detects_duplicate_and_complements_via_lexical_overlap_and_shared_entities()
+    {
+        var lexicalDup = new RelationSignals(
+            Cosine: 0.72,
+            SharesStrongEntity: true,
+            SameType: true,
+            SameTopicKey: true,
+            NegationAsymmetry: false,
+            ContentJaccard: MemoryRelationJudge.OfflineDuplicateJaccard);
+        var multiEntityComplement = new RelationSignals(
+            Cosine: 0.65,
+            SharesStrongEntity: true,
+            SameType: true,
+            SameTopicKey: true,
+            NegationAsymmetry: false,
+            ContentJaccard: 0.25,
+            SharedStrongEntityCount: 2);
+
+        MemoryRelationJudge.JudgeOffline(lexicalDup).Should().Be(MemoryRelation.Duplicate);
+        MemoryRelationJudge.JudgeOffline(multiEntityComplement).Should().Be(MemoryRelation.Complements);
+    }
+
+    [Fact]
+    public void ComputeContentJaccard_ignores_glue_words_and_compares_facts()
+    {
+        var a = Subject("Webhook retries", "PaymentsWebhookClient waits 30 seconds before failing");
+        var b = Subject("Webhook retries", "The PaymentsWebhookClient waits for 30 seconds before failing");
+
+        MemoryRelationJudge.ComputeContentJaccard(a, b).Should().Be(1.0);
+    }
+
     private static RelationSubject Subject(string title, params string[] facts) => new(MemoryType.Fact, title, facts, "Body.");
 }

@@ -255,6 +255,37 @@ public class SessionRepository(ContextDbContext db) : ISessionRepository
         return [.. page.Select(s => new SessionListItem(s, titles.GetValueOrDefault(s.Id)))];
     }
 
+    public async Task<IReadOnlyList<McpSessionSearchItem>> SearchForMcpAsync(Guid projectId, string? query, int limit, CancellationToken ct)
+    {
+        var sessions = db.Sessions.AsNoTracking().Where(s => s.ProjectId == projectId);
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            sessions = sessions.Where(s => s.ClaudeSessionId != null && s.ClaudeSessionId.Contains(query));
+        }
+
+        // Ended sessions without a summary or sessions without user prompts have no useful content to surface.
+        sessions = sessions
+            .Where(s => s.Status != Domain.Enums.SessionStatus.Ended || db.SessionSummaries.Any(sm => sm.SessionId == s.Id))
+            .Where(s => db.SessionEvents.Any(e => e.SessionId == s.Id && e.Type == Domain.Enums.SessionEventType.Prompt));
+
+        var matchingSessions = await sessions
+            .Select(s => new
+            {
+                s.Id,
+                s.ClaudeSessionId,
+                s.StartedAt,
+                s.EndedAt,
+                s.Status,
+                SummaryTitle = db.SessionSummaries.Where(sm => sm.SessionId == s.Id).Select(sm => sm.Title).FirstOrDefault(),
+            })
+            .ToListAsync(ct);
+
+        return [.. matchingSessions
+            .OrderByDescending(s => s.StartedAt)
+            .Take(Math.Max(1, limit))
+            .Select(s => new McpSessionSearchItem(s.Id, s.ClaudeSessionId, s.StartedAt, s.EndedAt, s.Status, s.SummaryTitle))];
+    }
+
     public async Task<IReadOnlyList<SessionSummaryChunk>> SearchSummaryChunksAsync(
         Guid projectId, string query, int limit, CancellationToken ct, Guid? sessionId = null)
     {

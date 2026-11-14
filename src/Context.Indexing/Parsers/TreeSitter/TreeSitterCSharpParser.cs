@@ -35,8 +35,16 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
 {
     private const string DocLinePrefix = "///";
 
-    private static readonly HashSet<string> TypeDeclarationTypes =
-        new(StringComparer.Ordinal) { "class_declaration", "interface_declaration", "struct_declaration", "enum_declaration" };
+    private static readonly HashSet<string> TypeDeclarationTypes = new(StringComparer.Ordinal)
+    {
+        "class_declaration", "interface_declaration", "struct_declaration", "enum_declaration",
+        "record_declaration", "record_struct_declaration"
+    };
+
+    private static readonly HashSet<string> TestAttributeNames = new(StringComparer.Ordinal)
+    {
+        "Fact", "Theory", "Test", "TestCase", "TestCaseSource", "TestMethod", "DataTestMethod", "Property"
+    };
 
     // One pattern per symbol kind; every pattern captures the whole declaration as "<prefix>.def"
     // and its name identifier as "<prefix>.name" so a single query execution + one dictionary
@@ -46,19 +54,30 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
         (interface_declaration name: (identifier) @interface.name) @interface.def
         (struct_declaration name: (identifier) @struct.name) @struct.def
         (enum_declaration name: (identifier) @enum.name) @enum.def
+        (record_declaration name: (identifier) @record.name) @record.def
         (method_declaration name: (identifier) @method.name) @method.def
         (constructor_declaration name: (identifier) @method.name) @method.def
         (property_declaration name: (identifier) @property.name) @property.def
         (field_declaration (variable_declaration (variable_declarator name: (identifier) @field.name))) @field.def
         """;
 
-    // base_list is deliberately queried only off class/interface/struct declarations (never enum:
+    // Optional separate node type used by some tree-sitter-c-sharp grammar versions for `record struct`.
+    private const string RecordStructSymbolsQuery = """
+        (record_struct_declaration name: (identifier) @record_struct.name) @record_struct.def
+        """;
+
+    // base_list is deliberately queried only off class/interface/struct/record declarations (never enum:
     // an enum's base_list is its underlying integral type, e.g. "enum Color : byte", not
     // inheritance — see ExtractRelations remarks).
     private const string BaseListQuery = """
         (class_declaration name: (identifier) @class.name (base_list) @class.bases) @class.def
         (interface_declaration name: (identifier) @interface.name (base_list) @interface.bases) @interface.def
         (struct_declaration name: (identifier) @struct.name (base_list) @struct.bases) @struct.def
+        (record_declaration name: (identifier) @record.name (base_list) @record.bases) @record.def
+        """;
+
+    private const string RecordStructBaseListQuery = """
+        (record_struct_declaration name: (identifier) @record_struct.name (base_list) @record_struct.bases) @record_struct.def
         """;
 
     private const string ImportsQuery = """
@@ -98,7 +117,21 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
         """;
 
     private readonly TS.Language _language = new("c-sharp");
+    private readonly bool _supportsRecordStructNode;
     private bool _disposed;
+
+    public TreeSitterCSharpParser()
+    {
+        try
+        {
+            using var probe = new TS.Query(_language, RecordStructSymbolsQuery);
+            _supportsRecordStructNode = true;
+        }
+        catch (Exception)
+        {
+            _supportsRecordStructNode = false;
+        }
+    }
 
     public IReadOnlySet<string> SupportedExtensions { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".cs" };
 
@@ -124,75 +157,10 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
             var root = wrapper.Tree.RootNode;
             var drafts = new List<SymbolDraft>();
 
-            using var query = new TS.Query(_language, SymbolsQuery);
-            foreach (var match in query.Execute(root).Matches)
+            CollectSymbolDrafts(root, SymbolsQuery, drafts);
+            if (_supportsRecordStructNode)
             {
-                var captures = match.Captures.ToDictionary(c => c.Name, c => c.Node);
-                var defEntry = captures.FirstOrDefault(kv => kv.Key.EndsWith(".def", StringComparison.Ordinal));
-                if (defEntry.Key is null)
-                {
-                    continue;
-                }
-
-                var prefix = defEntry.Key[..^".def".Length];
-                if (!captures.TryGetValue($"{prefix}.name", out var nameNode))
-                {
-                    continue;
-                }
-
-                var kind = prefix switch
-                {
-                    "class" => SymbolKind.Class,
-                    "interface" => SymbolKind.Interface,
-                    "struct" => SymbolKind.Struct,
-                    "enum" => SymbolKind.Enum,
-                    "method" => SymbolKind.Method,
-                    "property" => SymbolKind.Property,
-                    "field" => SymbolKind.Field,
-                    _ => (SymbolKind?)null,
-                };
-                if (kind is null)
-                {
-                    continue;
-                }
-
-                var defNode = defEntry.Value;
-                var name = nameNode.Text;
-                var (qualifiedName, parentQualifiedName) = ComputeQualifiedName(defNode, name);
-
-                // A member kind must be nested in a type; if it isn't (malformed/unexpected
-                // grammar shape), there is no sensible ParentSymbolId to hang it off — skip it.
-                if (kind is not (SymbolKind.Class or SymbolKind.Interface or SymbolKind.Struct or SymbolKind.Enum)
-                    && parentQualifiedName is null)
-                {
-                    continue;
-                }
-
-                var bodyFieldName = kind == SymbolKind.Property ? "accessors" : "body";
-                var bodyNode = TreeSitterQueryHelpers.TryGetField(defNode, bodyFieldName);
-
-                string signatureText;
-                string bodyText;
-                if (bodyNode is not null && defNode.Text.EndsWith(bodyNode.Text, StringComparison.Ordinal))
-                {
-                    signatureText = defNode.Text[..^bodyNode.Text.Length].Trim();
-                    bodyText = defNode.Text;
-                }
-                else
-                {
-                    // Headerless case (interface member with no body, a field declaration, or a
-                    // property whose accessors couldn't be matched textually): the whole
-                    // declaration is the signature and BodyText is empty.
-                    signatureText = defNode.Text.Trim();
-                    bodyText = string.Empty;
-                }
-
-                var docComment = TreeSitterQueryHelpers.ExtractLeadingDocComment(defNode, DocLinePrefix);
-
-                drafts.Add(new SymbolDraft(
-                    name, qualifiedName, kind.Value,
-                    defNode.StartPosition.Row + 1, defNode.EndPosition.Row + 1,
-                    signatureText, bodyText, docComment, parentQualifiedName));
+                CollectSymbolDrafts(root, RecordStructSymbolsQuery, drafts);
             }
 
             return drafts;
@@ -202,6 +170,85 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
             wrapper.Dispose();
         }
     }
+
+    private void CollectSymbolDrafts(TS.Node root, string querySource, List<SymbolDraft> drafts)
+    {
+        using var query = new TS.Query(_language, querySource);
+        foreach (var match in query.Execute(root).Matches)
+        {
+            var captures = match.Captures.ToDictionary(c => c.Name, c => c.Node);
+            var defEntry = captures.FirstOrDefault(kv => kv.Key.EndsWith(".def", StringComparison.Ordinal));
+            if (defEntry.Key is null)
+            {
+                continue;
+            }
+
+            var prefix = defEntry.Key[..^".def".Length];
+            if (!captures.TryGetValue($"{prefix}.name", out var nameNode))
+            {
+                continue;
+            }
+
+            var defNode = defEntry.Value;
+            var kind = prefix switch
+            {
+                "class" => SymbolKind.Class,
+                "interface" => SymbolKind.Interface,
+                "struct" or "record_struct" => SymbolKind.Struct,
+                "record" => IsRecordStructNode(defNode) ? SymbolKind.Struct : SymbolKind.Class,
+                "enum" => SymbolKind.Enum,
+                "method" => SymbolKind.Method,
+                "property" => SymbolKind.Property,
+                "field" => SymbolKind.Field,
+                _ => (SymbolKind?)null,
+            };
+            if (kind is null)
+            {
+                continue;
+            }
+
+            var name = nameNode.Text;
+            var (qualifiedName, parentQualifiedName) = ComputeQualifiedName(defNode, name);
+
+            // A member kind must be nested in a type; if it isn't (malformed/unexpected
+            // grammar shape), there is no sensible ParentSymbolId to hang it off — skip it.
+            if (kind is not (SymbolKind.Class or SymbolKind.Interface or SymbolKind.Struct or SymbolKind.Enum)
+                && parentQualifiedName is null)
+            {
+                continue;
+            }
+
+            var bodyFieldName = kind == SymbolKind.Property ? "accessors" : "body";
+            var bodyNode = TreeSitterQueryHelpers.TryGetField(defNode, bodyFieldName);
+
+            string signatureText;
+            string bodyText;
+            if (bodyNode is not null && defNode.Text.EndsWith(bodyNode.Text, StringComparison.Ordinal))
+            {
+                signatureText = defNode.Text[..^bodyNode.Text.Length].Trim();
+                bodyText = defNode.Text;
+            }
+            else
+            {
+                // Headerless case (interface member with no body, a field declaration, positional
+                // record, or a property whose accessors couldn't be matched textually): the whole
+                // declaration is the signature and BodyText is empty.
+                signatureText = defNode.Text.Trim();
+                bodyText = string.Empty;
+            }
+
+            var docComment = TreeSitterQueryHelpers.ExtractLeadingDocComment(defNode, DocLinePrefix);
+
+            drafts.Add(new SymbolDraft(
+                name, qualifiedName, kind.Value,
+                defNode.StartPosition.Row + 1, defNode.EndPosition.Row + 1,
+                signatureText, bodyText, docComment, parentQualifiedName));
+        }
+    }
+
+    private static bool IsRecordStructNode(TS.Node defNode) =>
+        defNode.Type == "record_struct_declaration"
+        || defNode.Children.Any(c => c.Type == "struct" || c.Text == "struct");
 
     public IReadOnlyList<RelationDraft> ExtractRelations(ParsedAst ast, IReadOnlySet<string>? projectSymbolNames = null)
     {
@@ -213,7 +260,9 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
 
             AddInheritanceRelations(root, relations);
             AddImportRelations(root, relations);
-            AddCallRelations(root, relations, projectSymbolNames);
+            var recordedCalls = AddCallRelations(root, relations, projectSymbolNames);
+            var recordedReferences = AddReferenceRelations(root, relations, projectSymbolNames);
+            AddTestRelations(root, relations, recordedCalls, recordedReferences);
 
             return relations;
         }
@@ -229,7 +278,16 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
 
     private void AddInheritanceRelations(TS.Node root, List<RelationDraft> relations)
     {
-        using var query = new TS.Query(_language, BaseListQuery);
+        CollectInheritanceRelations(root, BaseListQuery, relations);
+        if (_supportsRecordStructNode)
+        {
+            CollectInheritanceRelations(root, RecordStructBaseListQuery, relations);
+        }
+    }
+
+    private void CollectInheritanceRelations(TS.Node root, string querySource, List<RelationDraft> relations)
+    {
+        using var query = new TS.Query(_language, querySource);
         foreach (var match in query.Execute(root).Matches)
         {
             var captures = match.Captures.ToDictionary(c => c.Name, c => c.Node);
@@ -244,10 +302,10 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
             var defNode = defEntry.Value;
             var (qualifiedName, _) = ComputeQualifiedName(defNode, nameEntry.Value.Text);
 
-            // struct/interface base-list entries can only be interfaces; a class's entries are
-            // disambiguated per-name by the "IFoo" naming convention (no symbol-resolution pass
-            // exists here to know for certain which one is the base class).
-            var allImplements = defNode.Type is "struct_declaration" or "interface_declaration";
+            // struct / record struct / interface base-list entries can only be interfaces; a class
+            // or record class's entries are disambiguated per-name by the "IFoo" naming convention.
+            var allImplements = defNode.Type is "struct_declaration" or "interface_declaration" or "record_struct_declaration"
+                || IsRecordStructNode(defNode);
 
             foreach (var baseEntry in basesEntry.Value.NamedChildren)
             {
@@ -263,10 +321,22 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
         }
     }
 
-    private static string BaseTypeName(TS.Node baseListEntry) =>
-        baseListEntry.Type == "generic_name"
-            ? baseListEntry.FirstNamedChild?.Text ?? baseListEntry.Text
-            : baseListEntry.Text;
+    private static string BaseTypeName(TS.Node baseListEntry)
+    {
+        var typeNode = baseListEntry.Type == "primary_constructor_base_type"
+            ? TreeSitterQueryHelpers.TryGetField(baseListEntry, "type") ?? baseListEntry.FirstNamedChild
+            : baseListEntry;
+        if (typeNode is null)
+        {
+            return string.Empty;
+        }
+
+        var raw = typeNode.Type == "generic_name"
+            ? typeNode.FirstNamedChild?.Text ?? typeNode.Text
+            : typeNode.Text;
+        var dot = raw.LastIndexOf('.');
+        return dot >= 0 ? raw[(dot + 1)..] : raw;
+    }
 
     private static bool LooksLikeInterfaceName(string name) =>
         name.Length >= 2 && name[0] == 'I' && char.IsUpper(name[1]);
@@ -305,7 +375,7 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
     // Calls
     // ------------------------------------------------------------------
 
-    private void AddCallRelations(TS.Node root, List<RelationDraft> relations, IReadOnlySet<string>? projectSymbolNames)
+    private HashSet<(string Source, string Callee)> AddCallRelations(TS.Node root, List<RelationDraft> relations, IReadOnlySet<string>? projectSymbolNames)
     {
         var knownMethodNames = new HashSet<string>(StringComparer.Ordinal);
         if (projectSymbolNames is not null)
@@ -324,12 +394,11 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
             }
         }
 
+        var seen = new HashSet<(string Source, string Callee)>();
         if (knownMethodNames.Count == 0)
         {
-            return;
+            return seen;
         }
-
-        var seen = new HashSet<(string Source, string Callee)>();
 
         using (var invocationsQuery = new TS.Query(_language, InvocationsQuery))
         {
@@ -357,6 +426,8 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
                 }
             }
         }
+
+        return seen;
     }
 
     private static void TryRecordCall(
@@ -371,19 +442,19 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
             return;
         }
 
-        var enclosingMethod = FindEnclosingMethodOrConstructor(calleeNode);
-        if (enclosingMethod is null)
+        var enclosingCallable = FindEnclosingCallable(calleeNode);
+        if (enclosingCallable is null)
         {
-            return; // a call outside any method/constructor body (e.g. a field initializer) — out of scope, matching the task's "a method body containing an invocation" wording
+            return; // a call outside any method/constructor/property-accessor body (e.g. a field initializer)
         }
 
-        var methodName = TreeSitterQueryHelpers.TryGetField(enclosingMethod, "name")?.Text;
-        if (methodName is null)
+        var callableName = TreeSitterQueryHelpers.TryGetField(enclosingCallable, "name")?.Text;
+        if (callableName is null)
         {
             return;
         }
 
-        var (sourceQualifiedName, _) = ComputeQualifiedName(enclosingMethod, methodName);
+        var (sourceQualifiedName, _) = ComputeQualifiedName(enclosingCallable, callableName);
         if (!seen.Add((sourceQualifiedName, callee)))
         {
             return;
@@ -392,8 +463,9 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
         relations.Add(new RelationDraft(sourceQualifiedName, callee, RelationKind.Calls));
     }
 
-    private static TS.Node? FindEnclosingMethodOrConstructor(TS.Node node)
+    private static TS.Node? FindEnclosingCallable(TS.Node node)
     {
+        var viaPropertyAccessorOrArrow = false;
         var current = node.Parent;
         while (current is not null)
         {
@@ -402,10 +474,379 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
                 return current;
             }
 
+            if (current.Type == "accessor_declaration")
+            {
+                viaPropertyAccessorOrArrow = true;
+            }
+            else if (current.Type == "arrow_expression_clause" && current.Parent?.Type == "property_declaration")
+            {
+                viaPropertyAccessorOrArrow = true;
+            }
+            else if (current.Type == "property_declaration")
+            {
+                return viaPropertyAccessorOrArrow ? current : null;
+            }
+            else if (current.Type == "field_declaration")
+            {
+                return null;
+            }
+
             current = current.Parent;
         }
 
         return null;
+    }
+
+    // ------------------------------------------------------------------
+    // References & Tests
+    // ------------------------------------------------------------------
+
+    private static HashSet<(string Source, string Target)> AddReferenceRelations(
+        TS.Node root, List<RelationDraft> relations, IReadOnlySet<string>? projectSymbolNames)
+    {
+        var knownTargets = CollectKnownTypeNames(root, projectSymbolNames);
+        var seen = new HashSet<(string Source, string Target)>();
+        if (knownTargets.Count == 0)
+        {
+            return seen;
+        }
+
+        WalkForReferences(root, currentSource: null, knownTargets, seen, relations);
+        return seen;
+    }
+
+    private static HashSet<string> CollectKnownTypeNames(TS.Node root, IReadOnlySet<string>? projectSymbolNames)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        if (projectSymbolNames is not null)
+        {
+            names.UnionWith(projectSymbolNames);
+        }
+
+        CollectLocalTypeNames(root, names);
+        return names;
+    }
+
+    private static void CollectLocalTypeNames(TS.Node node, HashSet<string> names)
+    {
+        if (TypeDeclarationTypes.Contains(node.Type))
+        {
+            var typeName = TreeSitterQueryHelpers.TryGetField(node, "name")?.Text;
+            if (!string.IsNullOrEmpty(typeName))
+            {
+                names.Add(typeName);
+            }
+        }
+
+        foreach (var child in node.NamedChildren)
+        {
+            CollectLocalTypeNames(child, names);
+        }
+    }
+
+    private static void WalkForReferences(
+        TS.Node node,
+        string? currentSource,
+        HashSet<string> knownTargets,
+        HashSet<(string Source, string Target)> seen,
+        List<RelationDraft> relations)
+    {
+        if (TypeDeclarationTypes.Contains(node.Type))
+        {
+            var typeName = TreeSitterQueryHelpers.TryGetField(node, "name")?.Text;
+            var nextSource = typeName is not null ? ComputeQualifiedName(node, typeName).QualifiedName : currentSource;
+            foreach (var child in node.NamedChildren)
+            {
+                // Inheritance targets are emitted as Extends/Implements, not duplicated as References.
+                if (child.Type == "base_list")
+                {
+                    continue;
+                }
+
+                WalkForReferences(child, nextSource, knownTargets, seen, relations);
+            }
+
+            return;
+        }
+
+        if (node.Type is "method_declaration" or "constructor_declaration" or "property_declaration")
+        {
+            var memberName = TreeSitterQueryHelpers.TryGetField(node, "name")?.Text;
+            var nextSource = memberName is not null ? ComputeQualifiedName(node, memberName).QualifiedName : currentSource;
+
+            var typeNode = TreeSitterQueryHelpers.TryGetField(node, "returns")
+                ?? TreeSitterQueryHelpers.TryGetField(node, "type");
+            if (nextSource is not null && typeNode is not null)
+            {
+                RecordTypeNodeReferences(typeNode, nextSource, knownTargets, seen, relations);
+            }
+
+            foreach (var child in node.NamedChildren)
+            {
+                WalkForReferences(child, nextSource, knownTargets, seen, relations);
+            }
+
+            return;
+        }
+
+        if (node.Type == "field_declaration")
+        {
+            var varDecl = node.NamedChildren.FirstOrDefault(c => c.Type == "variable_declaration");
+            var typeNode = varDecl is not null ? TreeSitterQueryHelpers.TryGetField(varDecl, "type") : null;
+            if (varDecl is not null && typeNode is not null)
+            {
+                foreach (var declarator in varDecl.NamedChildren.Where(c => c.Type == "variable_declarator"))
+                {
+                    var fieldName = TreeSitterQueryHelpers.TryGetField(declarator, "name")?.Text;
+                    if (fieldName is null)
+                    {
+                        continue;
+                    }
+
+                    var fieldSource = ComputeQualifiedName(node, fieldName).QualifiedName;
+                    RecordTypeNodeReferences(typeNode, fieldSource, knownTargets, seen, relations);
+                }
+            }
+
+            return;
+        }
+
+        if (currentSource is not null && node.Type is "parameter" or "object_creation_expression" or "typeof_expression" or "cast_expression")
+        {
+            var typeNode = TreeSitterQueryHelpers.TryGetField(node, "type")
+                ?? (node.Type == "typeof_expression" ? node.FirstNamedChild : null);
+            if (typeNode is not null)
+            {
+                RecordTypeNodeReferences(typeNode, currentSource, knownTargets, seen, relations);
+            }
+        }
+
+        foreach (var child in node.NamedChildren)
+        {
+            WalkForReferences(child, currentSource, knownTargets, seen, relations);
+        }
+    }
+
+    private static void RecordTypeNodeReferences(
+        TS.Node typeNode,
+        string sourceQualifiedName,
+        HashSet<string> knownTargets,
+        HashSet<(string Source, string Target)> seen,
+        List<RelationDraft> relations)
+    {
+        switch (typeNode.Type)
+        {
+            case "identifier":
+                TryAddReference(typeNode.Text, sourceQualifiedName, knownTargets, seen, relations);
+                return;
+
+            case "qualified_name":
+                var right = TreeSitterQueryHelpers.TryGetField(typeNode, "name")?.Text;
+                if (!string.IsNullOrEmpty(right))
+                {
+                    TryAddReference(right, sourceQualifiedName, knownTargets, seen, relations);
+                }
+                else
+                {
+                    var text = typeNode.Text;
+                    var dot = text.LastIndexOf('.');
+                    TryAddReference(dot >= 0 ? text[(dot + 1)..] : text, sourceQualifiedName, knownTargets, seen, relations);
+                }
+
+                return;
+
+            case "generic_name":
+                var genericIdent = typeNode.FirstNamedChild;
+                if (genericIdent is not null)
+                {
+                    TryAddReference(genericIdent.Text, sourceQualifiedName, knownTargets, seen, relations);
+                }
+
+                var argList = typeNode.NamedChildren.FirstOrDefault(c => c.Type == "type_argument_list");
+                if (argList is not null)
+                {
+                    foreach (var arg in argList.NamedChildren)
+                    {
+                        RecordTypeNodeReferences(arg, sourceQualifiedName, knownTargets, seen, relations);
+                    }
+                }
+
+                return;
+
+            default:
+                foreach (var child in typeNode.NamedChildren)
+                {
+                    RecordTypeNodeReferences(child, sourceQualifiedName, knownTargets, seen, relations);
+                }
+
+                return;
+        }
+    }
+
+    private static void TryAddReference(
+        string targetName,
+        string sourceQualifiedName,
+        HashSet<string> knownTargets,
+        HashSet<(string Source, string Target)> seen,
+        List<RelationDraft> relations)
+    {
+        if (string.IsNullOrEmpty(targetName) || !knownTargets.Contains(targetName))
+        {
+            return;
+        }
+
+        if (seen.Add((sourceQualifiedName, targetName)))
+        {
+            relations.Add(new RelationDraft(sourceQualifiedName, targetName, RelationKind.References));
+        }
+    }
+
+    private static void AddTestRelations(
+        TS.Node root,
+        List<RelationDraft> relations,
+        HashSet<(string Source, string Callee)> recordedCalls,
+        HashSet<(string Source, string Target)> recordedReferences)
+    {
+        if (recordedCalls.Count == 0 && recordedReferences.Count == 0)
+        {
+            return;
+        }
+
+        var testMethodQualifiedNames = new HashSet<string>(StringComparer.Ordinal);
+        var localTargetsByTestType = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        CollectTestMethods(root, enclosingTypeQualifiedName: null, enclosingTypeShortName: null, testMethodQualifiedNames, localTargetsByTestType);
+
+        if (testMethodQualifiedNames.Count == 0)
+        {
+            return;
+        }
+
+        var seenTests = new HashSet<(string Source, string Target)>();
+        foreach (var testMethod in testMethodQualifiedNames)
+        {
+            var lastDot = testMethod.LastIndexOf('.');
+            var owningType = lastDot > 0 ? testMethod[..lastDot] : string.Empty;
+            localTargetsByTestType.TryGetValue(owningType, out var sameClassMembers);
+
+            foreach (var (source, callee) in recordedCalls)
+            {
+                if (string.Equals(source, testMethod, StringComparison.Ordinal)
+                    && (sameClassMembers is null || !sameClassMembers.Contains(callee))
+                    && seenTests.Add((testMethod, callee)))
+                {
+                    relations.Add(new RelationDraft(testMethod, callee, RelationKind.Tests));
+                }
+            }
+
+            foreach (var (source, target) in recordedReferences)
+            {
+                if (string.Equals(source, testMethod, StringComparison.Ordinal)
+                    && (sameClassMembers is null || !sameClassMembers.Contains(target))
+                    && seenTests.Add((testMethod, target)))
+                {
+                    relations.Add(new RelationDraft(testMethod, target, RelationKind.Tests));
+                }
+            }
+        }
+    }
+
+    private static void CollectTestMethods(
+        TS.Node node,
+        string? enclosingTypeQualifiedName,
+        string? enclosingTypeShortName,
+        HashSet<string> testMethods,
+        Dictionary<string, HashSet<string>> localMembersByType)
+    {
+        if (TypeDeclarationTypes.Contains(node.Type))
+        {
+            var shortName = TreeSitterQueryHelpers.TryGetField(node, "name")?.Text;
+            var qualName = shortName is not null ? ComputeQualifiedName(node, shortName).QualifiedName : enclosingTypeQualifiedName;
+            if (qualName is not null && shortName is not null)
+            {
+                if (!localMembersByType.TryGetValue(qualName, out var members))
+                {
+                    members = new HashSet<string>(StringComparer.Ordinal);
+                    localMembersByType[qualName] = members;
+                }
+
+                members.Add(shortName);
+            }
+
+            foreach (var child in node.NamedChildren)
+            {
+                CollectTestMethods(child, qualName, shortName ?? enclosingTypeShortName, testMethods, localMembersByType);
+            }
+
+            return;
+        }
+
+        if (node.Type is "method_declaration" or "constructor_declaration" or "property_declaration"
+            && enclosingTypeQualifiedName is not null)
+        {
+            var name = TreeSitterQueryHelpers.TryGetField(node, "name")?.Text;
+            if (name is not null)
+            {
+                if (localMembersByType.TryGetValue(enclosingTypeQualifiedName, out var members))
+                {
+                    members.Add(name);
+                }
+
+                if (node.Type == "method_declaration" && IsTestMethod(node, enclosingTypeShortName))
+                {
+                    testMethods.Add(ComputeQualifiedName(node, name).QualifiedName);
+                }
+            }
+
+            return;
+        }
+
+        foreach (var child in node.NamedChildren)
+        {
+            CollectTestMethods(child, enclosingTypeQualifiedName, enclosingTypeShortName, testMethods, localMembersByType);
+        }
+    }
+
+    private static bool IsTestMethod(TS.Node methodNode, string? enclosingTypeShortName)
+    {
+        foreach (var child in methodNode.NamedChildren)
+        {
+            if (child.Type != "attribute_list")
+            {
+                continue;
+            }
+
+            foreach (var attr in child.NamedChildren.Where(c => c.Type == "attribute"))
+            {
+                var nameNode = TreeSitterQueryHelpers.TryGetField(attr, "name");
+                var raw = nameNode?.Text;
+                if (string.IsNullOrEmpty(raw))
+                {
+                    continue;
+                }
+
+                var dot = raw.LastIndexOf('.');
+                var shortName = dot >= 0 ? raw[(dot + 1)..] : raw;
+                if (shortName.EndsWith("Attribute", StringComparison.Ordinal))
+                {
+                    shortName = shortName[..^"Attribute".Length];
+                }
+
+                if (TestAttributeNames.Contains(shortName))
+                {
+                    return true;
+                }
+            }
+        }
+
+        var isTestClass = enclosingTypeShortName is not null
+            && (enclosingTypeShortName.EndsWith("Test", StringComparison.Ordinal)
+                || enclosingTypeShortName.EndsWith("Tests", StringComparison.Ordinal));
+        if (!isTestClass)
+        {
+            return false;
+        }
+
+        return methodNode.NamedChildren.Any(c => c.Type == "modifier" && c.Text == "public");
     }
 
     // ------------------------------------------------------------------

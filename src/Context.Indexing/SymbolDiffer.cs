@@ -48,7 +48,13 @@ public static class SymbolDiffer
             parts.Add(doc);
         }
 
-        if (signature.Length > 0)
+        var bodyAlreadyStartsWithSignature = signature.Length > 0
+            && body.StartsWith(signature, StringComparison.Ordinal)
+            && (body.Length == signature.Length
+                || char.IsWhiteSpace(body[signature.Length])
+                || body[signature.Length] is '{' or '=' or ';' or ':' or ',' or '(' or '<');
+
+        if (signature.Length > 0 && !bodyAlreadyStartsWithSignature)
         {
             parts.Add(signature);
         }

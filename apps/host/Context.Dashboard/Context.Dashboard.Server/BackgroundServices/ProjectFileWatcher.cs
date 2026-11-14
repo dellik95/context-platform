@@ -38,16 +38,20 @@ public sealed class ProjectFileWatcher : IDisposable
     private static readonly TimeSpan DefaultEnqueueRetryDelay = TimeSpan.FromSeconds(5);
     private const int MaxEnqueueAttempts = 12;
 
+    private static readonly StringComparer PathComparer =
+        OperatingSystem.IsLinux() ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
+
     private readonly Guid _projectId;
     private readonly string _root;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger _logger;
     private readonly IIgnoreMatcher _ignore;
     private readonly FileSystemWatcher? _watcher;
-    private readonly CancellationTokenSource? _pollCts;
+    private readonly CancellationTokenSource _disposeCts;
 
-    private readonly ConcurrentDictionary<string, Timer> _debounceTimers = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, int> _enqueueFailures = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Lock _timerLock = new();
+    private readonly Dictionary<string, Timer> _debounceTimers = new(PathComparer);
+    private readonly ConcurrentDictionary<string, int> _enqueueFailures = new(PathComparer);
     private readonly TimeSpan _enqueueRetryDelay;
     private volatile bool _disposed;
 
@@ -65,7 +69,8 @@ public sealed class ProjectFileWatcher : IDisposable
         Func<string, IIgnoreMatcher> ignoreMatcherFactory,
         ILogger logger,
         TimeSpan? pollingInterval = null,
-        TimeSpan? enqueueRetryDelay = null)
+        TimeSpan? enqueueRetryDelay = null,
+        CancellationToken stopToken = default)
     {
         _enqueueRetryDelay = enqueueRetryDelay ?? DefaultEnqueueRetryDelay;
         _projectId = project.Id;
@@ -73,6 +78,7 @@ public sealed class ProjectFileWatcher : IDisposable
         _scopeFactory = scopeFactory;
         _logger = logger;
         _ignore = ignoreMatcherFactory(_root);
+        _disposeCts = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
 
         if (pollingInterval is { } interval)
         {
@@ -82,8 +88,7 @@ public sealed class ProjectFileWatcher : IDisposable
                 "Polling '{Root}' for project {ProjectId} file changes every {IntervalSeconds}s ({FileCount} files, first scan took {ElapsedMs}ms).",
                 _root, _projectId, interval.TotalSeconds, baseline.Count, stopwatch.ElapsedMilliseconds);
 
-            _pollCts = new CancellationTokenSource();
-            _ = Task.Run(() => PollAsync(baseline, interval, _pollCts.Token));
+            _ = Task.Run(() => PollAsync(baseline, interval, _disposeCts.Token), CancellationToken.None);
             return;
         }
 
@@ -112,6 +117,12 @@ public sealed class ProjectFileWatcher : IDisposable
     /// files changed: an incremental reindex re-checks every file's hash, which is the only way to catch up.</summary>
     private void OnWatcherError(object sender, ErrorEventArgs e)
     {
+        var token = _disposeCts.Token;
+        if (_disposed || token.IsCancellationRequested)
+        {
+            return;
+        }
+
         _logger.LogWarning(e.GetException(), "FileSystemWatcher raised an error for project {ProjectId} root '{Root}'; queueing an incremental reindex to catch up.", _projectId, _root);
         _ = Task.Run(async () =>
         {
@@ -119,13 +130,17 @@ public sealed class ProjectFileWatcher : IDisposable
             {
                 using var scope = _scopeFactory.CreateScope();
                 await scope.ServiceProvider.GetRequiredService<ReindexRequester>()
-                    .RequestAsync(_projectId, full: false, skipIfActive: true, CancellationToken.None).ConfigureAwait(false);
+                    .RequestAsync(_projectId, full: false, skipIfActive: true, token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // Watcher disposed during shutdown.
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Could not queue a catch-up reindex for project {ProjectId} after a file watcher error.", _projectId);
             }
-        });
+        }, CancellationToken.None);
     }
 
     private void OnRenamed(object sender, RenamedEventArgs e)
@@ -169,9 +184,26 @@ public sealed class ProjectFileWatcher : IDisposable
             return;
         }
 
-        var timer = _debounceTimers.GetOrAdd(
-            normalized, _ => new Timer(OnDebounceElapsed, normalized, Timeout.Infinite, Timeout.Infinite));
-        timer.Change(DebounceDelay, Timeout.InfiniteTimeSpan);
+        ArmDebounceTimer(normalized, DebounceDelay);
+    }
+
+    private void ArmDebounceTimer(string relativePath, TimeSpan delay)
+    {
+        lock (_timerLock)
+        {
+            if (_disposed || _disposeCts.IsCancellationRequested)
+            {
+                return;
+            }
+
+            if (!_debounceTimers.TryGetValue(relativePath, out var timer))
+            {
+                timer = new Timer(OnDebounceElapsed, relativePath, Timeout.Infinite, Timeout.Infinite);
+                _debounceTimers[relativePath] = timer;
+            }
+
+            timer.Change(delay, Timeout.InfiniteTimeSpan);
+        }
     }
 
     private static bool IsContextDataPath(string normalized) =>
@@ -259,7 +291,7 @@ public sealed class ProjectFileWatcher : IDisposable
             },
         };
 
-        var snapshot = new Dictionary<string, (DateTimeOffset, long)>(StringComparer.Ordinal);
+        var snapshot = new Dictionary<string, (DateTimeOffset, long)>(PathComparer);
         foreach (var (path, modified, length) in entries)
         {
             snapshot[path] = (modified, length);
@@ -274,34 +306,47 @@ public sealed class ProjectFileWatcher : IDisposable
     private void OnDebounceElapsed(object? state)
     {
         var relativePath = (string)state!;
-        if (_debounceTimers.TryRemove(relativePath, out var timer))
+        lock (_timerLock)
         {
-            timer.Dispose();
+            if (_debounceTimers.Remove(relativePath, out var timer))
+            {
+                timer.Dispose();
+            }
+
+            if (_disposed || _disposeCts.IsCancellationRequested)
+            {
+                return;
+            }
         }
 
+        var token = _disposeCts.Token;
         // Enqueued rather than indexed inline: a `git checkout` of a large branch fires thousands of
         // these within the debounce window, and running them as unbounded Task.Run continuations
         // would open a DbContext and an embedding-provider call per file at once. The queue caps
         // concurrency, retries on failure, and survives a restart mid-burst.
         _ = Task.Run(async () =>
         {
-            using var scope = _scopeFactory.CreateScope();
-            var queue = scope.ServiceProvider.GetRequiredService<IJobQueue>();
             try
             {
+                using var scope = _scopeFactory.CreateScope();
+                var queue = scope.ServiceProvider.GetRequiredService<IJobQueue>();
                 await queue.EnqueueAsync(
                     JobType.IndexFile,
                     new IndexFilePayload(_projectId, relativePath),
                     _projectId,
-                    ct: CancellationToken.None).ConfigureAwait(false);
+                    ct: token).ConfigureAwait(false);
                 _enqueueFailures.TryRemove(relativePath, out _);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // Watcher disposed during shutdown.
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to enqueue a reindex of '{RelativePath}' for project {ProjectId} after a file-system change.", relativePath, _projectId);
                 RetryEnqueueLater(relativePath);
             }
-        });
+        }, CancellationToken.None);
     }
 
     /// <summary>Re-arms the file's debounce timer on a longer delay instead of dropping the change: the debounce
@@ -314,16 +359,26 @@ public sealed class ProjectFileWatcher : IDisposable
             return;
         }
 
-        var timer = _debounceTimers.GetOrAdd(
-            relativePath, _ => new Timer(OnDebounceElapsed, relativePath, Timeout.Infinite, Timeout.Infinite));
-        timer.Change(_enqueueRetryDelay, Timeout.InfiniteTimeSpan);
+        ArmDebounceTimer(relativePath, _enqueueRetryDelay);
     }
 
     public void Dispose()
     {
-        _disposed = true;
-        _pollCts?.Cancel();
-        _pollCts?.Dispose();
+        Timer[] timersToDispose;
+        lock (_timerLock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            timersToDispose = [.. _debounceTimers.Values];
+            _debounceTimers.Clear();
+        }
+
+        _disposeCts.Cancel();
+        _disposeCts.Dispose();
 
         if (_watcher is not null)
         {
@@ -331,7 +386,7 @@ public sealed class ProjectFileWatcher : IDisposable
             _watcher.Dispose();
         }
 
-        foreach (var timer in _debounceTimers.Values)
+        foreach (var timer in timersToDispose)
         {
             timer.Dispose();
         }

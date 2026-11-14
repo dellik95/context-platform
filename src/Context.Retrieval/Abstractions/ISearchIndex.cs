@@ -24,7 +24,7 @@ public interface ISearchIndex
     /// when any entry is a case-insensitive substring of its file's relative path or an exact
     /// match for its language. Null or empty means the whole project.
     /// </param>
-    Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score)>> LexicalSearchAsync(
+    Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score, string? Label, string? RelativePath)>> LexicalSearchAsync(
         Guid projectId, string text, IReadOnlyList<string>? scope, CancellationToken ct);
 
     /// <summary>
@@ -39,6 +39,6 @@ public interface ISearchIndex
     /// vector search returns the in-scope subset of the project-wide nearest neighbors, not the
     /// nearest neighbors within the scope.
     /// </param>
-    Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore)>> VectorSearchAsync(
+    Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore, string? Label, string? RelativePath)>> VectorSearchAsync(
         Guid projectId, float[] queryEmbedding, IReadOnlyList<string>? scope, CancellationToken ct);
 }

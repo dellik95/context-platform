@@ -23,60 +23,79 @@ public sealed class ProjectFileWatcherManager(
     IServiceScopeFactory scopeFactory,
     Func<string, IIgnoreMatcher> ignoreMatcherFactory,
     ILoggerFactory loggerFactory,
-    IOptions<FileWatchingOptions>? options = null) : IHostedService
+    IOptions<FileWatchingOptions>? options = null) : IHostedService, IDisposable
 {
     private readonly FileWatchingOptions _options = options?.Value ?? new FileWatchingOptions();
     private readonly ILogger _managerLogger = loggerFactory.CreateLogger<ProjectFileWatcherManager>();
     private readonly ILogger _watcherLogger = loggerFactory.CreateLogger<ProjectFileWatcher>();
     private readonly ConcurrentDictionary<Guid, ProjectFileWatcher> _watchers = new();
+    private readonly ConcurrentDictionary<Task, byte> _backgroundSetupTasks = new();
+    private CancellationTokenSource _stopCts = new();
+    private int _disposed;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        // Long-running: intentionally not awaited so the host's StartAsync returns promptly - same
-        // shape JobDispatcher.StartAsync already uses for StartProcessingAsync. IHostedService.
-        // StartAsync implementations are awaited SEQUENTIALLY by the generic host, and Kestrel's own
-        // hosted service (GenericWebHostService) is one of them - so blocking here delays Kestrel's
-        // bind by exactly as long as this takes. new FileSystemWatcher(...).EnableRaisingEvents =
-        // true (in ProjectFileWatcher's constructor, below) recursively registers inotify watches
-        // and can take upwards of a minute - sometimes far longer - for a root path served over a
-        // non-native filesystem such as WSL2's DrvFS mount for a Windows drive (/mnt/c/...).
-        // Confirmed live: with exactly one such project registered, this alone starved Kestrel past
-        // systemd's TimeoutStartSec on every single restart (Kestrel's BindAsync was cancelled
-        // before ever getting a turn), even though nothing was actually deadlocked - StartWatching
-        // for a project whose root doesn't exist is already fast/non-blocking (Directory.Exists
-        // check), so this was only ever a problem for a root path that DOES exist but is slow to
-        // watch.
-        _ = Task.Run(async () =>
+        var stopToken = _stopCts.Token;
+        // Long-running: intentionally not awaited so the host's StartAsync returns promptly — IHostedService
+        // StartAsync calls run sequentially before Kestrel binds. Uses the manager's own lifetime token
+        // (not the StartAsync startup token) so setup survives startup completion and cancels cleanly on StopAsync.
+        var task = Task.Run(async () =>
         {
-            using var scope = scopeFactory.CreateScope();
-            var projectRepository = scope.ServiceProvider.GetRequiredService<IProjectRepository>();
-            var projects = await projectRepository.ListAsync(cancellationToken).ConfigureAwait(false);
-
-            foreach (var project in projects)
+            try
             {
-                // One project's unreadable root must not leave every project after it unwatched.
-                try
+                using var scope = scopeFactory.CreateScope();
+                var projectRepository = scope.ServiceProvider.GetRequiredService<IProjectRepository>();
+                var projects = await projectRepository.ListAsync(stopToken).ConfigureAwait(false);
+
+                foreach (var project in projects)
                 {
-                    StartWatching(project);
-                }
-                catch (Exception ex)
-                {
-                    _managerLogger.LogError(ex, "Could not start watching project {ProjectId} at '{Root}'; the remaining projects are still being set up.", project.Id, project.RootPath);
+                    if (stopToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+
+                    // One project's unreadable root must not leave every project after it unwatched.
+                    try
+                    {
+                        StartWatching(project);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _managerLogger.LogError(ex, "Could not start watching project {ProjectId} at '{Root}'; the remaining projects are still being set up.", project.Id, project.RootPath);
+                    }
                 }
             }
-        }, cancellationToken);
+            catch (OperationCanceledException) when (stopToken.IsCancellationRequested)
+            {
+                // Normal shutdown.
+            }
+        }, CancellationToken.None);
 
+        TrackBackgroundTask(task);
         return Task.CompletedTask;
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
+        await _stopCts.CancelAsync().ConfigureAwait(false);
+
+        var pending = _backgroundSetupTasks.Keys.ToArray();
+        if (pending.Length > 0)
+        {
+            try
+            {
+                await Task.WhenAll(pending).WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Shutdown deadline or normal cancellation.
+            }
+        }
+
         foreach (var projectId in _watchers.Keys.ToArray())
         {
             StopWatching(projectId);
         }
-
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -87,6 +106,11 @@ public sealed class ProjectFileWatcherManager(
     /// </summary>
     public void StartWatching(Project project)
     {
+        if (_stopCts.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
         if (!Directory.Exists(project.RootPath))
         {
             _managerLogger.LogWarning(
@@ -99,7 +123,8 @@ public sealed class ProjectFileWatcherManager(
         TimeSpan? pollingInterval = ShouldPoll(project.RootPath)
             ? TimeSpan.FromSeconds(Math.Max(0.5, _options.PollingIntervalSeconds))
             : null;
-        _watchers[project.Id] = new ProjectFileWatcher(project, scopeFactory, ignoreMatcherFactory, _watcherLogger, pollingInterval);
+        _watchers[project.Id] = new ProjectFileWatcher(
+            project, scopeFactory, ignoreMatcherFactory, _watcherLogger, pollingInterval, stopToken: _stopCts.Token);
     }
 
     private bool ShouldPoll(string rootPath) => _options.Mode switch
@@ -114,18 +139,39 @@ public sealed class ProjectFileWatcherManager(
     /// <see cref="StartWatching"/> off the caller's thread, for request paths: registering the
     /// watches for a large root on DrvFS can take many minutes (see <see cref="StartAsync"/>).
     /// </summary>
-    public void StartWatchingInBackground(Project project) =>
-        _ = Task.Run(() =>
+    public void StartWatchingInBackground(Project project)
+    {
+        var stopToken = _stopCts.Token;
+        if (stopToken.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        var task = Task.Run(() =>
         {
             try
             {
                 StartWatching(project);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _managerLogger.LogError(ex, "Could not start watching project {ProjectId} at '{Root}'.", project.Id, project.RootPath);
             }
-        });
+        }, CancellationToken.None);
+
+        TrackBackgroundTask(task);
+    }
+
+    private void TrackBackgroundTask(Task task)
+    {
+        _backgroundSetupTasks[task] = 0;
+        _ = task.ContinueWith(
+            static (t, state) => ((ConcurrentDictionary<Task, byte>)state!).TryRemove(t, out _),
+            _backgroundSetupTasks,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
 
     public void StopWatching(Guid projectId)
     {
@@ -133,5 +179,22 @@ public sealed class ProjectFileWatcherManager(
         {
             watcher.Dispose();
         }
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        _stopCts.Cancel();
+        foreach (var projectId in _watchers.Keys.ToArray())
+        {
+            StopWatching(projectId);
+        }
+
+        _stopCts.Dispose();
+        GC.SuppressFinalize(this);
     }
 }

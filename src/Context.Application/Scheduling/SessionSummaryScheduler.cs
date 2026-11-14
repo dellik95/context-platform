@@ -58,7 +58,7 @@ public sealed class SessionSummaryScheduler(
             {
                 await MaybeScheduleSummariesAsync(project.Id, settingsService, sessionRepository, jobQueue, ct).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Logger.LogError(ex, "Failed to evaluate session-summary schedule for project {ProjectId}.", project.Id);
             }
@@ -120,7 +120,7 @@ public sealed class SessionSummaryScheduler(
                 await jobQueue.EnqueueAsync(JobType.SummarizeSession, new SummarizeSessionPayload(session.Id, IsSessionEnd: false), session.ProjectId, JobPriority.Session, ct)
                     .ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Logger.LogError(ex, "Failed to schedule a periodic summary for session {SessionId}.", session.Id);
             }

@@ -41,16 +41,21 @@ public sealed class GraphStore : IGraphStore
             var projectNodes = nodeList.Where(n => n.ProjectId == projectId).ToList();
             var projectEdges = edgeList.Where(e => e.ProjectId == projectId).ToList();
 
-            var affectedFiles = projectNodes.Select(n => n.OwningFileId)
-                .Concat(projectEdges.Select(e => e.OwningFileId))
-                .Where(id => id.HasValue)
-                .Select(id => id!.Value)
-                .Distinct();
-
-            foreach (var fileId in affectedFiles)
-                cache.InvalidateOwningFile(projectId, fileId);
-
             cache.Hydrate(projectNodes, projectEdges);
+        }
+    }
+
+    public async Task ReplaceForFileAsync(
+        Guid projectId, Guid fileId, IEnumerable<GraphNode> nodes, IEnumerable<GraphEdge> edges, CancellationToken ct)
+    {
+        var nodeList = nodes as IReadOnlyCollection<GraphNode> ?? nodes.ToList();
+        var edgeList = edges as IReadOnlyCollection<GraphEdge> ?? edges.ToList();
+
+        await _persistence.ReplaceForFileAsync(projectId, fileId, nodeList, edgeList, ct).ConfigureAwait(false);
+
+        if (_cacheProvider.TryGetLoaded(projectId, out var cache) && cache is not null)
+        {
+            cache.ReplaceOwningFile(projectId, fileId, nodeList, edgeList);
         }
     }
 

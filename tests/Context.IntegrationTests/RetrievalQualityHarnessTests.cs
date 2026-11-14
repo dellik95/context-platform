@@ -4,6 +4,7 @@ using Context.Application.Jobs;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
 using Context.Graph;
+using Context.Graph.Abstractions;
 using Context.Indexing;
 using Context.Infrastructure;
 using Context.Infrastructure.Abstractions;
@@ -88,9 +89,128 @@ public sealed class RetrievalQualityHarnessTests : IAsyncLifetime
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(6));
         var ct = cts.Token;
 
-        foreach (var file in FixtureCorpus)
+        var (provider, project, dispatcher) = await SetupAndIndexAsync(FixtureCorpus, "retrieval-eval-fixture", ct);
+        try
         {
-            await System.IO.File.WriteAllTextAsync(Path.Combine(_projectRoot.FullName, file.RelativePath), file.Content, ct);
+            var perQueryResults = await RunGoldenQueriesAsync(provider, project.Id, GoldenQueries, ct);
+
+            // ---------------------------------------------------------------------------------------
+            // Report: per-query outcome, then aggregate hit-rate@5 / MRR.
+            // ---------------------------------------------------------------------------------------
+            _output.WriteLine($"Golden-query retrieval harness -- {perQueryResults.Count} queries, top-{TopK} evaluated.");
+            _output.WriteLine("");
+            foreach (var result in perQueryResults)
+            {
+                var status = result.FirstHitRank switch
+                {
+                    { } rank when rank <= TopK => $"HIT  @rank {rank}",
+                    { } rank => $"MISS (first correct hit at rank {rank}, outside top-{TopK})",
+                    null => "MISS (no correct hit anywhere in results)"
+                };
+                _output.WriteLine($"[{result.Query.Module,-13}] \"{result.Query.QueryText}\" -> {status}");
+            }
+
+            var hitRateAt5 = perQueryResults.Count(r => r.FirstHitRank is { } rank && rank <= TopK) / (double)perQueryResults.Count;
+            var mrr = perQueryResults.Average(r => r.FirstHitRank is { } rank ? 1.0 / rank : 0.0);
+
+            _output.WriteLine("");
+            _output.WriteLine($"hit-rate@{TopK} = {hitRateAt5:F3}  ({perQueryResults.Count(r => r.FirstHitRank is { } rank && rank <= TopK)}/{perQueryResults.Count})");
+            _output.WriteLine($"MRR         = {mrr:F3}");
+
+            hitRateAt5.Should().BeGreaterThanOrEqualTo(0.85,
+                "golden natural-language code queries over indexed doc comments should consistently hit top-5");
+            mrr.Should().BeGreaterThanOrEqualTo(0.70);
+        }
+        finally
+        {
+            await dispatcher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task ModernCSharp_RecordCrossFileCallers_TestDownranking_AndContextPack_ReportEndToEndQuality()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(6));
+        var ct = cts.Token;
+
+        var (provider, project, dispatcher) = await SetupAndIndexAsync(ModernCSharpCorpus, "modern-csharp-eval", ct);
+        try
+        {
+            var queryResults = await RunGoldenQueriesAsync(provider, project.Id, ModernCSharpQueries, ct);
+            var hitRateAt5 = queryResults.Count(r => r.FirstHitRank is { } rank && rank <= TopK) / (double)queryResults.Count;
+            var mrr = queryResults.Average(r => r.FirstHitRank is { } rank ? 1.0 / rank : 0.0);
+
+            _output.WriteLine($"Modern C# benchmark -- {queryResults.Count} queries, top-{TopK} evaluated.");
+            foreach (var r in queryResults)
+            {
+                _output.WriteLine($"[{r.Query.Module,-10}] \"{r.Query.QueryText}\" -> rank={r.FirstHitRank?.ToString() ?? "MISS"}");
+            }
+            _output.WriteLine($"Modern C# hit-rate@{TopK} = {hitRateAt5:F3}, MRR = {mrr:F3}");
+
+            hitRateAt5.Should().Be(1.0);
+            mrr.Should().BeGreaterThanOrEqualTo(0.80);
+
+            await using var scope = provider.CreateAsyncScope();
+            var searchEngine = scope.ServiceProvider.GetRequiredService<ISearchEngine>();
+            var contextEngine = scope.ServiceProvider.GetRequiredService<IContextEngine>();
+            var symbols = scope.ServiceProvider.GetRequiredService<ISymbolRepository>();
+            var graphCache = scope.ServiceProvider.GetRequiredService<IGraphCacheProvider>();
+            var graphTraversal = scope.ServiceProvider.GetRequiredService<IGraphTraversal>();
+
+            // Unscoped query should rank production Validator ahead of the competing unit test file.
+            var unscopedHits = await searchEngine.SearchAsync(
+                new SearchQuery(project.Id, "validate session bearer token", null, 2000), ct);
+            unscopedHits.Should().NotBeEmpty();
+            unscopedHits[0].Label.Should().NotContain("BillingTokenValidatorTests",
+                "production source should rank ahead of matching test methods for unscoped queries");
+            unscopedHits[0].Label.Should().Contain("BillingTokenValidator");
+
+            // ContextPack must order PrimaryHits descending by Score and stay within budget.
+            var pack = await contextEngine.SearchContextAsync(
+                new SearchQuery(project.Id, "validate session bearer token", null, 2000), ct);
+            pack.PrimaryHits.Should().NotBeEmpty();
+            pack.PrimaryHits.Should().BeInDescendingOrder(h => h.Score);
+            pack.EstimatedTokens.Should().BeLessThanOrEqualTo(2000);
+            _output.WriteLine($"ContextPack: {pack.PrimaryHits.Count} primary hits, {pack.EstimatedTokens} est tokens.");
+
+            // Cross-file graph blast radius on BOTH method and class container (including A -> B alphabetical file ordering).
+            await graphCache.GetOrCreateAsync(project.Id, ct);
+            var validatorMethod = (await symbols.SearchByNameAsync(project.Id, "ValidateSessionToken", 5, ct))
+                .First(s => s.Kind == SymbolKind.Method && s.QualifiedName == "Fixture.Billing.BillingTokenValidator.ValidateSessionToken");
+            var validatorClass = (await symbols.SearchByNameAsync(project.Id, "BillingTokenValidator", 5, ct))
+                .First(s => s.Kind == SymbolKind.Class && s.QualifiedName == "Fixture.Billing.BillingTokenValidator");
+
+            var methodImpact = await graphTraversal.BlastRadiusAsync(validatorMethod.Id, 2, ct);
+            var classImpact = await graphTraversal.BlastRadiusAsync(validatorClass.Id, 2, ct);
+
+            _output.WriteLine($"Method BlastRadius: callers={methodImpact.Callers.Count}, coveringTests={methodImpact.CoveringTests.Count}");
+            _output.WriteLine($"Class  BlastRadius: callers={classImpact.Callers.Count}, coveringTests={classImpact.CoveringTests.Count}");
+
+            methodImpact.Callers.Select(n => n.Node.Label)
+                .Should().Contain(l => l.Contains("AuthorizeRequest"))
+                .And.Contain(l => l.Contains("RecordInvoiceAsync"));
+            methodImpact.CoveringTests.Select(n => n.Node.Label)
+                .Should().Contain(l => l.Contains("ValidateSessionToken_AcceptsValidBearerToken"));
+
+            classImpact.Callers.Select(n => n.Node.Label)
+                .Should().Contain(l => l.Contains("AuthorizeRequest"));
+            classImpact.CoveringTests.Select(n => n.Node.Label)
+                .Should().Contain(l => l.Contains("ValidateSessionToken_AcceptsValidBearerToken"));
+        }
+        finally
+        {
+            await dispatcher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private async Task<(ServiceProvider Provider, Project Project, JobDispatcher Dispatcher)> SetupAndIndexAsync(
+        IReadOnlyList<FixtureFile> corpus, string projectName, CancellationToken ct)
+    {
+        foreach (var file in corpus)
+        {
+            var fullPath = Path.Combine(_projectRoot.FullName, file.RelativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            await System.IO.File.WriteAllTextAsync(fullPath, file.Content, ct);
         }
 
         var dataDir = Path.Combine(_projectRoot.FullName, ".context");
@@ -124,7 +244,7 @@ public sealed class RetrievalQualityHarnessTests : IAsyncLifetime
             project = await projects.AddAsync(new Project
             {
                 Id = Guid.NewGuid(),
-                Name = "retrieval-eval-fixture",
+                Name = projectName,
                 RootPath = _projectRoot.FullName,
                 CreatedAt = DateTimeOffset.UtcNow
             }, ct);
@@ -132,75 +252,43 @@ public sealed class RetrievalQualityHarnessTests : IAsyncLifetime
 
         var dispatcher = _provider.GetRequiredService<JobDispatcher>();
         await dispatcher.StartAsync(ct);
-        try
+        await using (var indexScope = _provider.CreateAsyncScope())
         {
-            await using (var indexScope = _provider.CreateAsyncScope())
+            var pipeline = indexScope.ServiceProvider.GetRequiredService<IIndexingPipeline>();
+            await pipeline.ReindexProjectAsync(project.Id, full: true, ct);
+        }
+
+        await WaitForJobsToDrainAsync(_provider, TimeSpan.FromMinutes(5), ct);
+        return (_provider, project, dispatcher);
+    }
+
+    private static async Task<List<QueryResult>> RunGoldenQueriesAsync(
+        ServiceProvider provider, Guid projectId, IReadOnlyList<GoldenQuery> queries, CancellationToken ct)
+    {
+        var perQueryResults = new List<QueryResult>(queries.Count);
+        await using var searchScope = provider.CreateAsyncScope();
+        var engine = searchScope.ServiceProvider.GetRequiredService<ISearchEngine>();
+
+        foreach (var query in queries)
+        {
+            var hits = await engine.SearchAsync(new SearchQuery(projectId, query.QueryText, null, 2000), ct);
+
+            int? firstHitRank = null;
+            for (var i = 0; i < hits.Count; i++)
             {
-                var pipeline = indexScope.ServiceProvider.GetRequiredService<IIndexingPipeline>();
-                await pipeline.ReindexProjectAsync(project.Id, full: true, ct);
-            }
-
-            await WaitForJobsToDrainAsync(_provider, TimeSpan.FromMinutes(5), ct);
-
-            var perQueryResults = new List<QueryResult>();
-            await using (var searchScope = _provider.CreateAsyncScope())
-            {
-                var engine = searchScope.ServiceProvider.GetRequiredService<ISearchEngine>();
-
-                foreach (var query in GoldenQueries)
+                if (query.ExpectedIdentifiers.Any(id =>
+                        hits[i].Label.Contains(id, StringComparison.Ordinal)
+                        || (hits[i].Snippet?.Contains(id, StringComparison.Ordinal) ?? false)))
                 {
-                    var hits = await engine.SearchAsync(new SearchQuery(project.Id, query.QueryText, null, 2000), ct);
-
-                    int? firstHitRank = null;
-                    for (var i = 0; i < hits.Count; i++)
-                    {
-                        if (query.ExpectedIdentifiers.Any(id =>
-                                hits[i].Label.Contains(id, StringComparison.Ordinal)
-                                || (hits[i].Snippet?.Contains(id, StringComparison.Ordinal) ?? false)))
-                        {
-                            firstHitRank = i + 1; // 1-based rank
-                            break;
-                        }
-                    }
-
-                    perQueryResults.Add(new QueryResult(query, firstHitRank));
+                    firstHitRank = i + 1;
+                    break;
                 }
             }
 
-            // ---------------------------------------------------------------------------------------
-            // Report: per-query outcome, then aggregate hit-rate@5 / MRR.
-            // ---------------------------------------------------------------------------------------
-            _output.WriteLine($"Golden-query retrieval harness -- {perQueryResults.Count} queries, top-{TopK} evaluated.");
-            _output.WriteLine("");
-            foreach (var result in perQueryResults)
-            {
-                var status = result.FirstHitRank switch
-                {
-                    { } rank when rank <= TopK => $"HIT  @rank {rank}",
-                    { } rank => $"MISS (first correct hit at rank {rank}, outside top-{TopK})",
-                    null => "MISS (no correct hit anywhere in results)"
-                };
-                _output.WriteLine($"[{result.Query.Module,-13}] \"{result.Query.QueryText}\" -> {status}");
-            }
-
-            var hitRateAt5 = perQueryResults.Count(r => r.FirstHitRank is { } rank && rank <= TopK) / (double)perQueryResults.Count;
-            var mrr = perQueryResults.Average(r => r.FirstHitRank is { } rank ? 1.0 / rank : 0.0);
-
-            _output.WriteLine("");
-            _output.WriteLine($"hit-rate@{TopK} = {hitRateAt5:F3}  ({perQueryResults.Count(r => r.FirstHitRank is { } rank && rank <= TopK)}/{perQueryResults.Count})");
-            _output.WriteLine($"MRR         = {mrr:F3}");
-
-            // Regression floor, not a quality target: catches an outright breakage of code search
-            // (e.g. lexical search returning nothing) without asserting a number no baseline run
-            // has ever measured. See the harness's run log / PR description for the actual
-            // before/after BACKLOG-13 measurements this floor was set relative to.
-            hitRateAt5.Should().BeGreaterThanOrEqualTo(0.5,
-                "a regression this large would mean code search is broken, not just imperfectly tuned");
+            perQueryResults.Add(new QueryResult(query, firstHitRank));
         }
-        finally
-        {
-            await dispatcher.StopAsync(CancellationToken.None);
-        }
+
+        return perQueryResults;
     }
 
     private sealed record QueryResult(GoldenQuery Query, int? FirstHitRank);
@@ -485,5 +573,75 @@ public sealed class RetrievalQualityHarnessTests : IAsyncLifetime
         new("Audit", "record a security event performed by an actor for compliance", ["RecordSecurityEvent", "AuditLogger"]),
         new("Search", "index the product catalog so customers can search by keyword", ["IndexProductCatalog", "ProductSearchIndexer"]),
         new("Scheduling", "assign an employee to a work shift", ["AssignEmployeeShift", "ShiftScheduler"]),
+    ];
+
+    // Alphabetically ordered so AlphaController.cs is indexed BEFORE BillingTokenValidator.cs,
+    // verifying deferred cross-file call-graph resolution, C# record / record struct parsing,
+    // expression-bodied property callers, test-file downranking, and container BlastRadiusAsync.
+    private static readonly FixtureFile[] ModernCSharpCorpus =
+    [
+        new("src/Auth/AlphaController.cs", """
+            using Fixture.Billing;
+
+            namespace Fixture.Auth;
+
+            public class AlphaController(BillingTokenValidator validator)
+            {
+                public bool IsAuthorized => validator.ValidateSessionToken("header").IsValid;
+
+                public bool AuthorizeRequest(string bearer) => validator.ValidateSessionToken(bearer).IsValid;
+            }
+            """),
+        new("src/Billing/BillingTokenValidator.cs", """
+            namespace Fixture.Billing;
+
+            /// <summary>Result produced when validating a session bearer token.</summary>
+            public sealed record TokenValidationResult(bool IsValid, string AccountId);
+
+            /// <summary>Scoped claim associated with a validated token.</summary>
+            public readonly record struct TokenScope(string ScopeName);
+
+            /// <summary>Validates bearer tokens and issues access decisions.</summary>
+            public class BillingTokenValidator
+            {
+                /// <summary>Validates a session bearer token against <see cref="TokenValidationResult"/>.</summary>
+                public TokenValidationResult ValidateSessionToken(string bearerToken) =>
+                    new(!string.IsNullOrWhiteSpace(bearerToken), "acct-1");
+            }
+            """),
+        new("src/Billing/InvoiceLedger.cs", """
+            namespace Fixture.Billing;
+
+            public class InvoiceLedger(BillingTokenValidator validator)
+            {
+                public Task<bool> RecordInvoiceAsync(string token) =>
+                    Task.FromResult(validator.ValidateSessionToken(token).IsValid);
+            }
+            """),
+        new("tests/Billing/BillingTokenValidatorTests.cs", """
+            using Fixture.Billing;
+            using Xunit;
+
+            namespace Fixture.Tests.Billing;
+
+            public class BillingTokenValidatorTests
+            {
+                [Fact]
+                public void ValidateSessionToken_AcceptsValidBearerToken()
+                {
+                    var validator = new BillingTokenValidator();
+                    _ = validator.ValidateSessionToken("token");
+                }
+            }
+            """),
+    ];
+
+    private static readonly GoldenQuery[] ModernCSharpQueries =
+    [
+        new("Billing", "validate session bearer token", ["ValidateSessionToken", "BillingTokenValidator"]),
+        new("Billing", "tokenValidationResult", ["TokenValidationResult"]),
+        new("Billing", "scoped claim token scope", ["TokenScope"]),
+        new("Billing", "record invoice async", ["RecordInvoiceAsync", "InvoiceLedger"]),
+        new("Auth", "authorize request bearer", ["AuthorizeRequest", "AlphaController"]),
     ];
 }

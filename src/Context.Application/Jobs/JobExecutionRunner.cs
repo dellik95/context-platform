@@ -16,9 +16,11 @@ namespace Context.Application.Jobs;
 internal sealed class JobExecutionRunner(
     IServiceScopeFactory scopeFactory,
     IJobCountsNotifier jobCountsNotifier,
-    ILogger logger)
+    ILogger logger,
+    TimeProvider? timeProvider = null)
 {
     private static readonly TimeSpan SupersedeGrace = TimeSpan.FromSeconds(10);
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly ConcurrentDictionary<Guid, JobExecution> _executions = new();
 
     public async Task SupersedeIfRunningAsync(Guid jobId, CancellationToken ct)
@@ -97,7 +99,7 @@ internal sealed class JobExecutionRunner(
                 }
 
                 job.Status = JobStatus.Done;
-                job.FinishedAt = DateTimeOffset.UtcNow;
+                job.FinishedAt = _timeProvider.GetUtcNow();
                 job.LastError = null;
                 job.NextRetryAt = null;
                 await UpdateAndNotifyAsync(jobRepository, job, ct).ConfigureAwait(false);
@@ -132,7 +134,7 @@ internal sealed class JobExecutionRunner(
     {
         job.Status = JobStatus.Failed;
         job.LastError = $"No {nameof(Handlers.IJobHandler)} is registered for job type {job.Type}.";
-        job.FinishedAt = DateTimeOffset.UtcNow;
+        job.FinishedAt = _timeProvider.GetUtcNow();
         await UpdateAndNotifyAsync(jobRepository, job, ct).ConfigureAwait(false);
         logger.LogError("No handler registered for job type {JobType} (job {JobId}); marking Failed.", job.Type, job.Id);
     }
@@ -162,7 +164,7 @@ internal sealed class JobExecutionRunner(
         if (job.Attempts >= maxAttempts)
         {
             job.Status = JobStatus.Failed;
-            job.FinishedAt = DateTimeOffset.UtcNow;
+            job.FinishedAt = _timeProvider.GetUtcNow();
             job.NextRetryAt = null;
             await UpdateAndNotifyAsync(jobRepository, job, ct).ConfigureAwait(false);
 
@@ -173,7 +175,7 @@ internal sealed class JobExecutionRunner(
         }
 
         job.Status = JobStatus.Pending;
-        job.NextRetryAt = DateTimeOffset.UtcNow + budget.BackoffAfter(job.Attempts);
+        job.NextRetryAt = _timeProvider.GetUtcNow() + budget.BackoffAfter(job.Attempts);
         await UpdateAndNotifyAsync(jobRepository, job, ct).ConfigureAwait(false);
 
         logger.LogWarning(ex,

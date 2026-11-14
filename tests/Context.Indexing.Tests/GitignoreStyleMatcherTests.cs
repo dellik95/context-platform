@@ -328,4 +328,32 @@ public sealed class GitignoreStyleMatcherTests : IDisposable
 
         sut.IsIgnored("app.customsecret").Should().BeTrue();
     }
+
+    [Fact]
+    public void IsIgnored_DotContextAndDoubleStarSlashBoundary_BehaveCorrectly()
+    {
+        var sut = new GitignoreStyleMatcher(_root, additionalPatterns: ["**/foo.cs"]);
+
+        sut.IsIgnored(".context/data.db").Should().BeTrue();
+        sut.IsIgnored("foo.cs").Should().BeTrue();
+        sut.IsIgnored("src/nested/foo.cs").Should().BeTrue();
+        sut.IsIgnored("barfoo.cs").Should().BeFalse();
+        sut.IsIgnored("src/barfoo.cs").Should().BeFalse();
+    }
+
+    [Fact]
+    public void WithScopedGitignore_AppliesSubdirectoryRulesAndNegations()
+    {
+        var subDir = Path.Combine(_root, "sub", "module");
+        Directory.CreateDirectory(subDir);
+        var nestedGitignore = Path.Combine(subDir, ".gitignore");
+        File.WriteAllText(nestedGitignore, "*.generated.cs\n!Keep.generated.cs\n");
+
+        var rootMatcher = new GitignoreStyleMatcher(_root);
+        var scoped = rootMatcher.WithScopedGitignore("sub/module", nestedGitignore);
+
+        scoped.IsIgnored("other/Foo.generated.cs").Should().BeFalse();
+        scoped.IsIgnored("sub/module/Foo.generated.cs").Should().BeTrue();
+        scoped.IsIgnored("sub/module/Keep.generated.cs").Should().BeFalse();
+    }
 }

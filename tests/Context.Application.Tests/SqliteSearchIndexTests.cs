@@ -158,6 +158,89 @@ public sealed class SqliteSearchIndexTests : IDisposable
             "an unescaped '%' would turn the scope term into a wildcard that matches every path");
     }
 
+    [Fact]
+    public async Task LexicalSearchAsync_finds_short_two_character_token_when_trigram_fts_has_no_matches()
+    {
+        var (projectId, matchingChunkId) = await SeedAsync("src/UserRecord.cs", "public Guid Id { get; init; }");
+        await AddFileAsync(projectId, "src/Helper.cs", "public sealed class Helper { }");
+        var index = new SqliteSearchIndex(_factory, Mock.Of<IChunkVectorIndex>(), Mock.Of<IProviderResolver>());
+
+        var results = await index.LexicalSearchAsync(projectId, "Id", null, CancellationToken.None);
+
+        results.Should().Contain(r => r.ChunkId == matchingChunkId);
+    }
+
+    [Fact]
+    public async Task LexicalSearchAsync_splits_camelCase_query_windows_snippet_and_exposes_symbol_label()
+    {
+        await using var setupDb = await _factory.CreateDbContextAsync();
+        await setupDb.Database.MigrateAsync();
+
+        var projectId = Guid.NewGuid();
+        var fileId = Guid.NewGuid();
+        var symbolId = Guid.NewGuid();
+        var chunkId = Guid.NewGuid();
+        var prefixPadding = new string('x', 360);
+        var chunkText = $"{prefixPadding}\npublic bool ValidateToken() => true;\n{new string('y', 120)}";
+
+        setupDb.Projects.Add(new Project { Id = projectId, Name = "p", RootPath = $"/p/{projectId:N}", CreatedAt = DateTimeOffset.UtcNow });
+        setupDb.Files.Add(new DomainFile
+        {
+            Id = fileId,
+            ProjectId = projectId,
+            RelativePath = "src/Auth/TokenValidator.cs",
+            ContentHash = "h1",
+            IsDeleted = false,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        setupDb.Symbols.Add(new Symbol
+        {
+            Id = symbolId,
+            FileId = fileId,
+            Name = "ValidateToken",
+            QualifiedName = "Auth.TokenValidator.ValidateToken",
+            Kind = Context.Domain.Enums.SymbolKind.Method,
+            StartLine = 10,
+            EndLine = 12,
+            SignatureHash = "s1",
+            BodyHash = "b1"
+        });
+        setupDb.Chunks.Add(new Chunk
+        {
+            Id = chunkId,
+            FileId = fileId,
+            SymbolId = symbolId,
+            Text = chunkText,
+            TokenCount = 50,
+            ContentHash = "h1"
+        });
+        await setupDb.SaveChangesAsync();
+
+        var index = new SqliteSearchIndex(_factory, Mock.Of<IChunkVectorIndex>(), Mock.Of<IProviderResolver>());
+        var results = await index.LexicalSearchAsync(projectId, "validateToken", null, CancellationToken.None);
+
+        var hit = results.Should().ContainSingle(r => r.ChunkId == chunkId).Which;
+        hit.Label.Should().Be("Auth.TokenValidator.ValidateToken");
+        hit.RelativePath.Should().Be("src/Auth/TokenValidator.cs");
+        hit.Snippet.Should().Contain("ValidateToken", "snippet windowing should center around the matched identifier even past char 300");
+    }
+
+    [Fact]
+    public async Task LexicalSearchAsync_prefers_production_source_over_test_file_for_unscoped_query()
+    {
+        var (projectId, testChunkId) = await SeedAsync("tests/OrderServiceTests.cs", "public class OrderServiceTests { void PlaceOrder() {} }");
+        var srcChunkId = await AddFileAsync(projectId, "src/OrderService.cs", "public class OrderService { void PlaceOrder() {} }");
+        var index = new SqliteSearchIndex(_factory, Mock.Of<IChunkVectorIndex>(), Mock.Of<IProviderResolver>());
+
+        var unscoped = await index.LexicalSearchAsync(projectId, "PlaceOrder", null, CancellationToken.None);
+        var testScoped = await index.LexicalSearchAsync(projectId, "PlaceOrder", ["tests/"], CancellationToken.None);
+
+        unscoped.Should().HaveCountGreaterThanOrEqualTo(2);
+        unscoped[0].ChunkId.Should().Be(srcChunkId);
+        testScoped.Should().Contain(r => r.ChunkId == testChunkId);
+        testScoped.Should().NotContain(r => r.ChunkId == srcChunkId);
+    }
+
     public void Dispose()
     {
         _provider.Dispose();

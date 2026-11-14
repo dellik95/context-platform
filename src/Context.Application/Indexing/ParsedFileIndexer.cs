@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Context.Application.Adapters;
 using Context.Application.Jobs;
 using Context.Domain.Entities;
 using Context.Domain.Enums;
@@ -13,7 +14,8 @@ namespace Context.Application.Indexing;
 
 /// <summary>
 /// Indexes AST-supported source files by diffing against previous symbol snapshots, preserving
-/// symbol IDs, updating chunks and optional file summaries, and scheduling embedding/graph updates.
+/// symbol and unchanged-chunk IDs, updating chunks and optional file summaries, and scheduling
+/// embedding/graph updates.
 /// </summary>
 internal sealed class ParsedFileIndexer(
     IFileRepository files,
@@ -27,39 +29,64 @@ internal sealed class ParsedFileIndexer(
 {
     private const int MaxChunkChars = 20_000;
 
-    public async Task IndexAsync(
-        Guid projectId, DomainFile fileEntity, ILanguageParser parser, string sourceText, bool isFirstIndex, CancellationToken ct)
+    /// <summary>
+    /// Indexes <paramref name="fileEntity"/> and returns <see langword="true"/> when a graph
+    /// update is needed for this file. When <paramref name="deferGraphUpdate"/> is <see langword="false"/>,
+    /// the <c>UpdateGraph</c> job is enqueued immediately; callers running a full-project reindex pass
+    /// set <paramref name="deferGraphUpdate"/> to <see langword="true"/> and enqueue graph updates
+    /// once all files' symbols have been committed so cross-file edges aren't starved by file order.
+    /// </summary>
+    public async Task<bool> IndexAsync(
+        Guid projectId, DomainFile fileEntity, ILanguageParser parser, string sourceText, bool isFirstIndex,
+        CancellationToken ct, bool deferGraphUpdate = false)
     {
-        var previous = await LoadPreviousSymbolDraftsAsync(fileEntity.Id, ct).ConfigureAwait(false);
+        var previous = await LoadPreviousSnapshotAsync(fileEntity.Id, ct).ConfigureAwait(false);
 
         var ast = parser.Parse(sourceText);
-        var currentDrafts = DeduplicateByQualifiedName(parser.ExtractSymbols(ast), fileEntity.RelativePath, logger);
-        var diff = SymbolDiffer.Diff(previous.Drafts, currentDrafts);
+        var currentDrafts = DisambiguateOverloads(parser.ExtractSymbols(ast), fileEntity.RelativePath, logger);
 
         var idByQualifiedName = AssignStableIds(currentDrafts, previous.IdByQualifiedName);
-        var (newSymbolRows, newChunkRows) = BuildSymbolAndChunkRows(fileEntity.Id, currentDrafts, idByQualifiedName);
+        var (newSymbolRows, newChunkRows, changedOrAddedSymbolIds, hasStructuralChange) =
+            BuildSymbolAndChunkRows(fileEntity.Id, currentDrafts, idByQualifiedName, previous);
 
-        var summaryChunk = await TrySummarizeFileAsync(projectId, fileEntity, currentDrafts, ct).ConfigureAwait(false);
+        var summaryChunk = await TrySummarizeFileAsync(projectId, fileEntity, currentDrafts, previous.FileSummaryChunkId, previous.FileSummaryContentHash, ct)
+            .ConfigureAwait(false);
         if (summaryChunk is not null)
         {
             newChunkRows.Add(summaryChunk);
         }
 
-        // FK ordering: clear old chunks -> replace symbols -> insert new chunks.
-        await chunks.ReplaceForFileAsync(fileEntity.Id, [], ct).ConfigureAwait(false);
-        await symbols.ReplaceForFileAsync(fileEntity.Id, newSymbolRows, ct).ConfigureAwait(false);
-        await chunks.ReplaceForFileAsync(fileEntity.Id, newChunkRows, ct).ConfigureAwait(false);
+        // FK ordering: clear old chunks -> replace symbols -> insert new chunks. Defer sqlite-vec
+        // pruning across those three steps so reused unchanged Chunk IDs keep their existing vectors.
+        var pruningScope = (chunks as VectorPruningChunkRepository)?.BeginFileUpdate(fileEntity.Id);
+        try
+        {
+            await chunks.ReplaceForFileAsync(fileEntity.Id, [], ct).ConfigureAwait(false);
+            await symbols.ReplaceForFileAsync(fileEntity.Id, newSymbolRows, ct).ConfigureAwait(false);
+            await chunks.ReplaceForFileAsync(fileEntity.Id, newChunkRows, ct).ConfigureAwait(false);
 
-        var changedOrAddedSymbolIds = diff.Added.Concat(diff.Changed)
-            .Select(d => idByQualifiedName[d.QualifiedName])
-            .ToHashSet();
+            if (pruningScope is not null)
+            {
+                await pruningScope.FlushAsync(ct).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            if (pruningScope is not null)
+            {
+                await pruningScope.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+
         var chunksNeedingEmbedCheck = newChunkRows
-            .Where(c => isFirstIndex || (c.SymbolId.HasValue && changedOrAddedSymbolIds.Contains(c.SymbolId.Value)) || c == summaryChunk)
+            .Where(c => isFirstIndex
+                || (c.SymbolId.HasValue && changedOrAddedSymbolIds.Contains(c.SymbolId.Value))
+                || (c == summaryChunk && !string.Equals(summaryChunk.ContentHash, previous.FileSummaryContentHash, StringComparison.Ordinal)))
             .ToList();
         await embedScheduler.EnqueueMissingAsync(projectId, chunksNeedingEmbedCheck, ct).ConfigureAwait(false);
 
-        var hasStructuralChange = diff.Added.Count > 0 || diff.Changed.Count > 0 || diff.Removed.Count > 0;
-        if (hasStructuralChange || isFirstIndex)
+        var needsGraphUpdate = hasStructuralChange || isFirstIndex;
+        if (needsGraphUpdate && !deferGraphUpdate)
         {
             var relationDraftsJson = await ExtractRelationDraftsJsonAsync(projectId, fileEntity.Id, parser, sourceText, ct).ConfigureAwait(false);
             await jobQueue.EnqueueAsync(
@@ -68,6 +95,8 @@ internal sealed class ParsedFileIndexer(
                     projectId, ct: ct)
                 .ConfigureAwait(false);
         }
+
+        return needsGraphUpdate;
     }
 
     private static Dictionary<string, Guid> AssignStableIds(
@@ -84,11 +113,17 @@ internal sealed class ParsedFileIndexer(
         return map;
     }
 
-    private (List<Symbol> Symbols, List<Chunk> Chunks) BuildSymbolAndChunkRows(
-        Guid fileId, IReadOnlyList<SymbolDraft> drafts, Dictionary<string, Guid> idByQualifiedName)
+    private (List<Symbol> Symbols, List<Chunk> Chunks, HashSet<Guid> ChangedOrAddedSymbolIds, bool HasStructuralChange) BuildSymbolAndChunkRows(
+        Guid fileId,
+        IReadOnlyList<SymbolDraft> drafts,
+        Dictionary<string, Guid> idByQualifiedName,
+        PreviousSnapshot previous)
     {
         var newSymbolRows = new List<Symbol>(drafts.Count);
         var newChunkRows = new List<Chunk>(drafts.Count);
+        var changedOrAddedSymbolIds = new HashSet<Guid>();
+        var seenPreviousQualifiedNames = new HashSet<string>(StringComparer.Ordinal);
+        var hasStructuralChange = false;
 
         foreach (var draft in drafts)
         {
@@ -97,6 +132,9 @@ internal sealed class ParsedFileIndexer(
                 && idByQualifiedName.TryGetValue(draft.ParentQualifiedName, out var pid)
                     ? pid
                     : (Guid?)null;
+
+            var signatureHash = hasher.HashText(draft.SignatureText ?? string.Empty);
+            var bodyHash = hasher.HashText(draft.BodyText ?? string.Empty);
 
             newSymbolRows.Add(new Symbol
             {
@@ -108,29 +146,69 @@ internal sealed class ParsedFileIndexer(
                 QualifiedName = draft.QualifiedName,
                 StartLine = draft.StartLine,
                 EndLine = draft.EndLine,
-                SignatureHash = hasher.HashText(draft.SignatureText ?? string.Empty),
-                BodyHash = hasher.HashText(draft.BodyText ?? string.Empty),
+                SignatureHash = signatureHash,
+                BodyHash = bodyHash,
                 DocComment = draft.DocComment
             });
 
-            var combined = SymbolDiffer.CombinedText(draft.DocComment, draft.SignatureText, draft.BodyText);
+            var plainDoc = DocCommentFormatter.ToPlainText(draft.DocComment);
+            var combined = SymbolDiffer.CombinedText(plainDoc, draft.SignatureText, draft.BodyText);
             var chunkText = combined.Length > MaxChunkChars ? combined[..MaxChunkChars] : combined;
+            var contentHash = hasher.HashText(chunkText);
+
+            var chunkId = previous.ChunkIdBySymbolAndHash.TryGetValue((symbolId, contentHash), out var existingChunkId)
+                ? existingChunkId
+                : Guid.NewGuid();
+
             newChunkRows.Add(new Chunk
             {
-                Id = Guid.NewGuid(),
+                Id = chunkId,
                 FileId = fileId,
                 SymbolId = symbolId,
                 Text = chunkText,
                 TokenCount = TokenEstimator.Estimate(chunkText),
-                ContentHash = hasher.HashText(chunkText)
+                ContentHash = contentHash
             });
+
+            if (previous.ByQualifiedName.TryGetValue(draft.QualifiedName, out var prevSymbol))
+            {
+                seenPreviousQualifiedNames.Add(draft.QualifiedName);
+
+                var sameMetadata = prevSymbol.Kind == draft.Kind
+                    && string.Equals(prevSymbol.ParentQualifiedName, draft.ParentQualifiedName, StringComparison.Ordinal);
+                var sameContent = (prevSymbol.SignatureHash == signatureHash
+                        && prevSymbol.BodyHash == bodyHash
+                        && string.Equals(prevSymbol.DocComment, draft.DocComment, StringComparison.Ordinal))
+                    || (prevSymbol.ChunkText is not null && string.Equals(prevSymbol.ChunkText, chunkText, StringComparison.Ordinal));
+
+                if (!sameMetadata || !sameContent)
+                {
+                    changedOrAddedSymbolIds.Add(symbolId);
+                    hasStructuralChange = true;
+                }
+            }
+            else
+            {
+                changedOrAddedSymbolIds.Add(symbolId);
+                hasStructuralChange = true;
+            }
         }
 
-        return (newSymbolRows, newChunkRows);
+        if (seenPreviousQualifiedNames.Count < previous.ByQualifiedName.Count)
+        {
+            hasStructuralChange = true;
+        }
+
+        return (newSymbolRows, newChunkRows, changedOrAddedSymbolIds, hasStructuralChange);
     }
 
     private async Task<Chunk?> TrySummarizeFileAsync(
-        Guid projectId, DomainFile fileEntity, IReadOnlyList<SymbolDraft> drafts, CancellationToken ct)
+        Guid projectId,
+        DomainFile fileEntity,
+        IReadOnlyList<SymbolDraft> drafts,
+        Guid? previousSummaryChunkId,
+        string? previousSummaryHash,
+        CancellationToken ct)
     {
         var summary = await fileSummarizer.SummarizeAsync(projectId, fileEntity.RelativePath, drafts, ct).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(summary))
@@ -142,14 +220,19 @@ internal sealed class ParsedFileIndexer(
         var persistedFile = await files.UpsertAsync(fileEntity, ct).ConfigureAwait(false);
 
         var summaryText = summary.Length > MaxChunkChars ? summary[..MaxChunkChars] : summary;
+        var contentHash = hasher.HashText(summaryText);
+        var chunkId = previousSummaryChunkId.HasValue && string.Equals(previousSummaryHash, contentHash, StringComparison.Ordinal)
+            ? previousSummaryChunkId.Value
+            : Guid.NewGuid();
+
         return new Chunk
         {
-            Id = Guid.NewGuid(),
+            Id = chunkId,
             FileId = persistedFile.Id,
             SymbolId = null,
             Text = summaryText,
             TokenCount = TokenEstimator.Estimate(summaryText),
-            ContentHash = hasher.HashText(summaryText)
+            ContentHash = contentHash
         };
     }
 
@@ -174,43 +257,61 @@ internal sealed class ParsedFileIndexer(
         }
     }
 
-    private async Task<PreviousSymbolInfo> LoadPreviousSymbolDraftsAsync(Guid fileId, CancellationToken ct)
+    private async Task<PreviousSnapshot> LoadPreviousSnapshotAsync(Guid fileId, CancellationToken ct)
     {
         var previousSymbolRows = await symbols.ListByFileAsync(fileId, ct).ConfigureAwait(false);
-        if (previousSymbolRows.Count == 0)
+        var previousChunkRows = await chunks.ListByFileAsync(fileId, ct).ConfigureAwait(false);
+
+        var chunkTextBySymbolId = new Dictionary<Guid, string>();
+        var chunkIdBySymbolAndHash = new Dictionary<(Guid SymbolId, string ContentHash), Guid>();
+        Guid? summaryChunkId = null;
+        string? summaryContentHash = null;
+
+        foreach (var chunk in previousChunkRows)
         {
-            return new PreviousSymbolInfo([], new Dictionary<string, Guid>(StringComparer.Ordinal));
+            if (chunk.SymbolId.HasValue)
+            {
+                chunkTextBySymbolId.TryAdd(chunk.SymbolId.Value, chunk.Text);
+                chunkIdBySymbolAndHash.TryAdd((chunk.SymbolId.Value, chunk.ContentHash), chunk.Id);
+            }
+            else if (summaryChunkId is null)
+            {
+                summaryChunkId = chunk.Id;
+                summaryContentHash = chunk.ContentHash;
+            }
         }
 
-        var previousChunkRows = await chunks.ListByFileAsync(fileId, ct).ConfigureAwait(false);
-        var bodyTextBySymbolId = previousChunkRows
-            .Where(c => c.SymbolId.HasValue)
-            .ToDictionary(c => c.SymbolId!.Value, c => c.Text);
-        var qualifiedNameById = previousSymbolRows.ToDictionary(s => s.Id, s => s.QualifiedName);
+        if (previousSymbolRows.Count == 0)
+        {
+            return new PreviousSnapshot(
+                new Dictionary<string, PreviousSymbolRecord>(StringComparer.Ordinal),
+                new Dictionary<string, Guid>(StringComparer.Ordinal),
+                chunkIdBySymbolAndHash,
+                summaryChunkId,
+                summaryContentHash);
+        }
 
-        var drafts = new List<SymbolDraft>(previousSymbolRows.Count);
+        var qualifiedNameById = previousSymbolRows.ToDictionary(s => s.Id, s => s.QualifiedName);
+        var byQualifiedName = new Dictionary<string, PreviousSymbolRecord>(previousSymbolRows.Count, StringComparer.Ordinal);
         var idByQualifiedName = new Dictionary<string, Guid>(previousSymbolRows.Count, StringComparer.Ordinal);
 
         foreach (var symbol in previousSymbolRows)
         {
-            var bodyText = bodyTextBySymbolId.TryGetValue(symbol.Id, out var text) ? text : string.Empty;
+            chunkTextBySymbolId.TryGetValue(symbol.Id, out var chunkText);
             var parentQualifiedName = symbol.ParentSymbolId.HasValue
                 && qualifiedNameById.TryGetValue(symbol.ParentSymbolId.Value, out var parentQn)
                     ? parentQn
                     : null;
 
-            drafts.Add(new SymbolDraft(
-                symbol.Name, symbol.QualifiedName, symbol.Kind, symbol.StartLine, symbol.EndLine,
-                SignatureText: string.Empty, BodyText: bodyText, DocComment: symbol.DocComment,
-                ParentQualifiedName: parentQualifiedName));
-
+            byQualifiedName[symbol.QualifiedName] = new PreviousSymbolRecord(
+                symbol.Kind, parentQualifiedName, symbol.SignatureHash, symbol.BodyHash, symbol.DocComment, chunkText);
             idByQualifiedName[symbol.QualifiedName] = symbol.Id;
         }
 
-        return new PreviousSymbolInfo(drafts, idByQualifiedName);
+        return new PreviousSnapshot(byQualifiedName, idByQualifiedName, chunkIdBySymbolAndHash, summaryChunkId, summaryContentHash);
     }
 
-    private static IReadOnlyList<SymbolDraft> DeduplicateByQualifiedName(
+    private static IReadOnlyList<SymbolDraft> DisambiguateOverloads(
         IReadOnlyList<SymbolDraft> drafts, string relativePath, ILogger logger)
     {
         if (drafts.Count < 2)
@@ -218,29 +319,78 @@ internal sealed class ParsedFileIndexer(
             return drafts;
         }
 
-        var byQualifiedName = new Dictionary<string, SymbolDraft>(drafts.Count, StringComparer.Ordinal);
-        var duplicateCount = 0;
+        var result = new List<SymbolDraft>(drafts.Count);
+        var usedQualifiedNames = new HashSet<string>(drafts.Count, StringComparer.Ordinal);
+        var overloadCount = 0;
+
         foreach (var draft in drafts)
         {
-            if (byQualifiedName.ContainsKey(draft.QualifiedName))
+            if (usedQualifiedNames.Add(draft.QualifiedName))
             {
-                duplicateCount++;
+                result.Add(draft);
+                continue;
             }
 
-            byQualifiedName[draft.QualifiedName] = draft;
+            overloadCount++;
+            var baseName = draft.QualifiedName;
+            var suffix = ExtractParameterListSuffix(draft.SignatureText);
+            var candidate = suffix is not null ? $"{baseName}{suffix}" : baseName;
+            var ordinal = 2;
+            while (!usedQualifiedNames.Add(candidate))
+            {
+                candidate = suffix is not null ? $"{baseName}{suffix}#{ordinal}" : $"{baseName}#{ordinal}";
+                ordinal++;
+            }
+
+            result.Add(draft with { QualifiedName = candidate });
         }
 
-        if (duplicateCount > 0)
+        if (overloadCount > 0)
         {
-            logger.LogWarning(
-                "{File}: {Count} symbol(s) shared a QualifiedName with another symbol in the same file " +
-                "(most commonly an overload — QualifiedName here doesn't encode the parameter list) and were " +
-                "collapsed to the last-parsed declaration; only one is indexed.",
-                relativePath, duplicateCount);
+            logger.LogDebug(
+                "{File}: disambiguated {Count} overloaded symbol(s) with signature suffixes so every overload remains searchable.",
+                relativePath, overloadCount);
         }
 
-        return [.. byQualifiedName.Values];
+        return result;
     }
 
-    private sealed record PreviousSymbolInfo(IReadOnlyList<SymbolDraft> Drafts, Dictionary<string, Guid> IdByQualifiedName);
+    private static string? ExtractParameterListSuffix(string? signatureText)
+    {
+        if (string.IsNullOrWhiteSpace(signatureText))
+        {
+            return null;
+        }
+
+        var open = signatureText.IndexOf('(');
+        var close = open >= 0 ? signatureText.IndexOf(')', open + 1) : -1;
+        if (open < 0 || close <= open)
+        {
+            return null;
+        }
+
+        var inner = signatureText[(open + 1)..close];
+        var collapsed = string.Join(' ', inner.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        if (collapsed.Length > 80)
+        {
+            collapsed = collapsed[..80];
+        }
+
+        return $"({collapsed})";
+    }
+
+    private sealed record PreviousSymbolRecord(
+        SymbolKind Kind,
+        string? ParentQualifiedName,
+        string SignatureHash,
+        string BodyHash,
+        string? DocComment,
+        string? ChunkText);
+
+    private sealed record PreviousSnapshot(
+        Dictionary<string, PreviousSymbolRecord> ByQualifiedName,
+        Dictionary<string, Guid> IdByQualifiedName,
+        Dictionary<(Guid SymbolId, string ContentHash), Guid> ChunkIdBySymbolAndHash,
+        Guid? FileSummaryChunkId,
+        string? FileSummaryContentHash);
 }

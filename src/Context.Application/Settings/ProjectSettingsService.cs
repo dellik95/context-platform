@@ -59,6 +59,17 @@ public sealed class ProjectSettingsService(
         await projectRepository.UpdateAsync(project, ct).ConfigureAwait(false);
     }
 
+    public async Task PatchDatabaseAsync(Guid projectId, Func<ProjectSettingsDto, ProjectSettingsDto> patch, CancellationToken ct)
+    {
+        var project = await projectRepository.GetByIdAsync(projectId, ct).ConfigureAwait(false)
+            ?? throw new KeyNotFoundException($"Project {projectId} was not found.");
+
+        var current = (!string.IsNullOrWhiteSpace(project.ConfigJson) ? TryDeserialize(project.ConfigJson) : null)
+            ?? CreateAppsettingsDefaults();
+        project.ConfigJson = JsonSerializer.Serialize(patch(current));
+        await projectRepository.UpdateAsync(project, ct).ConfigureAwait(false);
+    }
+
     public async Task UpdateLocalAsync(Guid projectId, ProjectSettingsDto settings, CancellationToken ct)
     {
         var project = await projectRepository.GetByIdAsync(projectId, ct).ConfigureAwait(false)

@@ -18,5 +18,7 @@ public interface IGraphPersistence
 
     Task RemoveByOwningFileAsync(Guid projectId, Guid fileId, CancellationToken ct);
 
+    Task ReplaceForFileAsync(Guid projectId, Guid fileId, IEnumerable<GraphNode> nodes, IEnumerable<GraphEdge> edges, CancellationToken ct);
+
     Task<GraphSnapshot> GetAllAsync(Guid projectId, CancellationToken ct);
 }

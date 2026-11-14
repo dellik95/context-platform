@@ -59,7 +59,10 @@ public static class ServiceCollectionExtensions
         // here against the same database file. See the remarks on GraphPersistenceAdapter and
         // SqliteSearchIndex.
         var dbPath = Path.Combine(projectDataDir, "context.db");
-        services.AddPooledDbContextFactory<ContextDbContext>(options => options.UseSqlite($"Data Source={dbPath}"));
+        if (!services.Any(d => d.ServiceType == typeof(IDbContextFactory<ContextDbContext>)))
+        {
+            services.AddPooledDbContextFactory<ContextDbContext>(options => options.UseSqlite($"Data Source={dbPath}"));
+        }
 
         // Singleton: its own consumers (HybridSearchEngine, SqliteSearchIndex, IFileSummarizer,
         // every Scoped job handler) span both Singleton and Scoped lifetimes, so this can't itself
@@ -206,6 +209,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<JobDispatcher>();
         services.AddSingleton<IJobQueue>(sp => sp.GetRequiredService<JobDispatcher>());
+        services.AddSingleton<IJobDispatcherHealth>(sp => sp.GetRequiredService<JobDispatcher>());
         services.AddHostedService(sp => sp.GetRequiredService<JobDispatcher>());
         services.AddHostedService<ReindexSchedulerService>();
         services.AddHostedService<SessionSummaryScheduler>();

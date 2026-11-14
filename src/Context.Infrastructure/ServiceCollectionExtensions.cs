@@ -25,9 +25,13 @@ public static class ServiceCollectionExtensions
             Directory.CreateDirectory(directory);
         }
 
-        services.AddDbContextPool<ContextDbContext>(options =>
+        void ConfigureSqlite(DbContextOptionsBuilder options) =>
             options.UseSqlite($"Data Source={dbPath}")
-                   .AddInterceptors(new ContextDbContext.SqlitePragmaConnectionInterceptor()));
+                   .AddInterceptors(new ContextDbContext.SqlitePragmaConnectionInterceptor());
+
+        services.AddDbContextPool<ContextDbContext>(ConfigureSqlite);
+        services.AddPooledDbContextFactory<ContextDbContext>(ConfigureSqlite);
+        services.AddSingleton<IStorageMaintenanceService, StorageMaintenanceService>();
 
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IProjectRepository, ProjectRepository>();

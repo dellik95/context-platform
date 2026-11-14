@@ -67,7 +67,9 @@ public class SymbolRepository(ContextDbContext db) : ISymbolRepository
 
     public async Task ReplaceForFileAsync(Guid fileId, IReadOnlyList<Symbol> symbols, CancellationToken ct)
     {
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await using var tx = db.Database.CurrentTransaction is null
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
 
         var existing = await db.Symbols.Where(s => s.FileId == fileId).ToListAsync(ct);
         db.Symbols.RemoveRange(existing);
@@ -84,6 +86,9 @@ public class SymbolRepository(ContextDbContext db) : ISymbolRepository
 
         await db.Symbols.AddRangeAsync(symbols, ct);
         await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
+        if (tx is not null)
+        {
+            await tx.CommitAsync(ct);
+        }
     }
 }

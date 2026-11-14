@@ -1,4 +1,5 @@
 using System.Text;
+using Context.Shared;
 using FluentAssertions;
 
 namespace Context.Indexing.Tests;
@@ -158,5 +159,21 @@ public sealed class FileContentHasherTests : IDisposable
         var act = () => _sut.HashFile(path);
 
         act.Should().Throw<FileNotFoundException>();
+    }
+
+    [Fact]
+    public async Task HashFileAsync_AndHashStreamAsync_MatchSyncHashFile()
+    {
+        var path = Path.Combine(_tempDir, "large.txt");
+        var payload = string.Join('\n', Enumerable.Range(0, 5000).Select(i => $"line-{i}-content"));
+        await File.WriteAllTextAsync(path, payload, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+        var syncHash = _sut.HashFile(path);
+        var asyncHash = await _sut.HashFileAsync(path, CancellationToken.None);
+        await using var stream = File.OpenRead(path);
+        var streamHash = await Hashing.HashStreamAsync(stream, CancellationToken.None);
+
+        asyncHash.Should().Be(syncHash);
+        streamHash.Should().Be(syncHash);
     }
 }

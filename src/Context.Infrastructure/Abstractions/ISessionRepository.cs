@@ -74,6 +74,12 @@ public interface ISessionRepository
     Task<IReadOnlyList<SessionListItem>> ListByProjectAsync(Guid projectId, int limit, CancellationToken ct);
 
     /// <summary>
+    /// Searches recent project sessions for MCP consumers, excluding sessions with no user prompt
+    /// and ended sessions without a summary, optionally filtered by a substring of Claude session id.
+    /// </summary>
+    Task<IReadOnlyList<McpSessionSearchItem>> SearchForMcpAsync(Guid projectId, string? query, int limit, CancellationToken ct);
+
+    /// <summary>
     /// Lexical substring match (Title/Completed/Discovered/Decisions/OpenIssues/NextSteps) over
     /// <paramref name="projectId"/>'s session-summary chunks, newest first — the lexical half of
     /// <see cref="Context.Application.ContextEngine.SearchSessionSummariesAsync"/>'s hybrid search.

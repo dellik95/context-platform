@@ -31,12 +31,22 @@ namespace Context.Application.Adapters;
 public sealed class SqliteSearchIndex(
     IDbContextFactory<ContextDbContext> dbContextFactory,
     IChunkVectorIndex vectorIndex,
-    IProviderResolver providerResolver) : ISearchIndex
+    IProviderResolver providerResolver) : ISearchIndex, IDisposable
 {
     private const int LexicalLimit = 50;
     private const int VectorLimit = 50;
     private const int SnippetLength = 400;
     private const int MaxScopeTerms = 16;
+
+    private static readonly HashSet<string> Stopwords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "the", "and", "for", "with", "from", "this", "that", "these", "those",
+        "what", "when", "where", "which", "who", "whom", "whose", "why", "how",
+        "are", "was", "were", "been", "being", "have", "has", "had", "does", "did",
+        "can", "could", "would", "should", "will", "shall", "may", "might", "must",
+        "into", "onto", "about", "after", "before", "between", "under", "over",
+        "find", "show", "give", "list", "get", "all", "any", "not", "use", "using"
+    };
 
     // Instance-level, not static: SqliteSearchIndex is a singleton per DI container in production
     // (one instance == one database file, so this is still effectively "once per process" there),
@@ -48,16 +58,20 @@ public sealed class SqliteSearchIndex(
     private readonly SemaphoreSlim _initGate = new(1, 1);
     private volatile bool _ftsInitialized;
 
-    public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score)>> LexicalSearchAsync(
+    public void Dispose() => _initGate.Dispose();
+
+    public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score, string? Label, string? RelativePath)>> LexicalSearchAsync(
         Guid projectId, string text, IReadOnlyList<string>? scope, CancellationToken ct)
     {
-        var matchExpression = BuildMatchExpression(text);
-        if (matchExpression is null)
+        var allTerms = ExtractSearchTerms(text);
+        var matchExpression = BuildMatchExpressionFromTerms(allTerms);
+        var scopeTerms = NormalizeScope(scope);
+        var preferNonTest = ShouldDownrankTests(allTerms, scopeTerms);
+
+        if (matchExpression is null && allTerms.Count == 0)
         {
             return [];
         }
-
-        var scopeTerms = NormalizeScope(scope);
 
         await using var db = await dbContextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
         await EnsureFtsInitializedAsync(db, ct).ConfigureAwait(false);
@@ -65,15 +79,47 @@ public sealed class SqliteSearchIndex(
         var connection = db.Database.GetDbConnection();
         await EnsureOpenAsync(connection, ct).ConfigureAwait(false);
 
+        var rawHits = new List<RawLexicalRow>();
+        if (matchExpression is not null)
+        {
+            rawHits.AddRange(await RunFtsQueryAsync(connection, projectId, matchExpression, scopeTerms, ct).ConfigureAwait(false));
+        }
+
+        // FTS5 trigram cannot index terms shorter than 3 characters (e.g. "id", "db", "ui").
+        // Fall back to a bounded parameterized LIKE search when no >=3-char token existed or FTS5 yielded few hits.
+        var shortTerms = allTerms.Where(t => t.Length < 3).Take(3).ToList();
+        if ((matchExpression is null || rawHits.Count < 5) && shortTerms.Count > 0)
+        {
+            var seenIds = rawHits.Select(r => r.ChunkId).ToHashSet();
+            foreach (var fallbackRow in await RunShortTokenFallbackAsync(connection, projectId, shortTerms, scopeTerms, ct).ConfigureAwait(false))
+            {
+                if (seenIds.Add(fallbackRow.ChunkId))
+                {
+                    rawHits.Add(fallbackRow);
+                }
+            }
+        }
+
+        return [.. rawHits
+            .Select(row =>
+            {
+                var snippet = ExtractSnippet(row.FullText, allTerms);
+                var label = string.IsNullOrWhiteSpace(row.QualifiedName) ? row.RelativePath : row.QualifiedName;
+                var adjusted = AdjustLexicalScore(row.BaseScore, allTerms, label, row.RelativePath, preferNonTest);
+                return (row.ChunkId, row.FileId, row.SymbolId, row.SymbolKind, snippet, adjusted, (string?)label, (string?)row.RelativePath);
+            })
+            .OrderByDescending(r => r.adjusted)
+            .Take(LexicalLimit)];
+    }
+
+    private static async Task<List<RawLexicalRow>> RunFtsQueryAsync(
+        DbConnection connection, Guid projectId, string matchExpression, IReadOnlyList<string> scopeTerms, CancellationToken ct)
+    {
         await using var command = connection.CreateCommand();
         // bm25() in FTS5 is "lower/more negative is better"; negate it so, like CosineScore,
-        // a higher value here always means "more relevant" — the convention HybridSearchEngine's
-        // min-max normalization assumes for every raw signal it merges.
-        // The scope predicate is applied here rather than to the result list so the LIMIT is spent
-        // on in-scope rows; filtering afterwards would let out-of-scope hits consume the top 50 and
-        // return far fewer results than the scope actually contains.
+        // a higher value here always means "more relevant".
         command.CommandText = $"""
-            SELECT c."Id", c."FileId", c."SymbolId", sy."Kind", substr(c."Text", 1, @snippetLength) AS Snippet, -bm25(chunks_fts) AS Score
+            SELECT c."Id", c."FileId", c."SymbolId", sy."Kind", c."Text", -bm25(chunks_fts) AS Score, sy."QualifiedName", f."RelativePath"
             FROM chunks_fts
             JOIN "Chunks" c ON c."rowid" = chunks_fts."rowid"
             JOIN "Files" f ON f."Id" = c."FileId"
@@ -84,45 +130,68 @@ public sealed class SqliteSearchIndex(
             """;
         AddParameter(command, "@match", matchExpression);
         AddScopeParameters(command, scopeTerms);
-        // EF Core's Sqlite provider persists Guid columns as upper-invariant TEXT (confirmed
-        // against this project's own on-disk data: e.g. Files."ProjectId" is stored as
-        // "4FE55277-...", not "4fe55277-..."). This command runs on the raw ADO.NET connection,
-        // bypassing EF's value conversion entirely, so binding the default (lowercase)
-        // Guid.ToString() here made this WHERE clause compare against SQLite's case-sensitive
-        // default (BINARY) collation and never match -- LexicalSearchAsync silently returned zero
-        // rows for every project. Match EF's own on-disk casing so the comparison actually hits.
         AddParameter(command, "@projectId", projectId.ToString().ToUpperInvariant());
-        AddParameter(command, "@snippetLength", SnippetLength);
         AddParameter(command, "@limit", LexicalLimit);
 
-        var results = new List<(Guid, Guid?, Guid?, SymbolKind?, string, double)>();
+        return await ReadLexicalRowsAsync(command, ct).ConfigureAwait(false);
+    }
 
+    private static async Task<List<RawLexicalRow>> RunShortTokenFallbackAsync(
+        DbConnection connection, Guid projectId, IReadOnlyList<string> shortTerms, IReadOnlyList<string> scopeTerms, CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        var termClauses = shortTerms.Select((_, i) =>
+            $"""(lower(c."Text") LIKE @st{i} ESCAPE '\' OR lower(COALESCE(sy."QualifiedName", '')) LIKE @st{i} ESCAPE '\')""");
+        command.CommandText = $"""
+            SELECT c."Id", c."FileId", c."SymbolId", sy."Kind", c."Text", 1.0 AS Score, sy."QualifiedName", f."RelativePath"
+            FROM "Chunks" c
+            JOIN "Files" f ON f."Id" = c."FileId"
+            LEFT JOIN "Symbols" sy ON sy."Id" = c."SymbolId"
+            WHERE f."ProjectId" = @projectId AND f."IsDeleted" = 0{BuildScopeSql(scopeTerms)}
+              AND ({string.Join(" OR ", termClauses)})
+            LIMIT @limit;
+            """;
+        for (var i = 0; i < shortTerms.Count; i++)
+        {
+            AddParameter(command, $"@st{i}", $"%{EscapeLike(shortTerms[i].ToLowerInvariant())}%");
+        }
+
+        AddScopeParameters(command, scopeTerms);
+        AddParameter(command, "@projectId", projectId.ToString().ToUpperInvariant());
+        AddParameter(command, "@limit", LexicalLimit);
+
+        return await ReadLexicalRowsAsync(command, ct).ConfigureAwait(false);
+    }
+
+    private static async Task<List<RawLexicalRow>> ReadLexicalRowsAsync(DbCommand command, CancellationToken ct)
+    {
+        var rows = new List<RawLexicalRow>();
         try
         {
             await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
-                results.Add((
+                rows.Add(new RawLexicalRow(
                     ReadGuid(reader, 0),
                     ReadNullableGuid(reader, 1),
                     ReadNullableGuid(reader, 2),
                     ReadNullableSymbolKind(reader, 3),
                     reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
-                    reader.GetDouble(5)));
+                    reader.GetDouble(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6),
+                    reader.GetString(7)));
             }
         }
         catch (DbException)
         {
-            // A malformed FTS5 MATCH expression (pathological user input that slipped past
-            // BuildMatchExpression's sanitizing) must degrade to "no lexical hits", never break
-            // the whole hybrid search pipeline.
+            // Malformed FTS5 query degrades gracefully to empty hits.
             return [];
         }
 
-        return results;
+        return rows;
     }
 
-    public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore)>> VectorSearchAsync(
+    public async Task<IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore, string? Label, string? RelativePath)>> VectorSearchAsync(
         Guid projectId, float[] queryEmbedding, IReadOnlyList<string>? scope, CancellationToken ct)
     {
         var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
@@ -148,13 +217,14 @@ public sealed class SqliteSearchIndex(
             join sy in db.Symbols.AsNoTracking() on c.SymbolId equals (Guid?)sy.Id into symbolJoin
             from sy in symbolJoin.DefaultIfEmpty()
             where chunkIds.Contains(c.Id) && f.ProjectId == projectId && !f.IsDeleted
-            select new { c.Id, c.FileId, c.SymbolId, Kind = (SymbolKind?)sy.Kind, c.Text, f.RelativePath, f.Language }
+            select new { c.Id, c.FileId, c.SymbolId, Kind = (SymbolKind?)sy.Kind, QualifiedName = sy.QualifiedName, c.Text, f.RelativePath, f.Language }
         ).ToListAsync(ct).ConfigureAwait(false);
 
         // Post-filter, unavoidably: the ANN index has no path metadata to filter on during the
         // search itself (see IChunkVectorIndex), so a scoped query gets the in-scope subset of the
         // project's nearest neighbors — documented on ISearchIndex.VectorSearchAsync.
         var scopeTerms = NormalizeScope(scope);
+        var preferNonTest = ShouldDownrankTests([], scopeTerms);
         var rowsInScope = scopeTerms.Count == 0
             ? rows
             : [.. rows.Where(r => MatchesScope(r.RelativePath, r.Language, scopeTerms))];
@@ -163,9 +233,16 @@ public sealed class SqliteSearchIndex(
             .Select(row =>
             {
                 var snippet = row.Text.Length > SnippetLength ? row.Text[..SnippetLength] : row.Text;
-                return (row.Id, (Guid?)row.FileId, row.SymbolId, row.Kind, snippet, scoreByChunkId[row.Id]);
+                var label = string.IsNullOrWhiteSpace(row.QualifiedName) ? row.RelativePath : row.QualifiedName;
+                var cosine = scoreByChunkId[row.Id];
+                if (preferNonTest && IsTestPath(row.RelativePath))
+                {
+                    cosine *= 0.85;
+                }
+
+                return (row.Id, (Guid?)row.FileId, row.SymbolId, row.Kind, snippet, cosine, (string?)label, (string?)row.RelativePath);
             })
-            .OrderByDescending(r => r.Item6)
+            .OrderByDescending(r => r.cosine)
             .ToList();
 
         return scored;
@@ -216,40 +293,222 @@ public sealed class SqliteSearchIndex(
     private static string EscapeLike(string value) =>
         value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 
-    /// <summary>
-    /// Turns free-form query text into a safe FTS5 MATCH expression: split into word tokens,
-    /// each individually double-quoted (FTS5's quoting escapes it as a literal string token,
-    /// sidestepping the query-syntax operators a raw query could otherwise trigger) and OR'd
-    /// together. Returns null if the query has no usable tokens (e.g. empty/all-punctuation).
-    /// </summary>
-    private static string? BuildMatchExpression(string text)
+    private static IReadOnlyList<string> ExtractSearchTerms(string text)
     {
-        var tokens = text
-            .Split([' ', '\t', '\n', '\r', '.', ',', ';', ':', '!', '?', '(', ')', '[', ']', '{', '}', '"', '\'', '/', '\\'],
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return [];
+        }
+
+        var rawTokens = text
+            .Split([' ', '\t', '\n', '\r', '.', ',', ';', ':', '!', '?', '(', ')', '[', ']', '{', '}', '"', '\'', '/', '\\', '-', '_'],
                 StringSplitOptions.RemoveEmptyEntries)
-            .Where(t => t.Length > 0)
+            .Where(t => t.Length > 0);
+
+        var expanded = new List<string>();
+        foreach (var raw in rawTokens)
+        {
+            expanded.Add(raw);
+            SplitCamelCase(raw, expanded);
+        }
+
+        var filtered = expanded
+            .Where(t => !Stopwords.Contains(t))
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(24) // cap query fan-out
+            .Take(24)
             .ToList();
 
-        if (tokens.Count == 0)
+        if (filtered.Count == 0)
+        {
+            filtered = expanded
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(24)
+                .ToList();
+        }
+
+        return filtered;
+    }
+
+    private static void SplitCamelCase(string token, List<string> target)
+    {
+        if (token.Length < 4)
+        {
+            return;
+        }
+
+        var start = 0;
+        for (var i = 1; i < token.Length; i++)
+        {
+            var prev = token[i - 1];
+            var curr = token[i];
+            var boundary = (char.IsLower(prev) && char.IsUpper(curr))
+                || (char.IsLetter(prev) && char.IsDigit(curr))
+                || (char.IsDigit(prev) && char.IsLetter(curr))
+                || (i + 1 < token.Length && char.IsUpper(prev) && char.IsUpper(curr) && char.IsLower(token[i + 1]));
+            if (!boundary)
+            {
+                continue;
+            }
+
+            if (i - start >= 2)
+            {
+                target.Add(token[start..i]);
+            }
+
+            start = i;
+        }
+
+        if (start > 0 && token.Length - start >= 2)
+        {
+            target.Add(token[start..]);
+        }
+    }
+
+    private static string? BuildMatchExpressionFromTerms(IReadOnlyList<string> terms)
+    {
+        var trigramTerms = terms.Where(t => t.Length >= 3).Take(24).ToList();
+        if (trigramTerms.Count == 0)
         {
             return null;
         }
 
         var sb = new StringBuilder();
-        for (var i = 0; i < tokens.Count; i++)
+        for (var i = 0; i < trigramTerms.Count; i++)
         {
             if (i > 0)
             {
                 sb.Append(" OR ");
             }
 
-            sb.Append('"').Append(tokens[i].Replace("\"", "\"\"")).Append('"');
+            sb.Append('"').Append(trigramTerms[i].Replace("\"", "\"\"")).Append('"');
         }
 
         return sb.ToString();
     }
+
+    private static string ExtractSnippet(string text, IReadOnlyList<string> terms)
+    {
+        if (string.IsNullOrEmpty(text) || text.Length <= SnippetLength)
+        {
+            return text;
+        }
+
+        var earliestMatch = -1;
+        foreach (var term in terms)
+        {
+            var idx = text.IndexOf(term, StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0 && (earliestMatch < 0 || idx < earliestMatch))
+            {
+                earliestMatch = idx;
+            }
+        }
+
+        if (earliestMatch < 0 || earliestMatch < SnippetLength - 100)
+        {
+            return text[..SnippetLength];
+        }
+
+        var start = Math.Max(0, earliestMatch - 100);
+        // Align start cleanly to a line/word boundary near start so snippet stays legible.
+        var newline = text.IndexOf('\n', start, Math.Min(40, text.Length - start));
+        if (newline >= start && newline < earliestMatch)
+        {
+            start = newline + 1;
+        }
+
+        var length = Math.Min(SnippetLength, text.Length - start);
+        var slice = text.Substring(start, length);
+        return start > 0 ? $"…{slice}" : slice;
+    }
+
+    private static double AdjustLexicalScore(
+        double baseScore,
+        IReadOnlyList<string> terms,
+        string? label,
+        string? relativePath,
+        bool preferNonTest)
+    {
+        var score = Math.Max(0.01, baseScore);
+
+        if (!string.IsNullOrWhiteSpace(label) && terms.Count > 0)
+        {
+            var dot = label.LastIndexOf('.');
+            var shortName = dot >= 0 && dot + 1 < label.Length ? label[(dot + 1)..] : label;
+
+            var hitsInLabel = 0;
+            var exactSymbolMatch = false;
+            foreach (var term in terms)
+            {
+                if (string.Equals(shortName, term, StringComparison.OrdinalIgnoreCase))
+                {
+                    exactSymbolMatch = true;
+                    hitsInLabel++;
+                }
+                else if (label.Contains(term, StringComparison.OrdinalIgnoreCase))
+                {
+                    hitsInLabel++;
+                }
+            }
+
+            if (hitsInLabel > 0)
+            {
+                var ratio = (double)hitsInLabel / terms.Count;
+                score = score * (1.0 + (0.45 * ratio)) + (exactSymbolMatch ? 1.0 : 0.25 * ratio);
+            }
+        }
+
+        if (preferNonTest && IsTestPath(relativePath))
+        {
+            score *= 0.75;
+        }
+
+        return score;
+    }
+
+    private static bool ShouldDownrankTests(IReadOnlyList<string> terms, IReadOnlyList<string> scopeTerms)
+    {
+        if (scopeTerms.Any(IsTestPath))
+        {
+            return false;
+        }
+
+        foreach (var term in terms)
+        {
+            if (term.StartsWith("test", StringComparison.OrdinalIgnoreCase)
+                || term.StartsWith("spec", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsTestPath(string? relativePath)
+    {
+        if (string.IsNullOrEmpty(relativePath))
+        {
+            return false;
+        }
+
+        return relativePath.Contains("/test", StringComparison.OrdinalIgnoreCase)
+            || relativePath.Contains("\\test", StringComparison.OrdinalIgnoreCase)
+            || relativePath.StartsWith("tests/", StringComparison.OrdinalIgnoreCase)
+            || relativePath.StartsWith("test/", StringComparison.OrdinalIgnoreCase)
+            || relativePath.Contains("Tests.", StringComparison.OrdinalIgnoreCase)
+            || relativePath.Contains(".test.", StringComparison.OrdinalIgnoreCase)
+            || relativePath.Contains(".spec.", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed record RawLexicalRow(
+        Guid ChunkId,
+        Guid? FileId,
+        Guid? SymbolId,
+        SymbolKind? SymbolKind,
+        string FullText,
+        double BaseScore,
+        string? QualifiedName,
+        string RelativePath);
 
     /// <summary>
     /// Lazily creates the <c>chunks_fts</c> FTS5 virtual table and the triggers that keep it in

@@ -50,7 +50,7 @@ public sealed class ReindexSchedulerService(
             {
                 await MaybeScheduleReindexAsync(project.Id, settingsService, requester, ct).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Logger.LogError(ex, "Failed to evaluate reindex schedule for project {ProjectId}.", project.Id);
             }
@@ -79,6 +79,7 @@ public sealed class ReindexSchedulerService(
             Logger.LogInformation("Skipped scheduled reindex of project {ProjectId}: one is already queued or running.", projectId);
         }
 
-        await settingsService.UpdateAsync(projectId, settings with { LastReindexScheduledAt = now }, ct).ConfigureAwait(false);
+        await settingsService.StampDatabaseScheduleAsync(projectId, current => current with { LastReindexScheduledAt = now }, ct)
+            .ConfigureAwait(false);
     }
 }

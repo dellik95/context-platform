@@ -13,6 +13,9 @@ public static partial class MemoryRelationJudge
     public const int MaxBodyExcerpt = 600;
     public const double OfflineDuplicateCosine = 0.92;
     public const double OfflineComplementsCosine = 0.80;
+    public const double OfflineDuplicateJaccard = 0.75;
+    public const double OfflineComplementsJaccard = 0.50;
+    public const int OfflineStrongEntityComplementsCount = 2;
     public const double NegationFactJaccard = 0.6;
 
     public const string SystemPrompt =
@@ -84,6 +87,8 @@ public static partial class MemoryRelationJudge
 
     /// <summary>
     /// The no-LLM verdict. Never Supersedes: recency alone cannot tell a correction from a mistake.
+    /// Combines embedding similarity with lexical overlap and shared strong entities so offline
+    /// consolidation stays useful even when embedding models are absent or low-precision.
     /// </summary>
     public static MemoryRelation JudgeOffline(RelationSignals signals)
     {
@@ -92,14 +97,70 @@ public static partial class MemoryRelationJudge
             return MemoryRelation.Contradicts;
         }
 
-        if (signals.Cosine >= OfflineDuplicateCosine && signals.SharesStrongEntity)
+        if ((signals.Cosine >= OfflineDuplicateCosine && (signals.SharesStrongEntity || signals.ContentJaccard >= OfflineDuplicateJaccard))
+            || (signals.SameType && signals.ContentJaccard >= OfflineDuplicateJaccard && (signals.SharesStrongEntity || signals.SameTopicKey)))
         {
             return MemoryRelation.Duplicate;
         }
 
-        return signals.Cosine >= OfflineComplementsCosine && signals.SharesStrongEntity && signals.SameType && signals.SameTopicKey
+        if (!signals.SameType || !signals.SameTopicKey || !signals.SharesStrongEntity)
+        {
+            return MemoryRelation.Unrelated;
+        }
+
+        return signals.Cosine >= OfflineComplementsCosine
+            || signals.ContentJaccard >= OfflineComplementsJaccard
+            || signals.SharedStrongEntityCount >= OfflineStrongEntityComplementsCount
             ? MemoryRelation.Complements
             : MemoryRelation.Unrelated;
+    }
+
+    /// <summary>
+    /// Token-level Jaccard similarity across title and facts (falling back to body when facts are
+    /// absent), filtering very common glue words.
+    /// </summary>
+    public static double ComputeContentJaccard(RelationSubject a, RelationSubject b)
+    {
+        var left = ContentTokensFor(a);
+        var right = ContentTokensFor(b);
+        return TextTokens.Jaccard(left, right);
+    }
+
+    private static readonly HashSet<string> GlueWords = new(StringComparer.Ordinal)
+    {
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "to", "of",
+        "in", "for", "and", "or", "with", "on", "at", "by", "as", "from", "that",
+        "this", "it", "its", "use", "uses", "used"
+    };
+
+    private static HashSet<string> ContentTokensFor(RelationSubject subject)
+    {
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        AddFiltered(subject.Title);
+        if (subject.Facts.Count > 0)
+        {
+            foreach (var fact in subject.Facts)
+            {
+                AddFiltered(fact);
+            }
+        }
+        else
+        {
+            AddFiltered(subject.Body);
+        }
+
+        return set;
+
+        void AddFiltered(string? text)
+        {
+            foreach (var token in TextTokens.Tokenize(text))
+            {
+                if (token.Length > 1 && !GlueWords.Contains(token))
+                {
+                    set.Add(token);
+                }
+            }
+        }
     }
 
     /// <summary>True when some fact of one side is the negation of a fact on the other: the same words

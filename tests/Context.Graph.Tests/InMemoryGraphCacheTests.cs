@@ -120,4 +120,34 @@ public class InMemoryGraphCacheTests
         cache.GetNode(fixture.Caller1.Id)!.Label.Should().Be("OrderService.PayAsync");
         cache.GetOutgoing(fixture.Caller1.Id).Should().ContainSingle(e => e.Id == fixture.CallsImplEdge.Id);
     }
+
+    [Fact]
+    public void ReplaceOwningFile_PreservesIncomingCrossFileEdgesWhileRemovingStaleNodesAndOwnedEdges()
+    {
+        var fixture = new GraphFixture();
+        var staleNodeInCaller1File = new Context.Domain.Entities.GraphNode
+        {
+            Id = Guid.NewGuid(), ProjectId = fixture.ProjectId, Kind = Context.Domain.Enums.GraphNodeKind.Method,
+            Label = "OrderService.OldHelper", OwningFileId = fixture.FileCaller1,
+        };
+        var staleEdgeInCaller1File = new Context.Domain.Entities.GraphEdge
+        {
+            Id = Guid.NewGuid(), ProjectId = fixture.ProjectId,
+            SourceNodeId = fixture.Caller1.Id, TargetNodeId = staleNodeInCaller1File.Id,
+            Kind = Context.Domain.Enums.GraphEdgeKind.Calls, OwningFileId = fixture.FileCaller1,
+        };
+
+        var cache = new Context.Graph.InMemoryGraphCache(fixture.ProjectId);
+        cache.Hydrate([.. fixture.AllNodes, staleNodeInCaller1File], [.. fixture.AllEdges, staleEdgeInCaller1File]);
+
+        // Updating FileCaller1 keeps Caller1, drops staleNodeInCaller1File & staleEdgeInCaller1File,
+        // and MUST preserve Caller2 -> Caller1 and Test1 -> Caller1 incoming edges from other files.
+        cache.ReplaceOwningFile(fixture.ProjectId, fixture.FileCaller1, [fixture.Caller1], [fixture.CallsImplEdge]);
+
+        cache.ContainsNode(fixture.Caller1.Id).Should().BeTrue();
+        cache.ContainsNode(staleNodeInCaller1File.Id).Should().BeFalse();
+        cache.GetOutgoing(fixture.Caller1.Id).Should().ContainSingle(e => e.Id == fixture.CallsImplEdge.Id);
+        cache.GetIncoming(fixture.Caller1.Id).Select(e => e.Id).Should().BeEquivalentTo(
+            [fixture.CallsCaller1Edge.Id, fixture.TestsEdge.Id]);
+    }
 }

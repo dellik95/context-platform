@@ -59,7 +59,7 @@ public sealed class StaleSessionScheduler(
             {
                 await MaybeEndStaleSessionsAsync(project.Id, settingsService, sessionRepository, engine, ct).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Logger.LogError(ex, "Failed to evaluate stale-session cleanup for project {ProjectId}.", project.Id);
             }
@@ -102,7 +102,7 @@ public sealed class StaleSessionScheduler(
                 _endedThisPoll.Add(session.Id);
                 await engine.EndSessionAsync(projectId, session.Id, ct, StaleReason).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Logger.LogError(ex, "Failed to end stale session {SessionId}.", session.Id);
             }

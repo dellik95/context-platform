@@ -74,6 +74,8 @@ public sealed class MemoryReconsolidationScheduler(
 
         // Stamped only once the job is queued: a failed enqueue is then retried by the next poll instead of
         // being skipped for a whole interval.
-        await settingsService.UpdateAsync(projectId, settings with { LastMemoryReconsolidationScheduledAt = now }, ct).ConfigureAwait(false);
+        await settingsService.StampDatabaseScheduleAsync(
+                projectId, current => current with { LastMemoryReconsolidationScheduledAt = now }, ct)
+            .ConfigureAwait(false);
     }
 }

@@ -347,4 +347,36 @@ public class ContextPackBuilderTests
 
         pack.OpenIssues.Should().Equal(openIssues);
     }
+
+    [Fact]
+    public async Task BuildAsync_TinyLowScoreHit_DoesNotDisplaceHigherScorePrimaryHit()
+    {
+        var options = new ContextPackOptions
+        {
+            ArchitectureReserveRatio = 0,
+            PrimaryReserveRatio = 0.6,
+            HistoricalReserveRatio = 0,
+            OpenIssuesReserveRatio = 0,
+            SafetyReserveRatio = 0.4,
+        };
+        var primaryHit = new SearchHit(Guid.NewGuid(), "Method", "App.Primary", 10.0, SnippetOfTokens(60));
+        var noisyTinyHit = new SearchHit(Guid.NewGuid(), "Method", "App.Tiny", 0.5, SnippetOfTokens(1));
+        var builder = new ContextPackBuilder(new FakeSearchEngine([noisyTinyHit, primaryHit]), options);
+
+        var pack = await builder.BuildAsync(Query(100), CancellationToken.None);
+
+        pack.PrimaryHits.Should().ContainSingle().Which.NodeId.Should().Be(primaryHit.NodeId);
+    }
+
+    [Fact]
+    public async Task BuildAsync_PrimaryHits_AreOrderedDescendingByScore()
+    {
+        var highScore = new SearchHit(Guid.NewGuid(), "Method", "App.High", 12.0, SnippetOfTokens(40));
+        var lowScoreTiny = new SearchHit(Guid.NewGuid(), "Method", "App.LowTiny", 1.0, SnippetOfTokens(1));
+        var builder = new ContextPackBuilder(new FakeSearchEngine([lowScoreTiny, highScore]));
+
+        var pack = await builder.BuildAsync(Query(1000), CancellationToken.None);
+
+        pack.PrimaryHits.Should().Equal(highScore, lowScoreTiny);
+    }
 }

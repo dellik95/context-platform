@@ -142,32 +142,62 @@ public sealed class ContextPackBuilder : IContextPackBuilder
     }
 
     /// <summary>
-    /// Classic greedy 0/1-knapsack approximation: sort by score/token ratio descending, then add
-    /// each item that still fits in the remaining budget (skipping — not stopping at — ones that
-    /// don't, so a later, cheaper item can still fill the gap).
+    /// Budget-constrained selection that guarantees the highest-scoring hit first (if it fits),
+    /// fills remaining budget by score-to-floored-token-cost ratio (preventing tiny low-score
+    /// fragments from outranking full method hits), and returns selected items ordered strictly by
+    /// relevance <c>score</c> descending.
     /// </summary>
     private static (IReadOnlyList<T> Selected, int TokensUsed, bool Truncated, int MoreAvailable) GreedyKnapsack<T>(
         IReadOnlyList<T> items, Func<T, double> score, Func<T, int> tokenCost, int budget)
     {
-        var ordered = items
-            .Select(item => (Item: item, Cost: Math.Max(1, tokenCost(item)), Score: score(item)))
-            .OrderByDescending(x => x.Score / x.Cost)
+        if (items.Count == 0 || budget <= 0)
+        {
+            return ([], 0, items.Count > 0, items.Count);
+        }
+
+        const int minCostFloorForRatio = 20;
+        var indexed = items
+            .Select((item, idx) => (Item: item, Cost: Math.Max(1, tokenCost(item)), Score: score(item), Index: idx))
             .ToList();
 
-        var selected = new List<T>();
+        var selected = new List<(T Item, double Score)>();
+        var usedIndices = new HashSet<int>();
         var used = 0;
 
-        foreach (var x in ordered)
+        // Guarantee the top-scoring hit when it fits so medium-scoring small chunks cannot crowd it out.
+        var topByScore = indexed
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Index)
+            .First();
+        if (topByScore.Cost <= budget)
+        {
+            selected.Add((topByScore.Item, topByScore.Score));
+            usedIndices.Add(topByScore.Index);
+            used += topByScore.Cost;
+        }
+
+        var remainingByDensity = indexed
+            .Where(x => !usedIndices.Contains(x.Index))
+            .OrderByDescending(x => x.Score / Math.Max(minCostFloorForRatio, x.Cost))
+            .ThenByDescending(x => x.Score)
+            .ThenBy(x => x.Index);
+
+        foreach (var x in remainingByDensity)
         {
             if (used + x.Cost > budget)
                 continue;
 
-            selected.Add(x.Item);
+            selected.Add((x.Item, x.Score));
             used += x.Cost;
         }
 
-        var truncated = selected.Count < items.Count;
-        return (selected, used, truncated, items.Count - selected.Count);
+        var orderedSelected = selected
+            .OrderByDescending(x => x.Score)
+            .Select(x => x.Item)
+            .ToList();
+
+        var truncated = orderedSelected.Count < items.Count;
+        return (orderedSelected, used, truncated, items.Count - orderedSelected.Count);
     }
 
     /// <summary>

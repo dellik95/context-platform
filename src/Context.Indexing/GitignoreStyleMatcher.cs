@@ -24,7 +24,7 @@ public sealed class GitignoreStyleMatcher : IIgnoreMatcher
 {
     private static readonly string[] DefaultDenylist =
     [
-        ".git/", "node_modules/", "bin/", "obj/", ".venv/", "venv/", "dist/", "build/",
+        ".git/", ".context/", "node_modules/", "bin/", "obj/", ".venv/", "venv/", "dist/", "build/",
         ".angular/", ".next/", ".nuxt/", "__pycache__/", ".pytest_cache/", ".mypy_cache/",
         ".idea/", ".vs/", ".vscode/",
         // Claude Code agent worktrees: full checkouts of the repo, usually excluded only via .git/info/exclude
@@ -39,6 +39,8 @@ public sealed class GitignoreStyleMatcher : IIgnoreMatcher
         ".env*", "*.pem", "*.key", "*credentials*",
     ];
 
+    private readonly GitignoreStyleMatcher? _parent;
+    private readonly string _scopePrefix;
     private readonly List<CompiledPattern> _generalPatterns = [];
     private readonly List<CompiledPattern> _secretPatterns = [];
 
@@ -55,6 +57,8 @@ public sealed class GitignoreStyleMatcher : IIgnoreMatcher
         IReadOnlyList<string>? secretDenylistOverride = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        _parent = null;
+        _scopePrefix = string.Empty;
 
         foreach (var pattern in DefaultDenylist)
             _generalPatterns.Add(CompilePattern(pattern));
@@ -70,19 +74,68 @@ public sealed class GitignoreStyleMatcher : IIgnoreMatcher
             _secretPatterns.Add(CompilePattern(pattern));
     }
 
+    private GitignoreStyleMatcher(GitignoreStyleMatcher parent, string subDirRelativePrefix, string gitignoreFilePath)
+    {
+        _parent = parent;
+        _scopePrefix = Normalize(subDirRelativePrefix).TrimEnd('/') + "/";
+        AppendPatternsFromFile(gitignoreFilePath);
+    }
+
+    /// <summary>
+    /// Creates a layered matcher evaluating <paramref name="gitignoreFilePath"/> relative to
+    /// <paramref name="subDirRelativePrefix"/> while inheriting all rules and secret gates from
+    /// this parent matcher.
+    /// </summary>
+    public GitignoreStyleMatcher WithScopedGitignore(string subDirRelativePrefix, string gitignoreFilePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(subDirRelativePrefix);
+        return new GitignoreStyleMatcher(this, subDirRelativePrefix, gitignoreFilePath);
+    }
+
     public bool IsIgnored(string relativePath)
     {
         var normalized = Normalize(relativePath);
         if (normalized.Length == 0) return false;
 
-        // Secret-file gate: independent of, and un-overridable by, general negation patterns.
+        if (IsSecretMatch(normalized))
+            return true;
+
+        return EvaluateGeneral(normalized);
+    }
+
+    private bool IsSecretMatch(string normalized)
+    {
+        if (_parent is not null && _parent.IsSecretMatch(normalized))
+            return true;
+
         foreach (var secret in _secretPatterns)
             if (secret.Regex.IsMatch(normalized))
                 return true;
 
-        var ignored = false;
+        return false;
+    }
+
+    private bool EvaluateGeneral(string normalized)
+    {
+        var ignored = _parent?.EvaluateGeneral(normalized) ?? false;
+
+        string target;
+        if (_scopePrefix.Length == 0)
+        {
+            target = normalized;
+        }
+        else if (normalized.StartsWith(_scopePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            target = normalized[_scopePrefix.Length..];
+            if (target.Length == 0) return ignored;
+        }
+        else
+        {
+            return ignored;
+        }
+
         foreach (var pattern in _generalPatterns)
-            if (pattern.Regex.IsMatch(normalized))
+            if (pattern.Regex.IsMatch(target))
                 ignored = !pattern.IsNegation;
 
         return ignored;
@@ -136,9 +189,18 @@ public sealed class GitignoreStyleMatcher : IIgnoreMatcher
         {
             if (pattern[i] == '*' && i + 1 < pattern.Length && pattern[i + 1] == '*')
             {
-                sb.Append(".*");
                 i += 2;
-                if (i < pattern.Length && pattern[i] == '/') i++;
+                if (i < pattern.Length && pattern[i] == '/')
+                {
+                    // Zero or more complete directory segments ("**/" matches both root and "a/b/")
+                    // so "**/foo.cs" doesn't match "barfoo.cs".
+                    sb.Append("(?:.*/)?");
+                    i++;
+                }
+                else
+                {
+                    sb.Append(".*");
+                }
             }
             else if (pattern[i] == '*')
             {

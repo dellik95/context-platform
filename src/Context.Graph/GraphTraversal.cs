@@ -135,15 +135,19 @@ public sealed class GraphTraversal : IGraphTraversal
                 Array.Empty<ImpactNode>(), Array.Empty<ImpactNode>(), Array.Empty<ImpactNode>()));
         }
 
-        // Who depends on this symbol: walk Calls/References/Implements/Extends edges backwards
-        // (target -> source) up to maxHops.
-        var callers = ReverseWalk(cache, symbolNodeId, CallerEdgeKinds, maxHops, ct);
+        // For container nodes (File, Class, Interface, Struct, Enum), expand outgoing Contains edges
+        // into the seed set so querying a type rolls up callers and tests targeting any of its
+        // contained methods, properties, or fields.
+        var seedIds = ExpandContainerSeeds(cache, symbolNodeId);
+
+        // Who depends on this symbol (or its contained members): walk Calls/References/Implements/Extends backwards.
+        var callers = ReverseWalk(cache, seedIds, CallerEdgeKinds, maxHops, ct);
 
         // Subtypes/implementations specifically: same walk restricted to Implements/Extends.
-        var implementers = ReverseWalk(cache, symbolNodeId, ImplementerEdgeKinds, maxHops, ct);
+        var implementers = ReverseWalk(cache, seedIds, ImplementerEdgeKinds, maxHops, ct);
 
-        // Tests that cover the symbol itself or any of its (transitive) callers.
-        var coverageTargets = new HashSet<Guid> { symbolNodeId };
+        // Tests that cover the symbol, its contained members, or any of its (transitive) callers.
+        var coverageTargets = new HashSet<Guid>(seedIds);
         foreach (var caller in callers)
             coverageTargets.Add(caller.Node.Id);
 
@@ -172,14 +176,52 @@ public sealed class GraphTraversal : IGraphTraversal
         return Task.FromResult(new ImpactSet(callers, implementers, coveringTests));
     }
 
+    private static List<Guid> ExpandContainerSeeds(InMemoryGraphCache cache, Guid rootId)
+    {
+        var seeds = new List<Guid> { rootId };
+        var rootNode = cache.GetNode(rootId);
+        if (rootNode?.Kind is not (GraphNodeKind.File or GraphNodeKind.Module or GraphNodeKind.Class or GraphNodeKind.Interface or GraphNodeKind.Type))
+        {
+            return seeds;
+        }
+
+        var visited = new HashSet<Guid> { rootId };
+        var queue = new Queue<Guid>();
+        queue.Enqueue(rootId);
+
+        while (queue.Count > 0)
+        {
+            var currentId = queue.Dequeue();
+            foreach (var edge in cache.GetOutgoing(currentId))
+            {
+                if (edge.Kind != GraphEdgeKind.Contains)
+                    continue;
+
+                if (!visited.Add(edge.TargetNodeId))
+                    continue;
+
+                if (cache.GetNode(edge.TargetNodeId) is not null)
+                {
+                    seeds.Add(edge.TargetNodeId);
+                    queue.Enqueue(edge.TargetNodeId);
+                }
+            }
+        }
+
+        return seeds;
+    }
+
     /// <summary>Walks incoming edges of the given kinds backwards (target -> source), BFS up to maxHops.</summary>
     private static IReadOnlyList<ImpactNode> ReverseWalk(
-        InMemoryGraphCache cache, Guid startId, IReadOnlyCollection<GraphEdgeKind> kinds, int maxHops, CancellationToken ct)
+        InMemoryGraphCache cache, IReadOnlyList<Guid> seedIds, IReadOnlyCollection<GraphEdgeKind> kinds, int maxHops, CancellationToken ct)
     {
         var results = new List<ImpactNode>();
-        var visited = new HashSet<Guid> { startId };
-        var pathById = new Dictionary<Guid, string> { [startId] = cache.GetNode(startId)?.Label ?? startId.ToString() };
-        var frontier = new List<Guid> { startId };
+        var visited = new HashSet<Guid>(seedIds);
+        var pathById = new Dictionary<Guid, string>(seedIds.Count);
+        var frontier = new List<Guid>(seedIds);
+
+        foreach (var seedId in seedIds)
+            pathById[seedId] = cache.GetNode(seedId)?.Label ?? seedId.ToString();
 
         for (var hop = 1; hop <= Math.Max(0, maxHops) && frontier.Count > 0; hop++)
         {

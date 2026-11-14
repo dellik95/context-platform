@@ -24,7 +24,16 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
 
     public async Task UpdateAsync(Memory memory, CancellationToken ct)
     {
-        db.Memories.Update(memory);
+        var tracked = db.ChangeTracker.Entries<Memory>().FirstOrDefault(e => e.Entity.Id == memory.Id);
+        if (tracked is not null)
+        {
+            tracked.CurrentValues.SetValues(memory);
+        }
+        else
+        {
+            db.Memories.Update(memory);
+        }
+
         await db.SaveChangesAsync(ct);
     }
 
@@ -114,7 +123,9 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
 
     public async Task ReplaceEntitiesAsync(Guid memoryId, IReadOnlyCollection<MemoryEntity> entities, CancellationToken ct)
     {
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await using var tx = db.Database.CurrentTransaction is null
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
 
         await db.MemoryEntities.Where(e => e.MemoryId == memoryId).ExecuteDeleteAsync(ct);
 
@@ -132,7 +143,10 @@ public class MemoryRepository(ContextDbContext db) : IMemoryRepository
             }
         }
 
-        await tx.CommitAsync(ct);
+        if (tx is not null)
+        {
+            await tx.CommitAsync(ct);
+        }
     }
 
     public async Task<IReadOnlyList<MemoryEntity>> ListEntitiesAsync(IReadOnlyCollection<Guid> memoryIds, CancellationToken ct)

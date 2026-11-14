@@ -15,40 +15,49 @@ namespace Context.Application.Jobs;
 /// Coordinates per-project lanes (<see cref="JobLane"/>), signals/polling loops, and delegates
 /// job execution/retry semantics to <see cref="JobExecutionRunner"/>.
 /// </summary>
-public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
+public sealed class JobDispatcher : IJobQueue, IJobDispatcherHealth, IHostedService, IAsyncDisposable
 {
-    private static readonly TimeSpan RunningIsAlwaysStaleAtStartup = TimeSpan.Zero;
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<JobDispatcher> _logger;
     private readonly IJobSignal _jobSignal;
+    private readonly TimeProvider _timeProvider;
     private readonly JobWorkerPool _workerPool;
     private readonly JobWorkerPool _lightPool;
     private readonly JobExecutionRunner _runner;
 
     private readonly ConcurrentDictionary<Guid, JobLane> _lanes = new();
     private readonly ConcurrentDictionary<Guid, JobLane> _lightLanes = new();
+    private readonly ConcurrentDictionary<Task, byte> _forceRunTasks = new();
 
     private CancellationTokenSource? _lifetimeCts;
     private Task? _processingTask;
     private int _stopped;
     private int _disposed;
 
+    public bool IsRunning =>
+        Volatile.Read(ref _disposed) == 0
+        && Volatile.Read(ref _stopped) == 0
+        && _lifetimeCts is not null
+        && _processingTask is { IsCompleted: false };
+
     public JobDispatcher(
         IServiceScopeFactory scopeFactory,
         ILogger<JobDispatcher>? logger = null,
         IJobCountsNotifier? jobCountsNotifier = null,
         IJobSignal? jobSignal = null,
-        IOptions<JobDispatcherOptions>? options = null)
+        IOptions<JobDispatcherOptions>? options = null,
+        TimeProvider? timeProvider = null)
     {
         _scopeFactory = scopeFactory;
         _logger = logger ?? NullLogger<JobDispatcher>.Instance;
         _jobSignal = jobSignal ?? new InMemoryJobSignal();
+        _timeProvider = timeProvider ?? TimeProvider.System;
         var dispatcherOptions = options?.Value ?? new JobDispatcherOptions();
         _workerPool = new JobWorkerPool(Math.Max(1, dispatcherOptions.WorkersPerProject), Math.Max(0, dispatcherOptions.SharedWorkers));
         _lightPool = new JobWorkerPool(Math.Max(1, dispatcherOptions.LightWorkersPerProject), 0);
-        _runner = new JobExecutionRunner(scopeFactory, jobCountsNotifier ?? NullJobCountsNotifier.Instance, _logger);
+        _runner = new JobExecutionRunner(scopeFactory, jobCountsNotifier ?? NullJobCountsNotifier.Instance, _logger, _timeProvider);
     }
 
     public async Task<Guid> EnqueueAsync(JobType type, object payload, Guid? projectId = null, int priority = 0, CancellationToken ct = default)
@@ -127,7 +136,14 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 
         _logger.LogWarning("Job {JobId} ({JobType}) force-run from {Status}.", claimed.Id, claimed.Type, job.Status);
 
-        _ = _runner.ProcessClaimedJobAsync(claimed, cts.Token);
+        var forceTask = _runner.ProcessClaimedJobAsync(claimed, cts.Token);
+        _forceRunTasks[forceTask] = 0;
+        _ = forceTask.ContinueWith(
+            static (t, state) => ((ConcurrentDictionary<Task, byte>)state!).TryRemove(t, out _),
+            _forceRunTasks,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
         await _runner.PublishJobCountsAsync(claimed.ProjectId, ct).ConfigureAwait(false);
     }
 
@@ -147,16 +163,23 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
 
         _lifetimeCts.Cancel();
 
-        if (_processingTask is not null)
+        try
         {
-            try
+            if (_processingTask is not null)
             {
                 await _processingTask.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
-            {
-                // Shutdown timeout or own lifetime cancellation.
-            }
+
+            var drainTasks = _lanes.Values
+                .Concat(_lightLanes.Values)
+                .Select(lane => lane.WaitForIdleAsync(cancellationToken))
+                .Concat(_forceRunTasks.Keys.Select(t => t.WaitAsync(cancellationToken)));
+
+            await Task.WhenAll(drainTasks).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutdown timeout or own lifetime cancellation.
         }
     }
 
@@ -176,18 +199,12 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
         using var scope = _scopeFactory.CreateScope();
         var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
 
-        var staleRunning = await jobRepository.ListByStatusAsync(JobStatus.Running, null, ct).ConfigureAwait(false);
-        foreach (var job in staleRunning)
+        var reset = await jobRepository.ResetStaleRunningAsync(_timeProvider.GetUtcNow(), ct).ConfigureAwait(false);
+        if (reset > 0)
         {
-            ct.ThrowIfCancellationRequested();
-
             _logger.LogWarning(
-                "Job {JobId} ({JobType}) was left Running at startup — a previous process must have crashed mid-job; resetting to Pending.",
-                job.Id, job.Type);
-
-            job.Status = JobStatus.Pending;
-            job.NextRetryAt = DateTimeOffset.UtcNow + RunningIsAlwaysStaleAtStartup;
-            await jobRepository.UpdateAsync(job, ct).ConfigureAwait(false);
+                "{Count} job(s) were left Running at startup — a previous process must have crashed mid-job; reset to Pending.",
+                reset);
         }
     }
 
@@ -269,16 +286,17 @@ public sealed class JobDispatcher : IJobQueue, IHostedService, IAsyncDisposable
     private JobLane CreateLane(Guid? projectId, bool light, JobWorkerPool pool) =>
         new(projectId, light, pool, _scopeFactory, _runner.ProcessClaimedJobAsync, KickWaitingLanes, _logger);
 
-    private void KickWaitingLanes(IReadOnlyList<Guid> laneKeys, CancellationToken ct)
+    private void KickWaitingLanes(IReadOnlyList<Guid> laneKeys, bool light, CancellationToken ct)
     {
         if (ct.IsCancellationRequested)
         {
             return;
         }
 
+        var map = light ? _lightLanes : _lanes;
         foreach (var key in laneKeys)
         {
-            if (_lanes.TryGetValue(key, out var lane))
+            if (map.TryGetValue(key, out var lane))
             {
                 lane.Kick(ct);
             }

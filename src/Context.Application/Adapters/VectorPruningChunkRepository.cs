@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Context.Application.Abstractions;
 using Context.Domain.Entities;
 using Context.Infrastructure.Abstractions;
@@ -16,30 +17,106 @@ namespace Context.Application.Adapters;
 public sealed class VectorPruningChunkRepository(
     IChunkRepository inner, IChunkVectorIndex vectorIndex, ILogger<VectorPruningChunkRepository>? logger = null) : IChunkRepository
 {
+    private readonly ConcurrentDictionary<Guid, DeferredFileBatch> _deferredBatches = new();
+
+    /// <summary>
+    /// Defers sqlite-vec deletions for <paramref name="fileId"/> across the FK-clear + re-insert
+    /// sequence so unchanged chunk IDs reused in the second <see cref="ReplaceForFileAsync"/> call
+    /// are NOT unnecessarily deleted from the vector store.
+    /// </summary>
+    internal DeferredPruningScope BeginFileUpdate(Guid fileId)
+    {
+        var batch = new DeferredFileBatch();
+        _deferredBatches[fileId] = batch;
+        return new DeferredPruningScope(this, fileId, batch);
+    }
+
     public async Task<IReadOnlyList<Guid>> ReplaceForFileAsync(Guid fileId, IReadOnlyList<Chunk> chunks, CancellationToken ct)
     {
         var removed = await inner.ReplaceForFileAsync(fileId, chunks, ct).ConfigureAwait(false);
+
+        if (_deferredBatches.TryGetValue(fileId, out var batch))
+        {
+            batch.Record(removed, chunks);
+            return removed;
+        }
 
         // Re-indexing reuses a chunk's id when its content is unchanged, and those rows are
         // re-inserted by the same call — pruning them would throw away a still-valid vector.
         var kept = chunks.Select(c => c.Id).ToHashSet();
         Guid[] stale = [.. removed.Where(id => !kept.Contains(id))];
-        if (stale.Length > 0)
+        await PruneAsync(fileId, stale, ct).ConfigureAwait(false);
+
+        return removed;
+    }
+
+    private async Task PruneAsync(Guid fileId, Guid[] stale, CancellationToken ct)
+    {
+        if (stale.Length == 0)
         {
-            // The rows are already gone and the removed ids cannot be recovered later, so a failure here
-            // must not fail the caller (its retry would find nothing left to prune): the orphaned vectors are
-            // swept by RepairVectors instead.
-            try
+            return;
+        }
+
+        // The rows are already gone and the removed ids cannot be recovered later, so a failure here
+        // must not fail the caller (its retry would find nothing left to prune): the orphaned vectors are
+        // swept by RepairVectors instead.
+        try
+        {
+            await vectorIndex.DeleteAsync(stale, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogWarning(ex, "Could not prune {Count} stale chunk vectors for file {FileId}; a vector repair pass will remove them.", stale.Length, fileId);
+        }
+    }
+
+    internal sealed class DeferredPruningScope(VectorPruningChunkRepository owner, Guid fileId, DeferredFileBatch batch)
+    {
+        private bool _flushed;
+
+        public async Task FlushAsync(CancellationToken ct)
+        {
+            if (_flushed)
             {
-                await vectorIndex.DeleteAsync(stale, ct).ConfigureAwait(false);
+                return;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+
+            _flushed = true;
+            owner._deferredBatches.TryRemove(new KeyValuePair<Guid, DeferredFileBatch>(fileId, batch));
+            var stale = batch.TakeStaleIds();
+            await owner.PruneAsync(fileId, stale, ct).ConfigureAwait(false);
+        }
+    }
+
+    internal sealed class DeferredFileBatch
+    {
+        private readonly HashSet<Guid> _removed = [];
+        private readonly HashSet<Guid> _kept = [];
+        private readonly Lock _gate = new();
+
+        public void Record(IReadOnlyList<Guid> removed, IReadOnlyList<Chunk> chunks)
+        {
+            lock (_gate)
             {
-                logger?.LogWarning(ex, "Could not prune {Count} stale chunk vectors for file {FileId}; a vector repair pass will remove them.", stale.Length, fileId);
+                foreach (var id in removed)
+                {
+                    _removed.Add(id);
+                }
+
+                foreach (var chunk in chunks)
+                {
+                    _kept.Add(chunk.Id);
+                }
             }
         }
 
-        return removed;
+        public Guid[] TakeStaleIds()
+        {
+            lock (_gate)
+            {
+                return [.. _removed.Where(id => !_kept.Contains(id))];
+            }
+        }
     }
 
     public Task<Chunk?> GetByIdAsync(Guid id, CancellationToken ct) => inner.GetByIdAsync(id, ct);

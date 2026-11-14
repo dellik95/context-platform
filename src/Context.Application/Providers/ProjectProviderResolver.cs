@@ -41,7 +41,7 @@ public sealed class ProjectProviderResolver(
     IOptions<AnthropicOptions> anthropicOptions,
     IOptions<OpenAiOptions> openAiOptions,
     IOptions<FoundryLocalOptions>? foundryOptions = null,
-    ILoggerFactory? loggerFactory = null) : IProviderResolver
+    ILoggerFactory? loggerFactory = null) : IProviderResolver, IDisposable
 {
     private const string DefaultOllamaBaseUrl = "http://localhost:11434";
 
@@ -114,5 +114,24 @@ public sealed class ProjectProviderResolver(
         using var scope = scopeFactory.CreateScope();
         var settingsService = scope.ServiceProvider.GetRequiredService<IProjectSettingsService>();
         return await settingsService.GetAsync(projectId, ct).ConfigureAwait(false);
+    }
+
+    public void Dispose()
+    {
+        foreach (var lazy in _embeddingCache.Values)
+        {
+            if (lazy.IsValueCreated && lazy.Value is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
+
+        foreach (var lazy in _chatCache.Values)
+        {
+            if (lazy.IsValueCreated && lazy.Value is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
     }
 }

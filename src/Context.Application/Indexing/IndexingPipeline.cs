@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Context.Application.Abstractions;
 using Context.Application.Jobs;
 using Context.Domain.Enums;
@@ -73,10 +74,13 @@ public sealed class IndexingPipeline : IIndexingPipeline
     }
 
     public Task IndexFileAsync(Guid projectId, string relativePath, CancellationToken ct) =>
-        IndexFileInternalAsync(projectId, relativePath, forceReprocess: false, ct);
+        IndexFileInternalAsync(projectId, relativePath, forceReprocess: false, deferGraphUpdate: false, ct);
 
     public Task IndexFileAsync(Guid projectId, string relativePath, bool forceReprocess, CancellationToken ct) =>
-        IndexFileInternalAsync(projectId, relativePath, forceReprocess, ct);
+        IndexFileInternalAsync(projectId, relativePath, forceReprocess, deferGraphUpdate: false, ct);
+
+    internal Task<Guid?> IndexFileDeferredGraphAsync(Guid projectId, string relativePath, bool forceReprocess, CancellationToken ct) =>
+        IndexFileInternalAsync(projectId, relativePath, forceReprocess, deferGraphUpdate: true, ct);
 
     public async Task ReindexProjectAsync(Guid projectId, bool full, CancellationToken ct)
     {
@@ -97,6 +101,7 @@ public sealed class IndexingPipeline : IIndexingPipeline
         var filesTotal = scannedFiles.Count;
         var filesProcessed = 0;
         var filesFailed = 0;
+        var filesNeedingGraphUpdate = new ConcurrentBag<Guid>();
 
         await Parallel.ForEachAsync(
             scannedFiles,
@@ -107,7 +112,20 @@ public sealed class IndexingPipeline : IIndexingPipeline
                 {
                     using var scope = _scopeFactory.CreateScope();
                     var scopedPipeline = scope.ServiceProvider.GetRequiredService<IIndexingPipeline>();
-                    await scopedPipeline.IndexFileAsync(projectId, scanned.RelativePath, forceReprocess: full, token).ConfigureAwait(false);
+                    if (scopedPipeline is IndexingPipeline concretePipeline)
+                    {
+                        var deferredFileId = await concretePipeline
+                            .IndexFileDeferredGraphAsync(projectId, scanned.RelativePath, forceReprocess: full, token)
+                            .ConfigureAwait(false);
+                        if (deferredFileId.HasValue)
+                        {
+                            filesNeedingGraphUpdate.Add(deferredFileId.Value);
+                        }
+                    }
+                    else
+                    {
+                        await scopedPipeline.IndexFileAsync(projectId, scanned.RelativePath, forceReprocess: full, token).ConfigureAwait(false);
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -128,6 +146,18 @@ public sealed class IndexingPipeline : IIndexingPipeline
             }).ConfigureAwait(false);
 
         await CleanupRemovedFilesAsync(projectId, scannedPaths, ct).ConfigureAwait(false);
+
+        // Now that every file's symbols are committed in SQLite (no A-I vs J-Z ordering race),
+        // queue graph updates with null RelationDraftsJson so UpdateGraph re-parses using the
+        // complete project symbol table before ResolveRelations runs.
+        foreach (var fileId in filesNeedingGraphUpdate)
+        {
+            await _jobQueue.EnqueueAsync(
+                    JobType.UpdateGraph,
+                    new UpdateGraphPayload(projectId, fileId, Invalidate: false),
+                    projectId, ct: ct)
+                .ConfigureAwait(false);
+        }
 
         await _jobQueue.EnqueueAsync(JobType.ResolveRelations, new ResolveRelationsPayload(projectId), projectId, ct: ct)
             .ConfigureAwait(false);
@@ -178,7 +208,8 @@ public sealed class IndexingPipeline : IIndexingPipeline
         }
     }
 
-    private async Task IndexFileInternalAsync(Guid projectId, string relativePath, bool forceReprocess, CancellationToken ct)
+    private async Task<Guid?> IndexFileInternalAsync(
+        Guid projectId, string relativePath, bool forceReprocess, bool deferGraphUpdate, CancellationToken ct)
     {
         var project = await _projects.GetByIdAsync(projectId, ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"Project {projectId} was not found.");
@@ -187,15 +218,17 @@ public sealed class IndexingPipeline : IIndexingPipeline
         if (!System.IO.File.Exists(absolutePath))
         {
             await HandleFileRemovedAsync(projectId, relativePath, ct).ConfigureAwait(false);
-            return;
+            return null;
         }
 
-        var contentHash = _hasher.HashFile(absolutePath);
+        var contentHash = _hasher is IAsyncContentHasher asyncHasher
+            ? await asyncHasher.HashFileAsync(absolutePath, ct).ConfigureAwait(false)
+            : _hasher.HashFile(absolutePath);
         var existingFile = await _files.GetByRelativePathAsync(projectId, relativePath, ct).ConfigureAwait(false);
 
         if (!forceReprocess && existingFile is { IsDeleted: false } && existingFile.ContentHash == contentHash)
         {
-            return;
+            return null;
         }
 
         var sourceText = await System.IO.File.ReadAllTextAsync(absolutePath, ct).ConfigureAwait(false);
@@ -216,16 +249,31 @@ public sealed class IndexingPipeline : IIndexingPipeline
         fileEntity = await _files.UpsertAsync(fileEntity, ct).ConfigureAwait(false);
 
         var isFirstIndex = existingFile is null || existingFile.ContentHash.Length == 0;
+        Guid? deferredGraphFileId = null;
         if (parser is null)
         {
-            await _unparsedIndexer.IndexAsync(projectId, fileEntity, sourceText, isFirstIndex, ct).ConfigureAwait(false);
+            if (deferGraphUpdate && isFirstIndex)
+            {
+                deferredGraphFileId = fileEntity.Id;
+            }
+
+            await _unparsedIndexer
+                .IndexAsync(projectId, fileEntity, sourceText, isFirstIndex, ct, enqueueGraphUpdate: !deferGraphUpdate)
+                .ConfigureAwait(false);
         }
         else
         {
-            await _parsedIndexer.IndexAsync(projectId, fileEntity, parser, sourceText, isFirstIndex, ct).ConfigureAwait(false);
+            var needsGraph = await _parsedIndexer
+                .IndexAsync(projectId, fileEntity, parser, sourceText, isFirstIndex, ct, deferGraphUpdate)
+                .ConfigureAwait(false);
+            if (deferGraphUpdate && needsGraph)
+            {
+                deferredGraphFileId = fileEntity.Id;
+            }
         }
 
         await _files.SetContentHashAsync(fileEntity.Id, contentHash, ct).ConfigureAwait(false);
+        return deferredGraphFileId;
     }
 
     private async Task HandleFileRemovedAsync(Guid projectId, string relativePath, CancellationToken ct)

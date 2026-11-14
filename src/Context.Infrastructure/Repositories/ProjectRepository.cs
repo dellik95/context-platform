@@ -32,7 +32,16 @@ public class ProjectRepository(ContextDbContext db) : IProjectRepository
 
     public async Task UpdateAsync(Project project, CancellationToken ct)
     {
-        db.Projects.Update(project);
+        var tracked = db.ChangeTracker.Entries<Project>().FirstOrDefault(e => e.Entity.Id == project.Id);
+        if (tracked is not null)
+        {
+            tracked.CurrentValues.SetValues(project);
+        }
+        else
+        {
+            db.Projects.Update(project);
+        }
+
         await db.SaveChangesAsync(ct);
     }
 
@@ -69,7 +78,9 @@ public class ProjectRepository(ContextDbContext db) : IProjectRepository
         // this generalizes that same ordering to a whole project, deleting each Restrict-blocking
         // table explicitly BEFORE letting Project's own cascade handle everything else. Wrapped in
         // one transaction so a failure partway through can't leave the project half-deleted.
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await using var tx = db.Database.CurrentTransaction is null
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
 
         var projectSymbolIds = db.Files.Where(f => f.ProjectId == id).Join(db.Symbols, f => f.Id, s => s.FileId, (f, s) => s.Id);
 
@@ -102,7 +113,10 @@ public class ProjectRepository(ContextDbContext db) : IProjectRepository
         // ClaudeIntegration themselves, all via their own direct Cascade FK to Project.
         await db.Projects.Where(p => p.Id == id).ExecuteDeleteAsync(ct);
 
-        await tx.CommitAsync(ct);
+        if (tx is not null)
+        {
+            await tx.CommitAsync(ct);
+        }
         return true;
     }
 }

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text;
 using System.Text.Json;
 using Context.Application;
@@ -100,6 +101,98 @@ internal static class HookContextBuilder
         }
     }
 
+    private static readonly HashSet<string> TrivialPrompts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ok", "okay", "k", "yes", "yeah", "yep", "no", "nope", "sure",
+        "thanks", "thank you", "thx", "ty", "lgtm", "looks good", "sounds good",
+        "got it", "understood", "cool", "nice", "great", "awesome", "done",
+        "continue", "go ahead", "proceed", "retry", "try again", "hello", "hi",
+        "hey", "why", "please", "hmm", "wait"
+    };
+
+    private static readonly SearchValues<char> CommandArgOrPathChars = SearchValues.Create(['/', '\\', '.', ' ']);
+    private static readonly SearchValues<char> CodeOrPathHintChars = SearchValues.Create(['.', '_', '/', '\\', ':']);
+
+    /// <summary>
+    /// Filters out pure acknowledgements, slash commands, and tiny non-technical chatter so
+    /// UserPromptSubmit does not run full hybrid retrieval or inject noisy code snippets on "ok" /
+    /// "thanks".
+    /// </summary>
+    internal static bool ShouldSkipPromptRetrieval(string? prompt)
+    {
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            return true;
+        }
+
+        var trimmed = prompt.Trim();
+        if (trimmed.StartsWith('/') && !trimmed.AsSpan(1).ContainsAny(CommandArgOrPathChars))
+        {
+            return true;
+        }
+
+        var normalized = NormalizePromptForAckCheck(trimmed);
+        if (normalized.Length == 0 || TrivialPrompts.Contains(normalized))
+        {
+            return true;
+        }
+
+        if (normalized.Length < 3 && !HasCodeOrPathHint(trimmed))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string NormalizePromptForAckCheck(string trimmed)
+    {
+        var span = trimmed.AsSpan().TrimEnd(".!?,:;~ \t\r\n");
+        if (span.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder(span.Length);
+        var prevSpace = false;
+        foreach (var ch in span)
+        {
+            if (char.IsWhiteSpace(ch))
+            {
+                if (!prevSpace && sb.Length > 0)
+                {
+                    sb.Append(' ');
+                }
+                prevSpace = true;
+            }
+            else
+            {
+                sb.Append(char.ToLowerInvariant(ch));
+                prevSpace = false;
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static bool HasCodeOrPathHint(string text)
+    {
+        if (text.AsSpan().ContainsAny(CodeOrPathHintChars))
+        {
+            return true;
+        }
+
+        for (var i = 1; i < text.Length; i++)
+        {
+            if (char.IsUpper(text[i]) && char.IsLower(text[i - 1]))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// UserPromptSubmit contextual retrieval: a budgeted
     /// <see cref="ContextPack"/> for the submitted prompt, formatted as plain text. Swallows every
@@ -108,7 +201,7 @@ internal static class HookContextBuilder
     public static async Task<string?> TryBuildPromptContextAsync(
         IContextEngine engine, Guid projectId, string claudeSessionId, string prompt, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(prompt))
+        if (ShouldSkipPromptRetrieval(prompt))
         {
             return null;
         }

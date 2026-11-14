@@ -1,7 +1,7 @@
-using Context.Infrastructure;
+using Context.Application.Jobs;
+using Context.Infrastructure.Abstractions;
 using Context.Providers;
 using Context.Providers.Abstractions;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace Context.Dashboard.Server.Api;
@@ -27,21 +27,14 @@ public static class HealthEndpoints
     }
 
     private static async Task<IResult> HealthAsync(
-        IDbContextFactory<ContextDbContext> dbFactory,
+        IStorageMaintenanceService storageMaintenance,
+        IJobDispatcherHealth dispatcherHealth,
         IOptions<ContextProvidersOptions> providersOptions,
         IRerankerProvider rerankerProvider,
         CancellationToken ct)
     {
-        var databaseReachable = await HealthChecks.CheckDatabaseAsync(dbFactory, ct).ConfigureAwait(false);
-
-        // JobDispatcher is registered as both IJobQueue and the app's own IHostedService (see
-        // Context.Application.ServiceCollectionExtensions.AddJobDispatcher) and is started via
-        // IHost.StartAsync before this endpoint can ever receive a request - if it had thrown
-        // during startup, the whole host would have failed to start. JobDispatcher exposes no
-        // finer-grained public liveness flag of its own (e.g. "worker loop still running") to check
-        // more precisely than that; a true liveness probe would need one added there - tracked as
-        // follow-up.
-        const bool jobDispatcherAlive = true;
+        var databaseReachable = await storageMaintenance.CheckDatabaseAsync(ct).ConfigureAwait(false);
+        var jobDispatcherAlive = dispatcherHealth.IsRunning;
 
         var healthy = databaseReachable && jobDispatcherAlive;
         var response = new HealthResponse(

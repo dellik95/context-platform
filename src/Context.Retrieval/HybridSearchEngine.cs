@@ -28,6 +28,7 @@ public sealed class HybridSearchEngine : ISearchEngine
     private readonly ISearchIndex _searchIndex;
     private readonly IEmbeddingLookup _embeddingLookup;
     private readonly IGraphTraversal _graphTraversal;
+    private readonly IGraphCacheProvider? _graphCacheProvider;
     private readonly IReranker _reranker;
     private readonly IHybridScorer _scorer;
     private readonly HybridSearchOptions _options;
@@ -39,7 +40,8 @@ public sealed class HybridSearchEngine : ISearchEngine
         IGraphTraversal graphTraversal,
         IReranker reranker,
         IHybridScorer scorer,
-        HybridSearchOptions? options = null)
+        HybridSearchOptions? options = null,
+        IGraphCacheProvider? graphCacheProvider = null)
     {
         _searchIndex = searchIndex;
         _embeddingLookup = embeddingLookup;
@@ -47,6 +49,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         _reranker = reranker;
         _scorer = scorer;
         _options = options ?? new HybridSearchOptions();
+        _graphCacheProvider = graphCacheProvider;
     }
 
     public HybridSearchEngine(
@@ -55,8 +58,9 @@ public sealed class HybridSearchEngine : ISearchEngine
         IGraphTraversal graphTraversal,
         IReranker reranker,
         IHybridScorer scorer,
-        IOptionsMonitor<HybridSearchOptions> optionsMonitor)
-        : this(searchIndex, embeddingLookup, graphTraversal, reranker, scorer, optionsMonitor.CurrentValue)
+        IOptionsMonitor<HybridSearchOptions> optionsMonitor,
+        IGraphCacheProvider? graphCacheProvider = null)
+        : this(searchIndex, embeddingLookup, graphTraversal, reranker, scorer, optionsMonitor.CurrentValue, graphCacheProvider)
     {
         _optionsMonitor = optionsMonitor;
     }
@@ -98,6 +102,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         // query skips expansion rather than smuggling out-of-scope files back into the results.
         if (query.Scope is null or [])
         {
+            await WarmGraphCacheBestEffortAsync(query.ProjectId, ct).ConfigureAwait(false);
             await ExpandViaGraphAsync(candidates, ct).ConfigureAwait(false);
         }
 
@@ -107,9 +112,28 @@ public sealed class HybridSearchEngine : ISearchEngine
         return [.. ranked.Select(c => c.ToSearchHit())];
     }
 
+    private async Task WarmGraphCacheBestEffortAsync(Guid projectId, CancellationToken ct)
+    {
+        if (_graphCacheProvider is null)
+            return;
+
+        try
+        {
+            await _graphCacheProvider.GetOrCreateAsync(projectId, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            // Graph expansion is best-effort enrichment only.
+        }
+    }
+
     private static Dictionary<Guid, CandidateAccumulator> MergeCandidates(
-        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score)> lexical,
-        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore)> vector)
+        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double BM25Score, string? Label, string? RelativePath)> lexical,
+        IReadOnlyList<(Guid ChunkId, Guid? FileId, Guid? SymbolId, SymbolKind? SymbolKind, string Snippet, double CosineScore, string? Label, string? RelativePath)> vector)
     {
         var map = new Dictionary<Guid, CandidateAccumulator>();
 
@@ -119,6 +143,7 @@ public sealed class HybridSearchEngine : ISearchEngine
             var c = GetOrAdd(map, key, r.ChunkId, r.FileId, r.SymbolId, r.SymbolKind);
             c.LexicalRaw = Math.Max(c.LexicalRaw, r.BM25Score);
             c.Snippet ??= r.Snippet;
+            c.IndexLabel ??= r.Label;
         }
 
         foreach (var r in vector)
@@ -127,6 +152,7 @@ public sealed class HybridSearchEngine : ISearchEngine
             var c = GetOrAdd(map, key, r.ChunkId, r.FileId, r.SymbolId, r.SymbolKind);
             c.VectorRaw = Math.Max(c.VectorRaw, r.CosineScore);
             c.Snippet ??= r.Snippet;
+            c.IndexLabel ??= r.Label;
         }
 
         return map;
@@ -302,8 +328,32 @@ public sealed class HybridSearchEngine : ISearchEngine
             return ranked;
 
         var reordered = order.Select(i => top[i]).ToList();
+        if (!IsIdentityOrder(order))
+        {
+            var minCutoff = ranked.Count > topCount ? ranked[topCount].Score : 0.0;
+            for (var i = 0; i < reordered.Count; i++)
+            {
+                var rankScore = 1.0 - ((double)i / Math.Max(1, reordered.Count)) * Math.Max(0.05, 1.0 - minCutoff);
+                var blended = Math.Round(Math.Clamp((0.5 * rankScore) + (0.5 * reordered[i].Score), minCutoff, 1.0), 6);
+                reordered[i].Score = i > 0 && blended > reordered[i - 1].Score
+                    ? reordered[i - 1].Score
+                    : blended;
+            }
+        }
+
         reordered.AddRange(ranked.Skip(topCount));
         return reordered;
+    }
+
+    private static bool IsIdentityOrder(IReadOnlyList<int> order)
+    {
+        for (var i = 0; i < order.Count; i++)
+        {
+            if (order[i] != i)
+                return false;
+        }
+
+        return true;
     }
 
     private HybridSearchOptions CurrentOptions => _optionsMonitor?.CurrentValue ?? _options;
@@ -316,6 +366,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         public Guid? SymbolId { get; set; }
         public SymbolKind? SymbolKind { get; set; }
         public string? Snippet { get; set; }
+        public string? IndexLabel { get; set; }
         public string? GraphKind { get; set; }
         public string? GraphLabel { get; set; }
         public double LexicalRaw { get; set; }
@@ -326,7 +377,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         public SearchHit ToSearchHit()
         {
             var kind = GraphKind ?? DefaultKind();
-            var label = GraphLabel ?? DeriveLabel();
+            var label = GraphLabel ?? IndexLabel ?? DeriveLabel();
             return new SearchHit(NodeId, kind, label, Score, Snippet);
         }
 

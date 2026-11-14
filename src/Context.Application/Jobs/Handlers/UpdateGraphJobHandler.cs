@@ -116,7 +116,7 @@ public sealed class UpdateGraphJobHandler(
 
         await AddRelationEdgesAsync(payload.ProjectId, file, currentSymbols, nodes, nodesById, edges, payload.RelationDraftsJson, ct).ConfigureAwait(false);
 
-        await graphStore.UpsertAsync(nodes, edges, ct).ConfigureAwait(false);
+        await graphStore.ReplaceForFileAsync(payload.ProjectId, file.Id, nodes, edges, ct).ConfigureAwait(false);
     }
 
     private async Task AddRelationEdgesAsync(

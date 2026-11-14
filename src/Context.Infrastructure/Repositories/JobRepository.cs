@@ -40,9 +40,28 @@ public class JobRepository(ContextDbContext db) : IJobRepository
 
     public async Task UpdateAsync(Job job, CancellationToken ct)
     {
-        db.Jobs.Update(job);
+        var tracked = db.ChangeTracker.Entries<Job>().FirstOrDefault(e => e.Entity.Id == job.Id);
+        if (tracked is not null)
+        {
+            tracked.CurrentValues.SetValues(job);
+        }
+        else
+        {
+            db.Jobs.Update(job);
+        }
+
         await db.SaveChangesAsync(ct);
     }
+
+    public Task<int> ResetStaleRunningAsync(DateTimeOffset now, CancellationToken ct) =>
+        db.Jobs
+            .Where(j => j.Status == JobStatus.Running)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(j => j.Status, JobStatus.Pending)
+                    .SetProperty(j => j.StartedAt, (DateTimeOffset?)null)
+                    .SetProperty(j => j.NextRetryAt, now),
+                ct);
 
     /// <summary>
     /// The candidate-selection projection. Selecting whole <see cref="Job"/> rows here would pull
@@ -101,22 +120,71 @@ public class JobRepository(ContextDbContext db) : IJobRepository
     private async Task<Job?> DequeueNextCoreAsync(IQueryable<Job> pending, CancellationToken ct)
     {
         var now = DateTimeOffset.UtcNow;
-        // SQLite's EF Core provider cannot translate comparisons or ORDER BY over DateTimeOffset
-        // columns (NextRetryAt, CreatedAt) -- attempting the `NextRetryAt <= now` comparison
-        // server-side throws InvalidOperationException ("could not be translated") at execution
-        // time, not at compile time, so this was never caught until DequeueNextAsync was actually
-        // exercised. Status is a plain enum comparison and Priority a plain int (both safe
-        // server-side); the backoff check and the CreatedAt tie-break both move to client-side,
-        // over just the top DequeueBatchSize by priority rather than every Pending row (see that
-        // constant's remarks).
-        var candidates = await pending
+        // 1. Fresh runnable jobs (NextRetryAt IS NULL) filtered server-side so large backlogs of
+        // deferred retries at the same or higher priority can never starve ready fresh jobs.
+        var freshCandidates = await pending
+            .Where(j => j.NextRetryAt == null)
             .OrderByDescending(j => j.Priority)
             .Take(DequeueBatchSize)
             .Select(j => new ClaimCandidate(j.Id, j.Priority, j.CreatedAt, j.NextRetryAt))
             .ToListAsync(ct);
 
-        var runnable = candidates
-            .Where(c => c.NextRetryAt == null || c.NextRetryAt <= now)
+        var maxFreshPriority = freshCandidates.Count > 0 ? freshCandidates.Max(c => c.Priority) : int.MinValue;
+
+        // 2. Scan deferred retries in priority-descending pages until we either find ready retries
+        // for the top runnable priority tier or dip below maxFreshPriority.
+        var readyRetryCandidates = new List<ClaimCandidate>();
+        int? topReadyRetryPriority = null;
+        var offset = 0;
+
+        while (true)
+        {
+            var retryPage = await pending
+                .Where(j => j.NextRetryAt != null)
+                .OrderByDescending(j => j.Priority)
+                .ThenBy(j => j.Id)
+                .Skip(offset)
+                .Take(DequeueBatchSize)
+                .Select(j => new ClaimCandidate(j.Id, j.Priority, j.CreatedAt, j.NextRetryAt))
+                .ToListAsync(ct);
+
+            if (retryPage.Count == 0)
+            {
+                break;
+            }
+
+            foreach (var candidate in retryPage)
+            {
+                if (candidate.NextRetryAt <= now)
+                {
+                    readyRetryCandidates.Add(candidate);
+                    topReadyRetryPriority = topReadyRetryPriority is null
+                        ? candidate.Priority
+                        : Math.Max(topReadyRetryPriority.Value, candidate.Priority);
+                }
+            }
+
+            if (retryPage.Count < DequeueBatchSize)
+            {
+                break;
+            }
+
+            var lowestPagePriority = retryPage[^1].Priority;
+            if (lowestPagePriority < maxFreshPriority && freshCandidates.Count > 0)
+            {
+                break;
+            }
+
+            if (topReadyRetryPriority is not null && lowestPagePriority < topReadyRetryPriority.Value)
+            {
+                break;
+            }
+
+            offset += DequeueBatchSize;
+        }
+
+        var runnable = freshCandidates
+            .Concat(readyRetryCandidates)
             .OrderByDescending(c => c.Priority)
             .ThenBy(c => c.CreatedAt);
 

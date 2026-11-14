@@ -160,13 +160,14 @@ public sealed class SqliteMemoryVectorIndex(string dbPath, IDbContextFactory<Con
     {
         var lazy = _collections.GetOrAdd(
             provider,
-            p => new Lazy<Task<SqliteCollection<Guid, MemoryVectorRecord>>>(() => CreateCollectionAsync(p, dimensions, ct)));
+            p => new Lazy<Task<SqliteCollection<Guid, MemoryVectorRecord>>>(
+                () => CreateCollectionAsync(p, dimensions, CancellationToken.None)));
         SqliteCollection<Guid, MemoryVectorRecord> collection;
         try
         {
-            collection = await lazy.Value.ConfigureAwait(false);
+            collection = await lazy.Value.WaitAsync(ct).ConfigureAwait(false);
         }
-        catch
+        catch when (lazy.Value.IsFaulted || lazy.Value.IsCanceled)
         {
             // Same as SqliteChunkVectorIndex: a faulted init must not stick for the process lifetime.
             _collections.TryRemove(new KeyValuePair<string, Lazy<Task<SqliteCollection<Guid, MemoryVectorRecord>>>>(provider, lazy));

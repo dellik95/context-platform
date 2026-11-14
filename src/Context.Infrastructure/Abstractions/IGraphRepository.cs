@@ -14,6 +14,12 @@ public interface IGraphRepository
 
     Task UpsertAsync(IEnumerable<GraphNode> nodes, IEnumerable<GraphEdge> edges, CancellationToken ct);
 
+    /// <summary>
+    /// Atomically replaces one file's owned nodes/edges while preserving incoming cross-file
+    /// edges targeting nodes owned by <paramref name="fileId"/> that survived the update.
+    /// </summary>
+    Task ReplaceForFileAsync(Guid projectId, Guid fileId, IEnumerable<GraphNode> nodes, IEnumerable<GraphEdge> edges, CancellationToken ct);
+
     /// <summary>Removes every node/edge owned by the given file — the incremental-invalidation seam.</summary>
     Task InvalidateByOwningFileAsync(Guid projectId, Guid fileId, CancellationToken ct);
 

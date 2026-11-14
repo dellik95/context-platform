@@ -137,6 +137,7 @@ internal static class DashboardServiceCollectionExtensions
                 .AllowCredentials()));
         }
 
+        builder.Services.AddSingleton<McpSavingsLedger>();
         builder.Services.AddScoped<McpNodeResolver>();
         builder.Services.AddScoped<McpSavingsTracker>();
 

@@ -198,4 +198,36 @@ public sealed class SymbolDifferTests
         result.Unchanged.Should().ContainSingle();
         result.Changed.Should().BeEmpty();
     }
+
+    [Fact]
+    public void CombinedText_DoesNotDuplicateSignatureWhenBodyAlreadyStartsWithHeader()
+    {
+        var combined = SymbolDiffer.CombinedText(
+            "Validates order.",
+            "public bool Validate(int id)",
+            "public bool Validate(int id)\n{\n    return id > 0;\n}");
+
+        combined.Should().Be("Validates order.\npublic bool Validate(int id)\n{\n    return id > 0;\n}");
+        combined.Split("public bool Validate(int id)").Length.Should().Be(2);
+    }
+
+    [Fact]
+    public void DocCommentFormatter_StripsXmlTagsPreservingCrefAndParams()
+    {
+        const string raw = """
+            /// <summary>
+            /// Places an <see cref="T:Acme.Order"/> after <paramref name="count"/> checks.
+            /// </summary>
+            /// <param name="count">Item count.</param>
+            /// <returns>The created order &amp; receipt.</returns>
+            """;
+
+        var plain = DocCommentFormatter.ToPlainText(raw);
+
+        plain.Should().NotContain("<summary>");
+        plain.Should().NotContain("</summary>");
+        plain.Should().Contain("Places an Acme.Order after count checks.");
+        plain.Should().Contain("count: Item count.");
+        plain.Should().Contain("Returns: The created order & receipt.");
+    }
 }

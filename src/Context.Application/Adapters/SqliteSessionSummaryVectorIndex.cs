@@ -143,12 +143,23 @@ public sealed class SqliteSessionSummaryVectorIndex(string dbPath)
         }
     }
 
-    private Task<SqliteCollection<Guid, SessionSummaryVectorRecord>> GetOrCreateCollectionAsync(
-        string provider, int dimensions, CancellationToken ct) =>
-        _collections.GetOrAdd(
+    private async Task<SqliteCollection<Guid, SessionSummaryVectorRecord>> GetOrCreateCollectionAsync(
+        string provider, int dimensions, CancellationToken ct)
+    {
+        var lazy = _collections.GetOrAdd(
             provider,
-            p => new Lazy<Task<SqliteCollection<Guid, SessionSummaryVectorRecord>>>(() => CreateCollectionAsync(p, dimensions, ct))
-        ).Value;
+            p => new Lazy<Task<SqliteCollection<Guid, SessionSummaryVectorRecord>>>(
+                () => CreateCollectionAsync(p, dimensions, CancellationToken.None)));
+        try
+        {
+            return await lazy.Value.WaitAsync(ct).ConfigureAwait(false);
+        }
+        catch when (lazy.Value.IsFaulted || lazy.Value.IsCanceled)
+        {
+            _collections.TryRemove(new KeyValuePair<string, Lazy<Task<SqliteCollection<Guid, SessionSummaryVectorRecord>>>>(provider, lazy));
+            throw;
+        }
+    }
 
     private async Task<SqliteCollection<Guid, SessionSummaryVectorRecord>> CreateCollectionAsync(
         string provider, int dimensions, CancellationToken ct)

@@ -3,9 +3,7 @@ using Context.Dashboard.Server.Api;
 using Context.Dashboard.Server.Hooks;
 using Context.Dashboard.Server.Hubs;
 using Context.Dashboard.Server.Security;
-using Context.Infrastructure;
 using Context.Infrastructure.Abstractions;
-using Microsoft.EntityFrameworkCore;
 using Serilog;
 
 namespace Context.Dashboard.Server.Startup;
@@ -18,9 +16,10 @@ internal static class DashboardApplicationExtensions
 {
     public static async Task InitializeStorageAsync(this WebApplication app)
     {
+        var maintenance = app.Services.GetRequiredService<IStorageMaintenanceService>();
+        await maintenance.MigrateAsync().ConfigureAwait(false);
+
         await using var migrationScope = app.Services.CreateAsyncScope();
-        var db = migrationScope.ServiceProvider.GetRequiredService<ContextDbContext>();
-        await db.Database.MigrateAsync().ConfigureAwait(false);
 
         var projectsForBackfill = migrationScope.ServiceProvider.GetRequiredService<IProjectRepository>();
         await ProjectTokenBackfill.ReconcileAsync(projectsForBackfill, CancellationToken.None).ConfigureAwait(false);

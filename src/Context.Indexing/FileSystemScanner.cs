@@ -23,6 +23,18 @@ public sealed class FileSystemScanner : IFileScanner
     private static async IAsyncEnumerable<ScannedFile> WalkAsync(
         string rootPath, string currentDir, IIgnoreMatcher ignore, [EnumeratorCancellation] CancellationToken ct)
     {
+        var effectiveIgnore = ignore;
+        if (!string.Equals(currentDir, rootPath, StringComparison.OrdinalIgnoreCase)
+            && effectiveIgnore is GitignoreStyleMatcher matcher)
+        {
+            var nestedGitignore = Path.Combine(currentDir, ".gitignore");
+            if (File.Exists(nestedGitignore))
+            {
+                var relSubDir = Path.GetRelativePath(rootPath, currentDir).Replace('\\', '/');
+                effectiveIgnore = matcher.WithScopedGitignore(relSubDir, nestedGitignore);
+            }
+        }
+
         string[] entries;
         try
         {
@@ -43,12 +55,12 @@ public sealed class FileSystemScanner : IFileScanner
             var relativePath = Path.GetRelativePath(rootPath, entry).Replace('\\', '/');
             var checkedPath = isDirectory ? relativePath + "/" : relativePath;
 
-            if (ignore.IsIgnored(checkedPath) || ignore.IsIgnored(relativePath))
+            if (effectiveIgnore.IsIgnored(checkedPath) || effectiveIgnore.IsIgnored(relativePath))
                 continue; // pruned early: an ignored directory is never descended into
 
             if (isDirectory)
             {
-                await foreach (var file in WalkAsync(rootPath, entry, ignore, ct))
+                await foreach (var file in WalkAsync(rootPath, entry, effectiveIgnore, ct))
                     yield return file;
                 continue;
             }

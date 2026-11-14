@@ -13,5 +13,7 @@ public interface IGraphStore
 {
     Task UpsertAsync(IEnumerable<GraphNode> nodes, IEnumerable<GraphEdge> edges, CancellationToken ct);
 
+    Task ReplaceForFileAsync(Guid projectId, Guid fileId, IEnumerable<GraphNode> nodes, IEnumerable<GraphEdge> edges, CancellationToken ct);
+
     Task InvalidateByOwningFileAsync(Guid projectId, Guid fileId, CancellationToken ct);
 }

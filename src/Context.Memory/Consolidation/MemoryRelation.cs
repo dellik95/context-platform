@@ -32,4 +32,11 @@ public sealed record RelationSubject(MemoryType Type, string Title, IReadOnlyLis
 /// <summary>Cheap signals the offline judge decides from.</summary>
 /// <param name="Cosine">Embedding cosine similarity, 0 when the vectors are not comparable.</param>
 /// <param name="SharesStrongEntity">At least one ticket/symbol/config/file key in common.</param>
-public sealed record RelationSignals(double Cosine, bool SharesStrongEntity, bool SameType, bool SameTopicKey, bool NegationAsymmetry);
+public sealed record RelationSignals(
+    double Cosine,
+    bool SharesStrongEntity,
+    bool SameType,
+    bool SameTopicKey,
+    bool NegationAsymmetry,
+    double ContentJaccard = 0.0,
+    int SharedStrongEntityCount = 0);

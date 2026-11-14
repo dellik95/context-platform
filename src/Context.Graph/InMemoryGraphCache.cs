@@ -13,7 +13,7 @@ namespace Context.Graph;
 /// </summary>
 public sealed class InMemoryGraphCache
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly Dictionary<Guid, GraphNode> _nodesById = new();
     private readonly Dictionary<Guid, GraphEdge> _edgesById = new();
     private readonly Dictionary<Guid, List<GraphEdge>> _outgoing = new(); // SourceNodeId -> edges
@@ -78,6 +78,64 @@ public sealed class InMemoryGraphCache
 
             foreach (var nodeId in staleNodeIds)
                 _nodesById.Remove(nodeId);
+        }
+    }
+
+    /// <summary>
+    /// Atomically replaces all nodes and edges owned by <paramref name="fileId"/> while preserving
+    /// incoming cross-file edges owned by OTHER files that target surviving nodes owned by
+    /// <paramref name="fileId"/>.
+    /// </summary>
+    public void ReplaceOwningFile(
+        Guid projectId, Guid fileId, IEnumerable<GraphNode> nodes, IEnumerable<GraphEdge> edges)
+    {
+        if (projectId != ProjectId)
+            throw new ArgumentException(
+                $"This cache holds project {ProjectId}; cannot update project {projectId}.", nameof(projectId));
+
+        var nodeList = nodes as IReadOnlyCollection<GraphNode> ?? nodes.ToList();
+        var edgeList = edges as IReadOnlyCollection<GraphEdge> ?? edges.ToList();
+
+        var incomingOwnedNodeIds = nodeList
+            .Where(n => n.OwningFileId == fileId)
+            .Select(n => n.Id)
+            .ToHashSet();
+        var incomingOwnedEdgeIds = edgeList
+            .Where(e => e.OwningFileId == fileId)
+            .Select(e => e.Id)
+            .ToHashSet();
+
+        lock (_gate)
+        {
+            var staleNodeIds = new HashSet<Guid>();
+            foreach (var node in _nodesById.Values)
+            {
+                if (node.OwningFileId == fileId && !incomingOwnedNodeIds.Contains(node.Id))
+                    staleNodeIds.Add(node.Id);
+            }
+
+            var staleEdgeIds = new List<Guid>();
+            foreach (var edge in _edgesById.Values)
+            {
+                if ((edge.OwningFileId == fileId && !incomingOwnedEdgeIds.Contains(edge.Id))
+                    || staleNodeIds.Contains(edge.SourceNodeId)
+                    || staleNodeIds.Contains(edge.TargetNodeId))
+                {
+                    staleEdgeIds.Add(edge.Id);
+                }
+            }
+
+            foreach (var edgeId in staleEdgeIds)
+                RemoveEdgeInternal(edgeId);
+
+            foreach (var nodeId in staleNodeIds)
+                _nodesById.Remove(nodeId);
+
+            foreach (var node in nodeList)
+                _nodesById[node.Id] = node;
+
+            foreach (var edge in edgeList)
+                AddEdgeInternal(edge);
         }
     }
 

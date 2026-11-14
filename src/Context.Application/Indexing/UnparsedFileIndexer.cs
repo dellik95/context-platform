@@ -28,19 +28,41 @@ internal sealed class UnparsedFileIndexer(
 
     private static readonly Lazy<Tokenizer> TokenizerInstance = new(() => TiktokenTokenizer.CreateForModel("gpt-4o"));
 
-    public async Task IndexAsync(Guid projectId, DomainFile fileEntity, string sourceText, bool isFirstIndex, CancellationToken ct)
+    public async Task IndexAsync(
+        Guid projectId, DomainFile fileEntity, string sourceText, bool isFirstIndex, CancellationToken ct,
+        bool enqueueGraphUpdate = true)
     {
         var text = sourceText.Length > MaxUnparsedDocChars ? sourceText[..MaxUnparsedDocChars] : sourceText;
         var chunkTexts = await SplitTextAsync(fileEntity.RelativePath, text, ct).ConfigureAwait(false);
 
-        var chunkEntities = chunkTexts.Select(chunkText => new Chunk
+        var previousChunks = await chunks.ListByFileAsync(fileEntity.Id, ct).ConfigureAwait(false);
+        var previousIdByHash = new Dictionary<string, Queue<Guid>>(previousChunks.Count, StringComparer.Ordinal);
+        foreach (var prev in previousChunks)
         {
-            Id = Guid.NewGuid(),
-            FileId = fileEntity.Id,
-            SymbolId = null,
-            Text = chunkText,
-            TokenCount = TokenEstimator.Estimate(chunkText),
-            ContentHash = hasher.HashText(chunkText)
+            if (!previousIdByHash.TryGetValue(prev.ContentHash, out var q))
+            {
+                q = new Queue<Guid>();
+                previousIdByHash[prev.ContentHash] = q;
+            }
+
+            q.Enqueue(prev.Id);
+        }
+
+        var chunkEntities = chunkTexts.Select(chunkText =>
+        {
+            var contentHash = hasher.HashText(chunkText);
+            var id = previousIdByHash.TryGetValue(contentHash, out var q) && q.Count > 0
+                ? q.Dequeue()
+                : Guid.NewGuid();
+            return new Chunk
+            {
+                Id = id,
+                FileId = fileEntity.Id,
+                SymbolId = null,
+                Text = chunkText,
+                TokenCount = TokenEstimator.Estimate(chunkText),
+                ContentHash = contentHash
+            };
         }).ToList();
 
         await symbols.ReplaceForFileAsync(fileEntity.Id, [], ct).ConfigureAwait(false);
@@ -48,7 +70,7 @@ internal sealed class UnparsedFileIndexer(
 
         await embedScheduler.EnqueueMissingAsync(projectId, chunkEntities, ct).ConfigureAwait(false);
 
-        if (isFirstIndex)
+        if (isFirstIndex && enqueueGraphUpdate)
         {
             await jobQueue.EnqueueAsync(JobType.UpdateGraph, new UpdateGraphPayload(projectId, fileEntity.Id, Invalidate: false), projectId, ct: ct)
                 .ConfigureAwait(false);

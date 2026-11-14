@@ -192,16 +192,17 @@ public sealed class SqliteChunkVectorIndex(string dbPath, IDbContextFactory<Cont
     {
         var lazy = _collections.GetOrAdd(
             provider,
-            p => new Lazy<Task<SqliteCollection<Guid, ChunkVectorRecord>>>(() => CreateCollectionAsync(p, dimensions, ct)));
+            p => new Lazy<Task<SqliteCollection<Guid, ChunkVectorRecord>>>(
+                () => CreateCollectionAsync(p, dimensions, CancellationToken.None)));
         try
         {
-            return await lazy.Value.ConfigureAwait(false);
+            return await lazy.Value.WaitAsync(ct).ConfigureAwait(false);
         }
-        catch
+        catch when (lazy.Value.IsFaulted || lazy.Value.IsCanceled)
         {
             // Never cache a failed creation: one 'database is locked' during the backfill under
             // write load otherwise failed every later upsert and search for this provider until
-            // the process restarted.
+            // the process restarted. A caller-side WaitAsync(ct) cancellation does NOT evict a healthy init.
             _collections.TryRemove(new KeyValuePair<string, Lazy<Task<SqliteCollection<Guid, ChunkVectorRecord>>>>(provider, lazy));
             throw;
         }

@@ -167,4 +167,21 @@ public sealed class HookEndpointsEnqueueTests
 
         await act.Should().ThrowAsync<InvalidOperationException>();
     }
+
+    [Theory]
+    [InlineData("ok")]
+    [InlineData("Thanks!")]
+    [InlineData("looks good.")]
+    [InlineData("/compact")]
+    public async Task UserPromptSubmitAsync_skips_context_retrieval_for_trivial_prompts_while_still_queueing(string prompt)
+    {
+        var strictEngine = new Mock<IContextEngine>(MockBehavior.Strict);
+
+        var result = await HookEndpoints.UserPromptSubmitAsync(
+            new UserPromptSubmitInput(_claudeSessionId, prompt), strictEngine.Object, _jobQueue.Object, _project, CancellationToken.None);
+
+        result.Should().BeOfType<Ok<HookOutput>>().Which.Value!.AdditionalContext.Should().BeNull();
+        Queued.Type.Should().Be(HookType.UserPromptSubmit);
+        strictEngine.VerifyNoOtherCalls();
+    }
 }

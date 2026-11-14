@@ -36,7 +36,7 @@ internal sealed class CandidateRelationAssessor(
         }
 
         var verdicts = await JudgeWithModelAsync(incoming, candidate, subjects, ct).ConfigureAwait(false)
-            ?? JudgeOffline(incoming, neighbours, negation);
+            ?? JudgeOffline(incoming, neighbours, candidate, subjects, negation);
 
         foreach (var relation in VerdictPriority)
         {
@@ -85,16 +85,27 @@ internal sealed class CandidateRelationAssessor(
     }
 
     private static IReadOnlyList<RelationVerdict> JudgeOffline(
-        IncomingMemory incoming, IReadOnlyList<ConsolidationNeighbour> neighbours, IReadOnlyList<bool> negation)
+        IncomingMemory incoming,
+        IReadOnlyList<ConsolidationNeighbour> neighbours,
+        RelationSubject candidate,
+        IReadOnlyList<RelationSubject> subjects,
+        IReadOnlyList<bool> negation)
     {
         var candidateStrong = EntityExtractor.StrongKeys(incoming.Entities.Select(e => e.Key));
-        return [.. neighbours.Select((n, i) => new RelationVerdict(
-            MemoryRelationJudge.JudgeOffline(new RelationSignals(
-                n.Cosine,
-                n.StrongKeys.Overlaps(candidateStrong),
-                n.Memory.Type == incoming.Candidate.Type,
-                incoming.TopicKey is not null && incoming.TopicKey == n.Memory.TopicKey,
-                negation[i])),
-            "offline heuristic"))];
+        return [.. neighbours.Select((n, i) =>
+        {
+            var sharedCount = n.StrongKeys.Count(candidateStrong.Contains);
+            var jaccard = MemoryRelationJudge.ComputeContentJaccard(candidate, subjects[i]);
+            return new RelationVerdict(
+                MemoryRelationJudge.JudgeOffline(new RelationSignals(
+                    n.Cosine,
+                    sharedCount > 0,
+                    n.Memory.Type == incoming.Candidate.Type,
+                    incoming.TopicKey is not null && incoming.TopicKey == n.Memory.TopicKey,
+                    negation[i],
+                    jaccard,
+                    sharedCount)),
+                "offline heuristic");
+        })];
     }
 }

@@ -45,7 +45,7 @@ public sealed class HookInvocationRetentionScheduler(
             {
                 await MaybeCleanUpAsync(project.Id, settingsService, hookInvocationRepository, ct).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Logger.LogError(ex, "Failed to evaluate hook-invocation retention for project {ProjectId}.", project.Id);
             }

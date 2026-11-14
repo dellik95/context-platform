@@ -13,6 +13,9 @@ public interface IJobRepository
     Task<Job> EnqueueAsync(Job job, CancellationToken ct);
     Task UpdateAsync(Job job, CancellationToken ct);
 
+    /// <summary>Marks every currently Running job back to Pending on dispatcher startup (clean or crash recovery).</summary>
+    Task<int> ResetStaleRunningAsync(DateTimeOffset now, CancellationToken ct);
+
     /// <summary>Atomically claims and returns the highest-priority runnable pending job (oldest first
     /// within the same priority), marking it Running, or null if none are runnable right now.</summary>
     Task<Job?> DequeueNextAsync(CancellationToken ct);

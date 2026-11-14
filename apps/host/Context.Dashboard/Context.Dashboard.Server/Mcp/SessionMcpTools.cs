@@ -1,10 +1,7 @@
 using System.ComponentModel;
 using Context.Application;
 using Context.Dashboard.Server.Security;
-using Context.Domain.Enums;
-using Context.Infrastructure;
 using Context.Infrastructure.Abstractions;
-using Microsoft.EntityFrameworkCore;
 using ModelContextProtocol.Server;
 
 namespace Context.Dashboard.Server.Mcp;
@@ -17,7 +14,6 @@ namespace Context.Dashboard.Server.Mcp;
 public sealed class SessionMcpTools(
     IContextEngine engine,
     ISessionRepository sessionRepository,
-    IDbContextFactory<ContextDbContext> dbContextFactory,
     CurrentProjectAccessor currentProject)
 {
     private const int DefaultSessionSearchLimit = 20;
@@ -31,29 +27,12 @@ public sealed class SessionMcpTools(
         [Description("Maximum sessions to return.")] int limit = DefaultSessionSearchLimit,
         CancellationToken ct = default)
     {
-        var pid = currentProject.ProjectId;
-        await using var db = await dbContextFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
-
-        var sessions = db.Sessions.Where(s => s.ProjectId == pid);
-        if (!string.IsNullOrWhiteSpace(query))
-        {
-            sessions = sessions.Where(s => s.ClaudeSessionId != null && s.ClaudeSessionId.Contains(query));
-        }
-
-        // Ended sessions without a summary or sessions without user prompts have no useful content to surface.
-        sessions = sessions.Where(s =>
-            s.Status != SessionStatus.Ended || db.SessionSummaries.Any(sm => sm.SessionId == s.Id));
-        sessions = sessions.Where(s =>
-            db.SessionEvents.Any(e => e.SessionId == s.Id && e.Type == SessionEventType.Prompt));
-
-        return await sessions
-            .OrderByDescending(s => s.StartedAt)
-            .Take(Math.Max(1, limit))
-            .Select(s => new SessionSummaryDto(
-                s.Id, s.ClaudeSessionId, s.StartedAt, s.EndedAt, s.Status,
-                db.SessionSummaries.Where(sm => sm.SessionId == s.Id).Select(sm => sm.Title).FirstOrDefault()))
-            .ToListAsync(ct)
+        var matches = await sessionRepository
+            .SearchForMcpAsync(currentProject.ProjectId, query, limit, ct)
             .ConfigureAwait(false);
+
+        return [.. matches.Select(m => new SessionSummaryDto(
+            m.Id, m.ClaudeSessionId, m.StartedAt, m.EndedAt, m.Status, m.SummaryTitle))];
     }
 
     [McpServerTool(Name = "session_get")]
