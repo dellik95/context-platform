@@ -16,10 +16,16 @@ interface PendingConfirm {
 @Injectable({ providedIn: 'root' })
 export class ConfirmDialogService {
   readonly pending = signal<PendingConfirm | null>(null);
+  private readonly queue: PendingConfirm[] = [];
 
   open(data: ConfirmDialogData): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
-      this.pending.set({ data, resolve });
+      const request: PendingConfirm = { data, resolve };
+      if (!this.pending()) {
+        this.pending.set(request);
+      } else {
+        this.queue.push(request);
+      }
     });
   }
 
@@ -28,7 +34,7 @@ export class ConfirmDialogService {
     if (!current) {
       return;
     }
-    this.pending.set(null);
+    this.pending.set(this.queue.shift() ?? null);
     current.resolve(confirmed);
   }
 }

@@ -16,4 +16,21 @@ describe('ConfirmDialogService', () => {
     service.respond(false);
     await expect(second).resolves.toBe(false);
   });
+
+  it('queues overlapping confirmations FIFO without orphaning the earlier promise', async () => {
+    const service = new ConfirmDialogService();
+
+    const first = service.open({ title: 'First', message: 'Confirm first?' });
+    const second = service.open({ title: 'Second', message: 'Confirm second?' });
+
+    expect(service.pending()?.data.title).toBe('First');
+
+    service.respond(true);
+    await expect(first).resolves.toBe(true);
+    expect(service.pending()?.data.title).toBe('Second');
+
+    service.respond(false);
+    await expect(second).resolves.toBe(false);
+    expect(service.pending()).toBeNull();
+  });
 });

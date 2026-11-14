@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@angular/core';
 import { RouterLink, RouterOutlet } from '@angular/router';
 import { ApiService } from './core/api.service';
 import { HealthResponse } from './core/models';
@@ -8,6 +8,7 @@ import { ToastContainerComponent } from './shared/ui/toast-container.component';
 
 @Component({
   selector: 'app-root',
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [RouterOutlet, RouterLink, IconComponent, ToastContainerComponent, ConfirmDialogHostComponent],
   templateUrl: './app.html',
 })

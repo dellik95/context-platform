@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, computed, effect, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
 import { FormField, form, min } from '@angular/forms/signals';
 import { ApiService } from '../../core/api.service';
 import { BadgeComponent } from '../../shared/ui/badge.component';
@@ -12,6 +12,7 @@ import { ProjectContextService } from '../projects/project-context.service';
 
 @Component({
   selector: 'app-search-panel',
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     CommonModule,
     FormField,
@@ -50,7 +51,17 @@ export class SearchPanelComponent {
   protected readonly result = computed(() => (this.resource.hasValue() ? this.resource.value() : null));
   protected readonly lastQuery = computed(() => this.committedQuery()?.query ?? '');
 
+  private lastProjectId = '';
+
   constructor() {
+    effect(() => {
+      const projectId = this.ctx.projectId();
+      if (projectId !== this.lastProjectId) {
+        this.lastProjectId = projectId;
+        this.committedQuery.set(undefined);
+      }
+    });
+
     effect(() => {
       if (this.resource.error()) {
         this.toast.error('Search failed — is Context.Dashboard.Server running?');

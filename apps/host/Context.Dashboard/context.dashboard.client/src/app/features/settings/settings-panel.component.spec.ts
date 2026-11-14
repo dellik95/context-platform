@@ -214,5 +214,55 @@ describe('SettingsPanelComponent', () => {
 
       expect(saved[0].memoryReconsolidationIntervalMinutes).toBe(360);
     });
+
+    it('preserves unsaved local edits when the same project settings resource reloads', async () => {
+      const resourceValue = { ...baseSettings };
+      let version = 0;
+      const versionSignal = (await import('@angular/core')).signal(0);
+      const projectSignal = (await import('@angular/core')).signal('proj-1');
+      const apiStub: Partial<ApiService> = {
+        settingsResource: () =>
+          ({
+            isLoading: () => false,
+            hasValue: () => true,
+            value: () => {
+              versionSignal();
+              return { ...resourceValue, reindexIntervalMinutes: 60 + version };
+            },
+            error: () => undefined,
+          }) as unknown as ReturnType<ApiService['settingsResource']>,
+        updateSettings: () => of(undefined),
+      };
+
+      await TestBed.configureTestingModule({
+        imports: [SettingsPanelComponent],
+        providers: [
+          { provide: ApiService, useValue: apiStub },
+          { provide: ProjectContextService, useValue: { projectId: projectSignal, projectName: () => 'Test' } },
+          { provide: ToastService, useValue: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), show: vi.fn() } },
+          { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+          { provide: ConfirmDialogService, useValue: { open: vi.fn().mockResolvedValue(true) } },
+        ],
+      }).compileComponents();
+
+      fixture = TestBed.createComponent(SettingsPanelComponent);
+      fixture.detectChanges();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      type('Max memories per merge', '2');
+      version = 1;
+      versionSignal.set(1);
+      fixture.detectChanges();
+
+      expect(fieldInput('Max memories per merge').value).toBe('2');
+
+      projectSignal.set('proj-2');
+      fixture.detectChanges();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(fieldInput('Max memories per merge').value).toBe(String(baseSettings.onlineMergeMaxSources));
+    });
   });
 });

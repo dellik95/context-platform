@@ -1,4 +1,4 @@
-import { Component, computed, effect, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked } from '@angular/core';
 import { FormField } from '@angular/forms/signals';
 import { Router } from '@angular/router';
 import { ApiService } from '../../core/api.service';
@@ -23,7 +23,7 @@ import { SettingsToggleComponent } from './settings-toggle.component';
 
 @Component({
   selector: 'app-settings-panel',
-  standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     FormField,
     ProgressBarComponent,
@@ -49,6 +49,8 @@ export class SettingsPanelComponent {
   protected readonly deleting = signal(false);
   private lastReindexScheduledAt: string | null = null;
   private lastMemoryReconsolidationScheduledAt: string | null = null;
+  private loadedProjectId = '';
+  private loadedModelSnapshot = '';
 
   protected readonly settingsModel = signal(createDefaultSettingsModel());
   protected readonly settingsForm = createSettingsForm(this.settingsModel);
@@ -109,9 +111,20 @@ export class SettingsPanelComponent {
         return;
       }
       const settings = this.resource.value();
+      const projectId = this.ctx.projectId();
+      const isProjectSwitch = projectId !== this.loadedProjectId;
+      const hasUnsavedChanges =
+        !isProjectSwitch && JSON.stringify(untracked(this.settingsModel)) !== this.loadedModelSnapshot;
+
       this.lastReindexScheduledAt = settings.lastReindexScheduledAt;
       this.lastMemoryReconsolidationScheduledAt = settings.lastMemoryReconsolidationScheduledAt;
-      this.settingsModel.set(mapDtoToFormModel(settings));
+      this.loadedProjectId = projectId;
+
+      if (!hasUnsavedChanges) {
+        const nextModel = mapDtoToFormModel(settings);
+        this.settingsModel.set(nextModel);
+        this.loadedModelSnapshot = JSON.stringify(nextModel);
+      }
     });
 
     effect(() => {
@@ -144,6 +157,7 @@ export class SettingsPanelComponent {
     this.api.updateSettings(this.ctx.projectId(), dto).subscribe({
       next: () => {
         this.saving.set(false);
+        this.loadedModelSnapshot = JSON.stringify(this.settingsModel());
         this.toast.success('Settings saved.');
       },
       error: () => {

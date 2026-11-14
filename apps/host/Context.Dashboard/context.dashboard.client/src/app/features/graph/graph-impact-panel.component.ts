@@ -1,5 +1,7 @@
-import { Component, computed, effect, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormField, form, max, min } from '@angular/forms/signals';
+import { Subscription } from 'rxjs';
 import { ApiService } from '../../core/api.service';
 import { GraphNeighborhoodDto, GraphNode, ImpactSet, SymbolSummaryDto } from '../../core/models';
 import { BadgeComponent } from '../../shared/ui/badge.component';
@@ -28,7 +30,7 @@ function toSymbolPlaceholder(node: GraphNode): SymbolSummaryDto {
 
 @Component({
   selector: 'app-graph-impact-panel',
-  standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     FormField,
     BadgeComponent,
@@ -47,6 +49,12 @@ export class GraphImpactPanelComponent {
   private readonly api = inject(ApiService);
   private readonly ctx = inject(ProjectContextService);
   private readonly toast = inject(ToastService);
+  private readonly destroyRef = inject(DestroyRef);
+
+  private fullGraphSub?: Subscription;
+  private impactSub?: Subscription;
+  private neighborhoodSub?: Subscription;
+  private lastProjectId = '';
 
   private readonly searchQuery = signal('');
   private readonly searchResource = this.api.searchSymbolsResource(
@@ -98,10 +106,34 @@ export class GraphImpactPanelComponent {
 
   constructor() {
     effect(() => {
+      const projectId = this.ctx.projectId();
+      if (projectId !== this.lastProjectId) {
+        this.lastProjectId = projectId;
+        this.cancelInFlightRequests();
+        this.mode.set('search');
+        this.searchQuery.set('');
+        this.selectedSymbol.set(null);
+        this.impact.set(null);
+        this.graphData.set(null);
+        this.graphRootId.set(null);
+        this.selectedNode.set(null);
+      }
+    });
+
+    effect(() => {
       if (this.searchResource.error()) {
         this.toast.error('Symbol search failed — is Context Dashboard running?');
       }
     });
+  }
+
+  private cancelInFlightRequests(): void {
+    this.fullGraphSub?.unsubscribe();
+    this.impactSub?.unsubscribe();
+    this.neighborhoodSub?.unsubscribe();
+    this.loadingFullGraph.set(false);
+    this.loadingImpact.set(false);
+    this.loadingNeighborhood.set(false);
   }
 
   protected onQueryChanged(query: string): void {
@@ -134,19 +166,23 @@ export class GraphImpactPanelComponent {
     if (!projectId) {
       return;
     }
+    this.fullGraphSub?.unsubscribe();
     this.loadingFullGraph.set(true);
-    this.api.getFullGraph(projectId).subscribe({
-      next: (fullGraph) => {
-        this.loadingFullGraph.set(false);
-        this.graphRootId.set(null);
-        this.selectedNode.set(null);
-        this.graphData.set(fullGraph);
-      },
-      error: () => {
-        this.loadingFullGraph.set(false);
-        this.toast.error('Failed to load the full project graph.');
-      },
-    });
+    this.fullGraphSub = this.api
+      .getFullGraph(projectId)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (fullGraph) => {
+          this.loadingFullGraph.set(false);
+          this.graphRootId.set(null);
+          this.selectedNode.set(null);
+          this.graphData.set(fullGraph);
+        },
+        error: () => {
+          this.loadingFullGraph.set(false);
+          this.toast.error('Failed to load the full project graph.');
+        },
+      });
   }
 
   protected onNodeSelected(node: GraphNode): void {
@@ -176,34 +212,42 @@ export class GraphImpactPanelComponent {
 
   private loadImpact(symbol: SymbolSummaryDto): void {
     const maxHops = this.maxHopsModel() || 3;
+    this.impactSub?.unsubscribe();
     this.loadingImpact.set(true);
     this.impact.set(null);
-    this.api.graphImpact(symbol.id, maxHops).subscribe({
-      next: (impactSet) => {
-        this.impact.set(impactSet);
-        this.loadingImpact.set(false);
-      },
-      error: () => {
-        this.loadingImpact.set(false);
-        this.toast.error('Failed to load impact graph for that symbol.');
-      },
-    });
+    this.impactSub = this.api
+      .graphImpact(symbol.id, maxHops)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (impactSet) => {
+          this.impact.set(impactSet);
+          this.loadingImpact.set(false);
+        },
+        error: () => {
+          this.loadingImpact.set(false);
+          this.toast.error('Failed to load impact graph for that symbol.');
+        },
+      });
   }
 
   private loadNeighborhood(nodeId: string): void {
     const hops = this.maxHopsModel() || 3;
+    this.neighborhoodSub?.unsubscribe();
     this.loadingNeighborhood.set(true);
-    this.api.getGraphNeighborhood(nodeId, hops).subscribe({
-      next: (neighborhood) => {
-        this.loadingNeighborhood.set(false);
-        this.graphRootId.set(nodeId);
-        this.graphData.set(neighborhood);
-        this.selectedNode.set(neighborhood.nodes.find((n) => n.id === nodeId) ?? null);
-      },
-      error: () => {
-        this.loadingNeighborhood.set(false);
-        this.toast.error('Failed to load the graph view for that node.');
-      },
-    });
+    this.neighborhoodSub = this.api
+      .getGraphNeighborhood(nodeId, hops)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (neighborhood) => {
+          this.loadingNeighborhood.set(false);
+          this.graphRootId.set(nodeId);
+          this.graphData.set(neighborhood);
+          this.selectedNode.set(neighborhood.nodes.find((n) => n.id === nodeId) ?? null);
+        },
+        error: () => {
+          this.loadingNeighborhood.set(false);
+          this.toast.error('Failed to load the graph view for that node.');
+        },
+      });
   }
 }

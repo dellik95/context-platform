@@ -1,10 +1,12 @@
 import { HttpErrorResponse, HttpEvent, HttpHandlerFn, HttpInterceptorFn, HttpRequest } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { ActivatedRouteSnapshot, Router } from '@angular/router';
-import { Observable, catchError, switchMap, throwError } from 'rxjs';
+import { Observable, catchError, finalize, shareReplay, switchMap, throwError } from 'rxjs';
 import { AdminTokenService } from './admin-token.service';
 import { ApiService } from './api.service';
 import { ProjectTokenService } from './project-token.service';
+
+const inFlightProjectTokenReissues = new Map<string, Observable<string>>();
 
 /**
  * Attaches `Authorization: Bearer <token>` to every outgoing request. Two disjoint token kinds,
@@ -61,7 +63,7 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
       if (!projectId || !(error instanceof HttpErrorResponse) || error.status !== 401) {
         return throwError(() => error);
       }
-      return reissueAndRetry(apiService, projectTokenService, projectId, req, next, error);
+      return reissueAndRetry(apiService, projectTokenService, projectId, token, req, next, error);
     }),
   );
 };
@@ -70,6 +72,8 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
  * Mints a fresh token for `projectId` (the same admin-gated `POST .../token` call
  * ProjectContextService.init uses, which loops back through this interceptor's admin-gated branch
  * for its own Authorization header), stashes it, and replays `req` once with it attached.
+ * Concurrent 401s for the same project coalesce onto a single in-flight reissue call so rapid
+ * parallel dashboard requests don't race and invalidate each other's rotated tokens.
  *
  * `originalError` is what propagates if the reissue call itself fails -- masking it behind a 403
  * from the token endpoint would hide the actual cause. The retried request is deliberately NOT
@@ -81,21 +85,38 @@ function reissueAndRetry(
   apiService: ApiService,
   projectTokenService: ProjectTokenService,
   projectId: string,
+  failedToken: string | null,
   req: HttpRequest<unknown>,
   next: HttpHandlerFn,
   originalError: unknown,
 ): Observable<HttpEvent<unknown>> {
-  return apiService.reissueToken(projectId).pipe(
-    // Only wraps the reissue call -- placed before switchMap so a 401 from the *retry* below
-    // passes through untouched instead of being caught here and looping back into another reissue.
+  const currentStoredToken = projectTokenService.getToken(projectId);
+  if (currentStoredToken && currentStoredToken !== failedToken) {
+    return next(req.clone({ setHeaders: { Authorization: `Bearer ${currentStoredToken}` } }));
+  }
+
+  let sharedReissue$ = inFlightProjectTokenReissues.get(projectId);
+  if (!sharedReissue$) {
+    sharedReissue$ = apiService.reissueToken(projectId).pipe(
+      switchMap((dto) => {
+        if (!dto.token) {
+          return throwError(() => originalError);
+        }
+        projectTokenService.setToken(projectId, dto.token);
+        return [dto.token];
+      }),
+      catchError(() => throwError(() => originalError)),
+      finalize(() => inFlightProjectTokenReissues.delete(projectId)),
+      shareReplay({ bufferSize: 1, refCount: true }),
+    );
+    inFlightProjectTokenReissues.set(projectId, sharedReissue$);
+  }
+
+  return sharedReissue$.pipe(
     catchError(() => throwError(() => originalError)),
-    switchMap((dto) => {
-      if (!dto.token) {
-        return throwError(() => originalError);
-      }
-      projectTokenService.setToken(projectId, dto.token);
-      return next(req.clone({ setHeaders: { Authorization: `Bearer ${dto.token}` } }));
-    }),
+    switchMap((freshToken) =>
+      next(req.clone({ setHeaders: { Authorization: `Bearer ${freshToken}` } })),
+    ),
   );
 }
 

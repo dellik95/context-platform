@@ -1,25 +1,32 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { Observable, shareReplay } from 'rxjs';
+import { Observable, catchError, shareReplay, throwError } from 'rxjs';
 import { environment } from '../../environments/environment';
 
 /**
  * `GET /api/auth/admin-token` (see AdminTokenBootstrapEndpoints.cs) — a loopback-only, otherwise
  * unauthenticated bootstrap that hands this browser the admin token whenever the Dashboard and
- * Context.Dashboard.Server are running on the same machine, so `POST/GET /api/projects` and
- * `GET /api/fs/browse` (see auth.interceptor.ts) work with no login screen. `shareReplay(1)` caches
- * the one in-flight/completed request so every admin-gated call this tab makes shares it instead of
- * re-fetching; a 403 (non-loopback host, or no token configured there — see AdminTokenProvider)
- * just propagates to whatever admin-gated call triggered the fetch, same as any other 401/403.
+ * Context.Dashboard.Server are running on the same machine. Caches successful/in-flight lookups via
+ * `shareReplay(1)`, while clearing the cache on error so subsequent requests retry cleanly if the
+ * host was temporarily unavailable.
  */
 @Injectable({ providedIn: 'root' })
 export class AdminTokenService {
   private readonly http = inject(HttpClient);
-  private readonly token$ = this.http
-    .get<{ token: string }>(`${environment.apiBaseUrl}/api/auth/admin-token`)
-    .pipe(shareReplay(1));
+  private token$: Observable<{ token: string }> | null = null;
 
   getToken(): Observable<{ token: string }> {
+    if (!this.token$) {
+      this.token$ = this.http
+        .get<{ token: string }>(`${environment.apiBaseUrl}/api/auth/admin-token`)
+        .pipe(
+          catchError((err) => {
+            this.token$ = null;
+            return throwError(() => err);
+          }),
+          shareReplay(1),
+        );
+    }
     return this.token$;
   }
 }

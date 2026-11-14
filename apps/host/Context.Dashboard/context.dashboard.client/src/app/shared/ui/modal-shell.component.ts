@@ -1,15 +1,18 @@
-import { Component, HostListener, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, HostListener, input, output } from '@angular/core';
 import { IconComponent } from './icon.component';
+
+let nextModalTitleId = 0;
 
 @Component({
   selector: 'app-modal-shell',
-  standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [IconComponent],
   template: `
     <div
       class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[1px]"
       role="dialog"
       aria-modal="true"
+      [attr.aria-labelledby]="titleId"
       (click)="onBackdropClick($event)"
     >
       <div
@@ -21,7 +24,7 @@ import { IconComponent } from './icon.component';
       >
         <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
           <div class="min-w-0">
-            <h2 class="text-base font-semibold text-slate-900">{{ title() }}</h2>
+            <h2 [id]="titleId" class="text-base font-semibold text-slate-900">{{ title() }}</h2>
             @if (subtitle()) {
               <p class="mt-0.5 truncate text-xs text-slate-500" [title]="subtitle()">{{ subtitle() }}</p>
             }
@@ -53,6 +56,8 @@ import { IconComponent } from './icon.component';
   `,
 })
 export class ModalShellComponent {
+  protected readonly titleId = `modal-title-${++nextModalTitleId}`;
+
   readonly title = input.required<string>();
   readonly subtitle = input<string | null>(null);
   readonly widthClass = input('max-w-lg');

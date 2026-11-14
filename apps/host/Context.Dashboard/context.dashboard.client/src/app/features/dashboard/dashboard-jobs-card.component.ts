@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, DestroyRef, computed, effect, inject, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, input, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ApiService } from '../../core/api.service';
 import { JobDto, JobType, SystemStatusDto, USER_DATA_JOB_TYPES } from '../../core/models';
@@ -17,6 +17,7 @@ const JOB_PANEL_RELOAD_MIN_MS = 3000;
 
 @Component({
   selector: 'app-dashboard-jobs-card',
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     CommonModule,
     CollapsibleSectionComponent,
@@ -402,6 +403,7 @@ export class DashboardJobsCardComponent {
   protected readonly forcingJobId = signal<string | null>(null);
   protected readonly forcingAll = signal(false);
   private lastRunningReloadMs = 0;
+  private runningReloadTimer?: ReturnType<typeof setTimeout>;
   protected readonly cleaningUpPending = signal(false);
 
   private readonly pendingByTypeRequested = signal(false);
@@ -418,8 +420,14 @@ export class DashboardJobsCardComponent {
   protected readonly pendingByTypeError = computed(() => Boolean(this.pendingByTypeResource.error()));
   protected readonly cleaningUpPendingType = signal<JobType | null>(null);
   private lastPendingReloadMs = 0;
+  private pendingReloadTimer?: ReturnType<typeof setTimeout>;
 
   constructor() {
+    this.destroyRef.onDestroy(() => {
+      clearTimeout(this.runningReloadTimer);
+      clearTimeout(this.pendingReloadTimer);
+    });
+
     effect(() => {
       if (this.pendingExpanded() && !this.pendingByTypeRequested()) {
         this.loadPendingByType();
@@ -437,21 +445,41 @@ export class DashboardJobsCardComponent {
       if (current?.jobsFailed !== counts.failed && this.failedJobsResource.hasValue()) {
         this.failedJobsResource.reload();
       }
-      if (
-        current?.jobsRunning !== counts.running &&
-        this.runningJobsRequested() &&
-        Date.now() - this.lastRunningReloadMs >= JOB_PANEL_RELOAD_MIN_MS
-      ) {
-        this.loadRunningJobs();
+      if (current?.jobsRunning !== counts.running && this.runningJobsRequested()) {
+        this.scheduleRunningReload();
       }
-      if (
-        current?.jobsPending !== counts.pending &&
-        this.pendingByTypeRequested() &&
-        Date.now() - this.lastPendingReloadMs >= JOB_PANEL_RELOAD_MIN_MS
-      ) {
-        this.loadPendingByType();
+      if (current?.jobsPending !== counts.pending && this.pendingByTypeRequested()) {
+        this.schedulePendingReload();
       }
     });
+  }
+
+  private scheduleRunningReload(): void {
+    const elapsed = Date.now() - this.lastRunningReloadMs;
+    if (elapsed >= JOB_PANEL_RELOAD_MIN_MS) {
+      this.loadRunningJobs();
+      return;
+    }
+    if (!this.runningReloadTimer) {
+      this.runningReloadTimer = setTimeout(() => {
+        this.runningReloadTimer = undefined;
+        this.loadRunningJobs();
+      }, JOB_PANEL_RELOAD_MIN_MS - elapsed);
+    }
+  }
+
+  private schedulePendingReload(): void {
+    const elapsed = Date.now() - this.lastPendingReloadMs;
+    if (elapsed >= JOB_PANEL_RELOAD_MIN_MS) {
+      this.loadPendingByType();
+      return;
+    }
+    if (!this.pendingReloadTimer) {
+      this.pendingReloadTimer = setTimeout(() => {
+        this.pendingReloadTimer = undefined;
+        this.loadPendingByType();
+      }, JOB_PANEL_RELOAD_MIN_MS - elapsed);
+    }
   }
 
   protected loadFailedJobs(): void {
@@ -459,6 +487,8 @@ export class DashboardJobsCardComponent {
   }
 
   protected loadPendingByType(): void {
+    clearTimeout(this.pendingReloadTimer);
+    this.pendingReloadTimer = undefined;
     this.lastPendingReloadMs = Date.now();
     if (this.pendingByTypeRequested()) {
       this.pendingByTypeResource.reload();
@@ -468,6 +498,8 @@ export class DashboardJobsCardComponent {
   }
 
   protected loadRunningJobs(): void {
+    clearTimeout(this.runningReloadTimer);
+    this.runningReloadTimer = undefined;
     this.lastRunningReloadMs = Date.now();
     if (this.runningJobsRequested()) {
       this.runningJobsResource.reload();

@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormField, form } from '@angular/forms/signals';
 import { ApiService } from '../../core/api.service';
@@ -36,7 +36,7 @@ interface MemoryTypeStat {
 
 @Component({
   selector: 'app-memories-panel',
-  standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     CommonModule,
     FormField,
@@ -109,6 +109,10 @@ export class MemoriesPanelComponent {
       const id = this.ctx.projectId();
       if (id && id !== this.lastSearchedProjectId) {
         this.lastSearchedProjectId = id;
+        this.details.set({});
+        this.selectedType.set(null);
+        this.deletingId.set(null);
+        this.consolidationOpen.set(false);
         this.commitSearch();
       }
     });

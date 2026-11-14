@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, computed, effect, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
 import { FormField, form, readonly, required } from '@angular/forms/signals';
 import { Router, RouterLink } from '@angular/router';
 import { ApiService } from '../../core/api.service';
@@ -16,6 +16,7 @@ import { ProjectTokenDialogComponent, ProjectTokenDialogData } from './project-t
 
 @Component({
   selector: 'app-projects-list',
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     CommonModule,
     RouterLink,

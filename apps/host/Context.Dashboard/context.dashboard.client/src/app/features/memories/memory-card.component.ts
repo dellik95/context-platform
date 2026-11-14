@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, computed, input, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
 import { Memory, MemoryDetail } from '../../core/models';
 import { BadgeComponent, BadgeTone } from '../../shared/ui/badge.component';
 import { IconComponent } from '../../shared/ui/icon.component';
@@ -23,7 +23,7 @@ function parseStringArray(json: string | null): string[] | null {
 
 @Component({
   selector: 'app-memory-card',
-  standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [CommonModule, BadgeComponent, IconComponent, ProgressBarComponent, SpinnerComponent],
   template: `
     <article
@@ -109,7 +109,7 @@ function parseStringArray(json: string | null): string[] | null {
           @case ('facts') {
             @if (facts(); as memoryFacts) {
               <ul class="list-disc space-y-1 pl-5 text-sm leading-relaxed text-slate-700">
-                @for (fact of memoryFacts; track fact) {
+                @for (fact of memoryFacts; track $index) {
                   <li>{{ fact }}</li>
                 }
               </ul>
@@ -124,7 +124,7 @@ function parseStringArray(json: string | null): string[] | null {
                 <div>
                   <div class="mb-1.5 text-xs font-medium tracking-wide text-slate-500 uppercase">Concepts</div>
                   <div class="flex flex-wrap gap-1.5">
-                    @for (concept of memoryConcepts; track concept) {
+                    @for (concept of memoryConcepts; track $index) {
                       <span class="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
                         {{ concept }}
                       </span>
@@ -136,7 +136,7 @@ function parseStringArray(json: string | null): string[] | null {
                 <div>
                   <div class="mb-1 text-xs font-medium tracking-wide text-slate-500 uppercase">Files modified</div>
                   <ul class="space-y-0.5 font-mono text-xs text-slate-600">
-                    @for (file of modified; track file) {
+                    @for (file of modified; track $index) {
                       <li class="truncate" [title]="file">{{ file }}</li>
                     }
                   </ul>
@@ -146,7 +146,7 @@ function parseStringArray(json: string | null): string[] | null {
                 <div>
                   <div class="mb-1 text-xs font-medium tracking-wide text-slate-500 uppercase">Files read</div>
                   <ul class="space-y-0.5 font-mono text-xs text-slate-600">
-                    @for (file of read; track file) {
+                    @for (file of read; track $index) {
                       <li class="truncate" [title]="file">{{ file }}</li>
                     }
                   </ul>

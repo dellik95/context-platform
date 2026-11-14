@@ -1,4 +1,4 @@
-import { Component, computed, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
 type ChangedFiles = { kind: 'list'; items: string[] } | { kind: 'raw'; raw: string };
 
@@ -16,7 +16,7 @@ export function parseChangedFilesJson(json: string | null | undefined): ChangedF
 
 @Component({
   selector: 'app-session-summary-fields',
-  standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="space-y-4">
       @if (completed()) {
@@ -59,7 +59,7 @@ export function parseChangedFilesJson(json: string | null | undefined): ChangedF
               <p class="text-xs text-slate-500">No files recorded.</p>
             } @else {
               <ul class="flex flex-wrap gap-1.5">
-                @for (file of files.items; track file) {
+                @for (file of files.items; track $index) {
                   <li class="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 font-mono text-xs text-slate-700">
                     {{ file }}
                   </li>

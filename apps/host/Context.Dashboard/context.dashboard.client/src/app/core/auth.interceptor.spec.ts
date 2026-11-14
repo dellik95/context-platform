@@ -93,4 +93,30 @@ describe('authInterceptor stale project-token retry', () => {
     await expect(resultPromise).rejects.toMatchObject({ status: 401 });
     httpMock.expectNone(URL);
   });
+
+  it('coalesces concurrent 401 responses into a single token reissue request', async () => {
+    let reissueCalls = 0;
+    configure(() => {
+      reissueCalls++;
+      return of(fakeProject('fresh-shared-token'));
+    });
+
+    const first$ = firstValueFrom(http.get('/api/projects/proj-1/status'));
+    const second$ = firstValueFrom(http.get('/api/projects/proj-1/memories'));
+
+    const req1 = httpMock.expectOne('/api/projects/proj-1/status');
+    const req2 = httpMock.expectOne('/api/projects/proj-1/memories');
+    req1.flush(null, { status: 401, statusText: 'Unauthorized' });
+    req2.flush(null, { status: 401, statusText: 'Unauthorized' });
+
+    const retry1 = httpMock.expectOne('/api/projects/proj-1/status');
+    const retry2 = httpMock.expectOne('/api/projects/proj-1/memories');
+    expect(retry1.request.headers.get('Authorization')).toBe('Bearer fresh-shared-token');
+    expect(retry2.request.headers.get('Authorization')).toBe('Bearer fresh-shared-token');
+    retry1.flush({ status: 'ok' });
+    retry2.flush([]);
+
+    await expect(Promise.all([first$, second$])).resolves.toEqual([{ status: 'ok' }, []]);
+    expect(reissueCalls).toBe(1);
+  });
 });

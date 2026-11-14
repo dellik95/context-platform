@@ -16,21 +16,39 @@ export class SignalrService implements OnDestroy {
 
   private connection: signalR.HubConnection | null = null;
   private startPromise: Promise<void> | null = null;
+  private operationChain: Promise<void> = Promise.resolve();
   private readonly joinedProjects = new Set<string>();
   // The hub only lets a connection join the project its token belongs to, and tokens are
   // per-project, so each connection is bound to one project and replaced on a project switch.
   private connectionProjectId: string | null = null;
+  private destroyed = false;
 
   readonly projectStatusChanged$ = new Subject<ProjectStatusChangedEvent>();
   readonly reindexProgress$ = new Subject<ReindexProgressEvent>();
   readonly projectActivity$ = new Subject<ProjectActivityEvent>();
   readonly jobCountsChanged$ = new Subject<JobCountsChangedEvent>();
   readonly hookInvoked$ = new Subject<HookInvocationEvent>();
+  readonly reconnected$ = new Subject<string>();
 
-  private connect(projectId: string): signalR.HubConnection {
+  private enqueueOp<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.operationChain.then(fn, fn);
+    this.operationChain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  private async connectAsync(projectId: string): Promise<signalR.HubConnection> {
     const previous = this.connection;
+    this.connection = null;
+    this.connectionProjectId = null;
+    this.startPromise = null;
     this.joinedProjects.clear();
-    void previous?.stop();
+
+    if (previous) {
+      await previous.stop().catch(() => undefined);
+    }
 
     const connection = new signalR.HubConnectionBuilder()
       // Browsers can't set headers on a WebSocket upgrade; the JS client sends this as
@@ -38,7 +56,10 @@ export class SignalrService implements OnDestroy {
       .withUrl(`${environment.apiBaseUrl}/hubs/indexing`, {
         accessTokenFactory: async () => this.projectTokenService.getToken(projectId) || '',
       })
-      .withAutomaticReconnect()
+      .withAutomaticReconnect({
+        nextRetryDelayInMilliseconds: (ctx) =>
+          ctx.previousRetryCount < 3 ? 2000 : ctx.previousRetryCount < 8 ? 10000 : 30000,
+      })
       .build();
 
     connection.on('ProjectStatusChanged', (dto: ProjectStatusChangedEvent) =>
@@ -52,17 +73,21 @@ export class SignalrService implements OnDestroy {
     connection.on('JobCountsChanged', (dto: JobCountsChangedEvent) =>
       this.jobCountsChanged$.next(dto));
 
-    // Automatic reconnect drops group membership server-side.
-    connection.onreconnected(() => {
+    // Automatic reconnect drops group membership server-side; rejoin before alerting listeners.
+    connection.onreconnected(async () => {
       for (const joined of this.joinedProjects) {
-        connection.invoke('JoinProject', joined)
-          .catch(err => console.warn(`Failed to rejoin project ${joined}`, err));
+        try {
+          await connection.invoke('JoinProject', joined);
+          this.reconnected$.next(joined);
+        } catch (err) {
+          console.warn(`Failed to rejoin project ${joined}`, err);
+        }
       }
     });
 
     this.connection = connection;
     this.connectionProjectId = projectId;
-    this.startPromise = connection.start().catch(err => {
+    this.startPromise = connection.start().catch((err) => {
       // Let the next join retry instead of awaiting this rejected start forever.
       if (this.connection === connection) {
         this.connection = null;
@@ -74,33 +99,59 @@ export class SignalrService implements OnDestroy {
     return connection;
   }
 
-  async joinProject(projectId: string): Promise<void> {
-    if (!projectId) {
-      return;
+  joinProject(projectId: string): Promise<void> {
+    if (!projectId || this.destroyed) {
+      return Promise.resolve();
     }
-    const connection = this.connection && this.connectionProjectId === projectId
-      ? this.connection
-      : this.connect(projectId);
-    await this.startPromise;
-    if (this.connection !== connection) {
-      return;
-    }
-    this.joinedProjects.add(projectId);
-    await connection.invoke('JoinProject', projectId);
+
+    return this.enqueueOp(async () => {
+      if (this.destroyed) {
+        return;
+      }
+      const connection =
+        this.connection && this.connectionProjectId === projectId
+          ? this.connection
+          : await this.connectAsync(projectId);
+      await this.startPromise;
+      if (this.destroyed || this.connection !== connection) {
+        return;
+      }
+      this.joinedProjects.add(projectId);
+      await connection.invoke('JoinProject', projectId);
+    });
   }
 
-  async leaveProject(projectId: string): Promise<void> {
-    // The hub binds the argument to a Guid, so '' (no project selected yet) fails server-side.
-    if (!projectId || !this.joinedProjects.delete(projectId)) {
-      return;
+  leaveProject(projectId: string): Promise<void> {
+    if (!projectId) {
+      return Promise.resolve();
     }
-    if (this.connection?.state === signalR.HubConnectionState.Connected) {
-      await this.connection.invoke('LeaveProject', projectId)
-        .catch(err => console.warn(`Failed to leave project ${projectId}`, err));
-    }
+
+    return this.enqueueOp(async () => {
+      // The hub binds the argument to a Guid, so '' (no project selected yet) fails server-side.
+      if (!this.joinedProjects.delete(projectId)) {
+        return;
+      }
+      if (this.connection?.state === signalR.HubConnectionState.Connected) {
+        await this.connection.invoke('LeaveProject', projectId)
+          .catch((err) => console.warn(`Failed to leave project ${projectId}`, err));
+      }
+    });
   }
 
   ngOnDestroy(): void {
-    void this.connection?.stop();
+    this.destroyed = true;
+    const active = this.connection;
+    this.connection = null;
+    this.connectionProjectId = null;
+    this.startPromise = null;
+    this.joinedProjects.clear();
+    void active?.stop().catch(() => undefined);
+
+    this.projectStatusChanged$.complete();
+    this.reindexProgress$.complete();
+    this.projectActivity$.complete();
+    this.jobCountsChanged$.complete();
+    this.hookInvoked$.complete();
+    this.reconnected$.complete();
   }
 }

@@ -32,10 +32,19 @@ export class ProjectContextService implements OnDestroy {
   readonly cancelling = this._cancelling.asReadonly();
   readonly reindexProgress = this._reindexProgress.asReadonly();
 
+  private initSequence = 0;
+  private destroyed = false;
+
   private readonly subscriptions = [
     this.signalr.projectStatusChanged$.subscribe((dto) => {
       if (dto.project.id === this._projectId()) {
         this.statusResource.set(dto);
+      }
+    }),
+
+    this.signalr.reconnected$.subscribe((projectId) => {
+      if (projectId === this._projectId()) {
+        this.statusResource.reload();
       }
     }),
 
@@ -58,12 +67,21 @@ export class ProjectContextService implements OnDestroy {
   ];
 
   async init(projectId: string): Promise<void> {
-    if (this._projectId() === projectId) {
+    if (this._projectId() === projectId || this.destroyed) {
       return;
     }
 
-    if (this._projectId()) {
-      void this.signalr.leaveProject(this._projectId());
+    const seq = ++this.initSequence;
+    const previousId = this._projectId();
+    this._reindexing.set(false);
+    this._cancelling.set(false);
+    this._reindexProgress.set(null);
+
+    if (previousId) {
+      await this.signalr.leaveProject(previousId);
+      if (seq !== this.initSequence || this.destroyed) {
+        return;
+      }
     }
 
     if (!this.projectTokenService.getToken(projectId)) {
@@ -81,10 +99,17 @@ export class ProjectContextService implements OnDestroy {
           catchError(() => of(null)),
         ),
       );
+      if (seq !== this.initSequence || this.destroyed) {
+        return;
+      }
     }
 
     this._projectId.set(projectId);
-    void this.signalr.joinProject(projectId);
+    try {
+      await this.signalr.joinProject(projectId);
+    } catch {
+      // Live SignalR updates remain best-effort; REST polling/resources keep the workspace usable.
+    }
   }
 
   refresh(): void {
@@ -125,6 +150,8 @@ export class ProjectContextService implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.destroyed = true;
+    this.initSequence++;
     for (const subscription of this.subscriptions) {
       subscription.unsubscribe();
     }

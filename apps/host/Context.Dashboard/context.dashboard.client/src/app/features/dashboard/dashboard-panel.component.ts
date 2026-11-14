@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ApiService } from '../../core/api.service';
 import { ReindexProgressEvent } from '../../core/models';
@@ -16,12 +16,13 @@ import { DashboardJobsCardComponent } from './dashboard-jobs-card.component';
 import { LogsDialogComponent } from './logs-dialog.component';
 
 const STATUS_RECONCILE_INTERVAL_MS = 120_000;
-const UPTIME_TICK_MS = 1000;
+const UPTIME_TICK_MS = 15_000;
 const PROGRESS_HIDE_DELAY_MS = 2000;
 const PROGRESS_IDLE_TIMEOUT_MS = 15000;
 
 @Component({
   selector: 'app-dashboard-panel',
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     CommonModule,
     IconComponent,
