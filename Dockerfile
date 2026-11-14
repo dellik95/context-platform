@@ -3,7 +3,7 @@
 # ---- dashboard build --------------------------------------------------------
 # Built separately from the .NET stage below so a source-only change on one side doesn't bust the
 # other's restore/npm-ci cache layer.
-FROM node:22-slim AS dashboard-build
+FROM node:24-slim AS dashboard-build
 WORKDIR /dashboard
 COPY apps/host/Context.Dashboard/context.dashboard.client/package.json apps/host/Context.Dashboard/context.dashboard.client/package-lock.json ./
 RUN npm ci
@@ -11,7 +11,7 @@ COPY apps/host/Context.Dashboard/context.dashboard.client/ ./
 RUN npx ng build
 
 # ---- build ----------------------------------------------------------------
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 WORKDIR /src
 
 # Copy just the files that drive restore first so dependency restore is cached
@@ -30,7 +30,7 @@ RUN dotnet publish apps/host/Context.Dashboard/Context.Dashboard.Server/Context.
       -c Release -r linux-x64 --self-contained false --no-restore -o /app/host
 
 # ---- runtime ----------------------------------------------------------------
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:11.0 AS runtime
 WORKDIR /app
 
 # curl for HEALTHCHECK below — not present in the base aspnet image (unlike useradd/groupadd,

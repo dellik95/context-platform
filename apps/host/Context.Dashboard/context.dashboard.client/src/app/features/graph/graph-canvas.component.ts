@@ -13,21 +13,45 @@ import {
   selector: 'app-graph-canvas',
   standalone: true,
   template: `
-    <div class="flex flex-1 flex-col gap-2">
-      <div class="relative h-[520px] w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-50/40">
+    <div class="flex min-w-0 flex-1 flex-col gap-2.5">
+      <div class="relative h-[380px] w-full overflow-hidden rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50/70 to-indigo-50/20 sm:h-[460px] lg:h-[520px]">
         <div #canvasEl class="h-full w-full"></div>
-        <button
-          type="button"
-          class="absolute top-3 right-3 rounded-lg border border-slate-200 bg-white/95 px-2.5 py-1 text-xs font-medium text-slate-700 shadow-xs backdrop-blur-xs transition-colors hover:bg-slate-50"
-          (click)="fit()"
+        <div
+          class="absolute top-3 right-3 inline-flex items-center divide-x divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white/95 shadow-xs backdrop-blur-xs"
+          role="group"
+          aria-label="Graph viewport controls"
         >
-          Fit graph
-        </button>
+          <button
+            type="button"
+            class="px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+            title="Zoom in"
+            aria-label="Zoom in"
+            (click)="zoom(1.25)"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            class="px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+            title="Zoom out"
+            aria-label="Zoom out"
+            (click)="zoom(0.8)"
+          >
+            −
+          </button>
+          <button
+            type="button"
+            class="px-3 py-1.5 text-xs font-medium text-indigo-700 transition hover:bg-indigo-50"
+            (click)="fit()"
+          >
+            Fit graph
+          </button>
+        </div>
       </div>
 
-      <div class="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-[11px] text-slate-500">
+      <div class="flex flex-wrap items-center gap-1.5 px-0.5">
         @for (item of legendItems; track item.label) {
-          <span class="inline-flex items-center gap-1.5">
+          <span class="inline-flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-white px-2.5 py-0.5 text-[11px] font-medium text-slate-600">
             <span class="h-2.5 w-2.5 rounded-full" [style.background-color]="item.color"></span>
             {{ item.label }}
           </span>
@@ -67,6 +91,15 @@ export class GraphCanvasComponent implements OnDestroy {
 
   protected fit(): void {
     this.network?.fit({ animation: { duration: 250, easingFunction: 'easeInOutQuad' } });
+  }
+
+  protected zoom(factor: number): void {
+    if (!this.network) {
+      return;
+    }
+    const current = this.network.getScale();
+    const next = Math.min(4, Math.max(0.1, current * factor));
+    this.network.moveTo({ scale: next, animation: { duration: 180, easingFunction: 'easeInOutQuad' } });
   }
 
   private render(container: HTMLDivElement, rootId: string | null, neighborhood: GraphNeighborhoodDto): void {

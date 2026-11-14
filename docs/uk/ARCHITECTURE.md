@@ -1,6 +1,6 @@
 # Архітектура системи Context Platform
 
-Цей документ детально описує архітектурні рішення, модульну декомпозицію backend-рішення `.NET 10` та клієнта `Angular 22 + Tailwind CSS v4`, модель зберігання даних, асинхронну чергу завдань, SignalR-події та дворівневу модель безпеки.
+Цей документ детально описує архітектурні рішення, модульну декомпозицію backend-рішення `.NET 11` та клієнта `Angular 22 + Tailwind CSS v4`, модель зберігання даних, асинхронну чергу завдань, SignalR-події та дворівневу модель безпеки.
 
 ---
 
@@ -18,7 +18,7 @@ flowchart TB
     Host --> App["Context.Application (ContextEngine + Jobs + Scheduling)"]
     Host --> Claude["Context.Claude (Hooks DTOs + Integration Installer)"]
 
-    App --> Infra["Context.Infrastructure (EF Core 10 + SQLite + FTS5 + sqlite-vec)"]
+    App --> Infra["Context.Infrastructure (EF Core 11 + SQLite + FTS5 + sqlite-vec)"]
     App --> Retrieval["Context.Retrieval (HybridSearchEngine + HybridScorer + ContextPackBuilder)"]
     App --> Indexing["Context.Indexing (Tree-sitter Parsers + SymbolDiffer + Chunking)"]
     App --> Graph["Context.Graph (GraphStore + BFS/ShortestPath/BlastRadius)"]
@@ -56,7 +56,7 @@ flowchart TB
 
 ## 2. Декомпозиція складних backend-підсистем
 
-У процесі рефакторингу монолітні класи у `Context.Application`, `Context.Memory` та `Context.Dashboard.Server` були розбиті на вузькоспеціалізовані класи (один тип на файл відповідно до `CONTRACTS.md` §13):
+У процесі рефакторингу монолітні класи у `Context.Application`, `Context.Memory` та `Context.Dashboard.Server` були розбиті на вузькоспеціалізовані класи (один тип на файл із чіткими межами абстракцій):
 
 ### А. `Context.Application`: `ContextEngine`, `IndexingPipeline`, `JobDispatcher`
 - **`ContextEngine` (`Engine/`):** замість 500+ рядків змішаної логіки фасад делегує роботу пʼяти координаторам:

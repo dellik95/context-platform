@@ -33,6 +33,13 @@ export class SearchPanelComponent {
     min(path.budget, 1);
   });
 
+  protected readonly exampleQueries = [
+    'hybrid search',
+    'JobDispatcher',
+    'MemoryConsolidator',
+    'MCP tools',
+  ] as const;
+
   protected readonly advancedOpen = signal(false);
 
   private readonly committedQuery = signal<{ projectId: string; query: string; budget?: number } | undefined>(undefined);
@@ -48,6 +55,15 @@ export class SearchPanelComponent {
       if (this.resource.error()) {
         this.toast.error('Search failed — is Context.Dashboard.Server running?');
       }
+    });
+  }
+
+  protected runExampleQuery(example: string): void {
+    this.searchModel.update((current) => ({ ...current, query: example }));
+    this.committedQuery.set({
+      projectId: this.ctx.projectId(),
+      query: example,
+      budget: this.searchForm.budget().value() ?? undefined,
     });
   }
 

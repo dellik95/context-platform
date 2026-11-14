@@ -1,8 +1,9 @@
-import { Component, input, output } from '@angular/core';
+import { Component, computed, input, output } from '@angular/core';
 import { GraphNode } from '../../core/models';
 import { BadgeComponent } from '../../shared/ui/badge.component';
 import { IconComponent } from '../../shared/ui/icon.component';
 import { SpinnerComponent } from '../../shared/ui/spinner.component';
+import { shortNodeLabel } from './graph-styles';
 
 @Component({
   selector: 'app-graph-node-inspector',
@@ -19,7 +20,9 @@ import { SpinnerComponent } from '../../shared/ui/spinner.component';
         <div class="flex items-start gap-2">
           <app-icon name="account-tree" sizeClass="w-5 h-5 text-indigo-600 mt-0.5 shrink-0" />
           <div class="min-w-0 flex-1">
-            <h3 class="text-sm font-semibold break-words text-slate-900">{{ selected.label }}</h3>
+            <h3 class="truncate text-sm font-semibold text-slate-900" [title]="selected.label">
+              {{ shortTitle() }}
+            </h3>
             <div class="mt-1.5 flex flex-wrap gap-1.5">
               <app-badge tone="primary">{{ selected.kind }}</app-badge>
               @if (isCentered()) {
@@ -30,7 +33,7 @@ import { SpinnerComponent } from '../../shared/ui/spinner.component';
         </div>
 
         @if (qualifiedName(); as qName) {
-          <p class="rounded-lg bg-white px-2.5 py-1.5 font-mono text-xs break-all text-slate-600 ring-1 ring-slate-200">
+          <p class="rounded-lg bg-white px-2.5 py-1.5 font-mono text-[11px] break-all text-slate-600 ring-1 ring-slate-200">
             {{ qName }}
           </p>
         }
@@ -88,4 +91,9 @@ export class GraphNodeInspectorComponent {
   readonly loading = input(false);
 
   readonly actionRequested = output<GraphNode>();
+
+  protected readonly shortTitle = computed(() => {
+    const selected = this.node();
+    return selected ? shortNodeLabel(selected.label) : '';
+  });
 }

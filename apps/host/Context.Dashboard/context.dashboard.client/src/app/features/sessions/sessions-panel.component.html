@@ -1,7 +1,12 @@
 <div class="flex flex-col gap-5">
-  <header class="flex items-center justify-between gap-4">
+  <header class="flex flex-wrap items-center justify-between gap-4">
     <div>
-      <h1 class="text-2xl font-semibold tracking-tight text-slate-900">Sessions</h1>
+      <div class="flex items-center gap-2.5">
+        <h1 class="text-2xl font-semibold tracking-tight text-slate-900">Sessions</h1>
+        @if (sessions().length > 0) {
+          <app-badge tone="primary">{{ sessions().length }}</app-badge>
+        }
+      </div>
       <p class="mt-0.5 text-sm text-slate-500">
         Claude Code session checkpoints, architectural discoveries, decisions, and history chunks.
       </p>
@@ -25,7 +30,7 @@
   } @else {
     <div class="grid gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
       <aside class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xs">
-        <div class="max-h-[70vh] divide-y divide-slate-100 overflow-y-auto">
+        <div class="max-h-64 divide-y divide-slate-100 overflow-y-auto lg:max-h-[70vh]">
           @for (group of sessionGroups(); track group.label) {
             <div>
               <div class="sticky top-0 z-10 border-b border-slate-100 bg-slate-50/95 px-4 py-2 text-xs font-semibold tracking-wider text-slate-500 uppercase backdrop-blur">

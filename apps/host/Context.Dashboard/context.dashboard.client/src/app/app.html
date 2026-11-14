@@ -1,25 +1,25 @@
-<div class="flex min-h-screen flex-col bg-slate-50 text-slate-900">
-  <header class="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
-    <div class="mx-auto flex h-14 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+<div class="flex min-h-screen flex-col bg-gradient-to-b from-slate-50 via-slate-50 to-indigo-50/30 text-slate-900">
+  <header class="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur-md">
+    <div class="mx-auto flex h-14 max-w-6xl items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
       <a
         routerLink="/projects"
-        class="brand flex items-center gap-2.5 text-slate-900 no-underline transition hover:opacity-85"
+        class="brand flex min-w-0 items-center gap-2.5 text-slate-900 no-underline transition hover:opacity-85"
       >
         <span
-          class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-xs"
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-xs"
         >
           <app-icon name="hub" sizeClass="w-4 h-4" />
         </span>
-        <span class="text-sm font-semibold tracking-tight sm:text-base">Context Platform</span>
+        <span class="truncate text-sm font-semibold tracking-tight sm:text-base">Context Platform</span>
       </a>
 
       @if (health(); as h) {
         <span
-          class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset"
+          class="inline-flex shrink-0 items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset transition"
           [class]="
             h.healthy
-              ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
-              : 'bg-amber-50 text-amber-800 ring-amber-200'
+              ? 'bg-emerald-50/90 text-emerald-700 ring-emerald-200'
+              : 'bg-amber-50/90 text-amber-800 ring-amber-200'
           "
           [title]="
             'DB: ' +
@@ -32,14 +32,22 @@
             h.llmProvider
           "
         >
-          <app-icon [name]="h.healthy ? 'check-circle' : 'error'" sizeClass="w-3.5 h-3.5" />
-          {{ h.healthy ? 'Healthy' : 'Degraded' }}
+          <span
+            class="h-2 w-2 shrink-0 rounded-full"
+            [class]="h.healthy ? 'bg-emerald-500' : 'bg-amber-500'"
+          ></span>
+          <span class="hidden sm:inline">
+            {{ h.healthy ? 'Healthy' : 'Degraded' }} · {{ h.embeddingProvider }} / {{ h.llmProvider }}
+          </span>
+          <span class="sm:hidden">
+            {{ h.healthy ? 'Healthy' : 'Degraded' }}
+          </span>
         </span>
       } @else if (healthError()) {
         <span
-          class="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-3 py-1 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-200"
+          class="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-rose-50 px-3 py-1 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-200"
         >
-          <app-icon name="error" sizeClass="w-3.5 h-3.5" />
+          <span class="h-2 w-2 rounded-full bg-rose-500"></span>
           Host unreachable
         </span>
       }

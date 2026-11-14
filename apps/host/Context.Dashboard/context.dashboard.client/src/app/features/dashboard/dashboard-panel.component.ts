@@ -5,6 +5,7 @@ import { ApiService } from '../../core/api.service';
 import { ReindexProgressEvent } from '../../core/models';
 import { SignalrService } from '../../core/signalr.service';
 import { BadgeComponent } from '../../shared/ui/badge.component';
+import { DonutChartComponent, DonutSegment } from '../../shared/ui/donut-chart.component';
 import { EmptyStateComponent } from '../../shared/ui/empty-state.component';
 import { IconComponent } from '../../shared/ui/icon.component';
 import { ProgressBarComponent } from '../../shared/ui/progress-bar.component';
@@ -28,6 +29,7 @@ const PROGRESS_IDLE_TIMEOUT_MS = 15000;
     ProgressBarComponent,
     BadgeComponent,
     EmptyStateComponent,
+    DonutChartComponent,
     DashboardJobsCardComponent,
     DashboardHooksCardComponent,
     LogsDialogComponent,
@@ -56,6 +58,19 @@ export class DashboardPanelComponent {
   protected readonly reindexProgress = signal<ReindexProgressEvent | null>(null);
   protected readonly showReindexProgress = signal(false);
   protected readonly logsOpen = signal(false);
+
+  protected readonly jobQueueSegments = computed<readonly DonutSegment[]>(() => {
+    const hostStatus = this.status();
+    if (!hostStatus) {
+      return [];
+    }
+    return [
+      { label: 'Completed', value: hostStatus.jobsDone, color: '#10b981' },
+      { label: 'Running', value: hostStatus.jobsRunning, color: '#4f46e5' },
+      { label: 'Pending', value: hostStatus.jobsPending, color: '#f59e0b' },
+      { label: 'Failed', value: hostStatus.jobsFailed, color: '#ef4444' },
+    ];
+  });
 
   private hideTimer?: ReturnType<typeof setTimeout>;
 

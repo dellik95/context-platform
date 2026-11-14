@@ -20,7 +20,7 @@ Context Platform допомагає Claude Code та іншим MCP-сумісн
 
 ```mermaid
 flowchart LR
-    Agent["Claude Code / MCP Client"] -->|"MCP Streamable HTTP (/mcp)"| Server["Context.Dashboard.Server (ASP.NET Core 10)"]
+    Agent["Claude Code / MCP Client"] -->|"MCP Streamable HTTP (/mcp)"| Server["Context.Dashboard.Server (ASP.NET Core 11)"]
     Agent -->|"Lifecycle Hooks (/hooks/*)"| Server
     Browser["Angular 22 + Tailwind v4 SPA"] -->|"REST API + SignalR (/hubs/indexing)"| Server
 
@@ -50,9 +50,9 @@ flowchart LR
 
 ## Швидкий старт
 
-### Варіант 1: Локальний запуск (.NET 10 + Angular 22)
+### Варіант 1: Локальний запуск (.NET 11 + Angular 22)
 
-**Передумови:** `.NET SDK 10.0.100+` (`global.json`), `Node.js 22+` та `npm 11+`.
+**Передумови:** `.NET SDK 11.0.100+` (`global.json`), `Node.js 22+` та `npm 11+`.
 
 1. **Клонуйте репозиторій та зберіть SPA-клієнт:**
    ```bash
@@ -128,6 +128,5 @@ docker compose up -d --build
 - 📘 **[Посібник користувача (USER_GUIDE.md)](docs/uk/USER_GUIDE.md)** — покрокове встановлення, огляд усіх вкладок дашборду зі скриншотами, інтеграція з Claude Code, типові сценарії та усунення неполадок.
 - 🏗️ **[Архітектура системи (ARCHITECTURE.md)](docs/uk/ARCHITECTURE.md)** — шари проєкту, декомпозиція backend-координаторів, UI-система на Tailwind CSS v4, SQLite + `sqlite-vec`, черга завдань `JobDispatcher`, SignalR та модель безпеки з діаграмами.
 - ⚙️ **[Головні можливості та алгоритми (FEATURES.md)](docs/uk/FEATURES.md)** — формула гібридного скорингу, бюджетування `ContextPackBuilder`, Tree-sitter AST & `SymbolDiffer`, цикл памʼяті та реконсолідація з перевіркою по коду, телеметрія економії токенів.
-- 📐 **[Cross-Cutting Contracts (CONTRACTS.md)](docs/architecture/CONTRACTS.md)** — доменні сутності, інтерфейси та контракти між проєктами (англійською).
 - 🗺️ **[Roadmap (ROADMAP.md)](ROADMAP.md)** — статус реалізованих і запланованих фіч (англійською).
 - 🚀 **[Service Deployment (deploy/README.md)](deploy/README.md)** — інсталяція у `systemd` та Windows Service (англійською).

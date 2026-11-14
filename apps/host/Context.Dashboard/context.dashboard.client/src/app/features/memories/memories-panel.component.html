@@ -74,8 +74,58 @@
       "
     />
   } @else {
+    @if (typeBreakdown().length > 0) {
+      <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
+        <div class="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+          <span class="text-xs font-semibold tracking-wide text-slate-600 uppercase">
+            Knowledge distribution · {{ memories().length }} {{ memories().length === 1 ? 'memory' : 'memories' }}
+          </span>
+          @if (selectedType()) {
+            <button
+              type="button"
+              class="text-xs font-medium text-indigo-600 hover:text-indigo-700"
+              (click)="selectedType.set(null)"
+            >
+              Show all
+            </button>
+          }
+        </div>
+
+        <div class="mb-3 flex h-2 w-full overflow-hidden rounded-full bg-slate-100" role="presentation">
+          @for (stat of typeBreakdown(); track stat.type) {
+            <div
+              class="h-full transition-opacity"
+              [style.width.%]="(stat.count / memories().length) * 100"
+              [style.background-color]="stat.color"
+              [style.opacity]="selectedType() && selectedType() !== stat.type ? 0.3 : 1"
+              [title]="stat.type + ': ' + stat.count + ' (' + stat.percent + '%)'"
+            ></div>
+          }
+        </div>
+
+        <div class="flex flex-wrap gap-1.5">
+          @for (stat of typeBreakdown(); track stat.type) {
+            <button
+              type="button"
+              class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition"
+              [class]="
+                selectedType() === stat.type
+                  ? 'border-indigo-300 bg-indigo-50 text-indigo-800 ring-1 ring-indigo-200'
+                  : 'border-slate-200 bg-slate-50/70 text-slate-700 hover:bg-slate-100'
+              "
+              (click)="toggleTypeFilter(stat.type)"
+            >
+              <span class="h-2 w-2 rounded-full" [style.background-color]="stat.color"></span>
+              <span>{{ stat.type }}</span>
+              <span class="text-[11px] text-slate-500 tabular-nums">{{ stat.count }}</span>
+            </button>
+          }
+        </div>
+      </section>
+    }
+
     <div class="space-y-3">
-      @for (memory of memories(); track memory.id) {
+      @for (memory of visibleMemories(); track memory.id) {
         <app-memory-card
           [memory]="memory"
           [detailState]="details()[memory.id]"

@@ -102,7 +102,7 @@ export function buildNetworkOptions(dense: boolean): VisOptions {
     autoResize: true,
     height: '100%',
     width: '100%',
-    interaction: { hover: true, tooltipDelay: 150, navigationButtons: true, keyboard: false },
+    interaction: { hover: true, tooltipDelay: 150, navigationButtons: false, keyboard: false },
     physics: {
       stabilization: { iterations: dense ? 60 : 150, fit: true },
       barnesHut: dense

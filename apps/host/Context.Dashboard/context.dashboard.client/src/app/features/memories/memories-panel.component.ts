@@ -3,7 +3,7 @@ import { Component, DestroyRef, computed, effect, inject, signal } from '@angula
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormField, form } from '@angular/forms/signals';
 import { ApiService } from '../../core/api.service';
-import { Memory } from '../../core/models';
+import { Memory, MemoryType } from '../../core/models';
 import { SignalrService } from '../../core/signalr.service';
 import { ConfirmDialogService } from '../../shared/confirm-dialog/confirm-dialog.service';
 import { EmptyStateComponent } from '../../shared/ui/empty-state.component';
@@ -14,6 +14,25 @@ import { ToastService } from '../../shared/ui/toast.service';
 import { ProjectContextService } from '../projects/project-context.service';
 import { ConsolidationDialogComponent } from './consolidation-dialog.component';
 import { MemoryCardComponent, MemoryDetailState } from './memory-card.component';
+
+const MEMORY_TYPE_COLORS: Record<MemoryType, string> = {
+  Decision: '#7c3aed',
+  Architecture: '#4f46e5',
+  Constraint: '#8b5cf6',
+  Fact: '#0ea5e9',
+  Discovery: '#10b981',
+  Procedure: '#06b6d4',
+  Configuration: '#64748b',
+  Behavior: '#f59e0b',
+  Issue: '#ef4444',
+};
+
+interface MemoryTypeStat {
+  type: MemoryType;
+  count: number;
+  percent: number;
+  color: string;
+}
 
 @Component({
   selector: 'app-memories-panel',
@@ -52,6 +71,36 @@ export class MemoriesPanelComponent {
   protected readonly deletingId = signal<string | null>(null);
   protected readonly details = signal<Record<string, MemoryDetailState>>({});
   protected readonly consolidationOpen = signal(false);
+  protected readonly selectedType = signal<MemoryType | null>(null);
+
+  protected readonly typeBreakdown = computed<readonly MemoryTypeStat[]>(() => {
+    const items = this.memories();
+    if (items.length === 0) {
+      return [];
+    }
+    const counts = new Map<MemoryType, number>();
+    for (const m of items) {
+      counts.set(m.type, (counts.get(m.type) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([type, count]) => ({
+        type,
+        count,
+        percent: Math.round((count / items.length) * 100),
+        color: MEMORY_TYPE_COLORS[type] ?? '#64748b',
+      }));
+  });
+
+  protected readonly visibleMemories = computed(() => {
+    const items = this.memories();
+    const filter = this.selectedType();
+    return filter ? items.filter((m) => m.type === filter) : items;
+  });
+
+  protected toggleTypeFilter(type: MemoryType): void {
+    this.selectedType.update((current) => (current === type ? null : type));
+  }
 
   private lastSearchedProjectId = '';
 

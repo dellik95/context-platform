@@ -1,8 +1,6 @@
 name: CI
 
-# First CI pass for this repo (no hosting platform was previously configured for it —
-# see docs/architecture/ARCHITECTURE_ASSESSMENT.md, BACKLOG-17 / IDX-1). Keep this minimal:
-# build + test only. No deploy, no image publishing — that is separate future work.
+# Minimal CI workflow: build and test for .NET 11, Angular dashboard, and container image.
 on:
   push:
   pull_request:

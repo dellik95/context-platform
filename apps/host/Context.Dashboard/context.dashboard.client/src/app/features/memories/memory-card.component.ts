@@ -219,6 +219,12 @@ function parseStringArray(json: string | null): string[] | null {
           <span class="rounded-md bg-slate-100 px-2 py-0.5 font-medium text-slate-700">{{ memory().topic }}</span>
         }
         <span>{{ memory().confidence | percent: '1.0-0' }} confidence</span>
+        <span class="h-1.5 w-14 overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
+          <span
+            class="block h-full rounded-full bg-indigo-500"
+            [style.width.%]="memory().confidence * 100"
+          ></span>
+        </span>
         <span>· {{ memory().sourceCount }} {{ memory().sourceCount === 1 ? 'source' : 'sources' }}</span>
         @if (memory().reinforcementCount > 0) {
           <span>· reinforced ×{{ memory().reinforcementCount }}</span>

@@ -1,7 +1,8 @@
 import { CommonModule } from '@angular/common';
 import { Component, computed, inject, signal } from '@angular/core';
 import { ApiService } from '../../core/api.service';
-import { UsageDayDto } from '../../core/models';
+import { ActivityBarChartComponent } from '../../shared/ui/activity-bar-chart.component';
+import { DonutChartComponent, DonutSegment } from '../../shared/ui/donut-chart.component';
 import { EmptyStateComponent } from '../../shared/ui/empty-state.component';
 import { IconComponent } from '../../shared/ui/icon.component';
 import { ProgressBarComponent } from '../../shared/ui/progress-bar.component';
@@ -9,69 +10,26 @@ import { ProjectContextService } from '../projects/project-context.service';
 
 type DayRange = 7 | 30 | 90;
 
-interface UsageChartBar {
-  day: string;
-  label: string;
-  tokens: number;
-  calls: number;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-interface UsageChart {
-  width: number;
-  height: number;
-  plotHeight: number;
-  maxTokens: number;
-  bars: UsageChartBar[];
-  labelStride: number;
-}
-
-const CHART_WIDTH = 640;
-const CHART_HEIGHT = 180;
-const CHART_BOTTOM_PADDING = 22;
-const CHART_BAR_GAP = 3;
-const MAX_LABELS = 8;
-
-function formatDayLabel(day: string): string {
-  return new Date(`${day}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
-function buildChart(byDay: UsageDayDto[]): UsageChart | null {
-  if (byDay.length === 0) {
-    return null;
-  }
-  const maxTokens = Math.max(...byDay.map((d) => d.tokens), 1);
-  const barWidth = (CHART_WIDTH - CHART_BAR_GAP * (byDay.length - 1)) / byDay.length;
-  const plotHeight = CHART_HEIGHT - CHART_BOTTOM_PADDING;
-  const bars = byDay.map((d, i) => {
-    const barHeight = (d.tokens / maxTokens) * plotHeight;
-    return {
-      day: d.day,
-      label: formatDayLabel(d.day),
-      tokens: d.tokens,
-      calls: d.calls,
-      x: i * (barWidth + CHART_BAR_GAP),
-      y: plotHeight - barHeight,
-      width: Math.max(barWidth, 0.5),
-      height: d.tokens > 0 ? Math.max(barHeight, 1) : 0,
-    };
-  });
-  return {
-    width: CHART_WIDTH,
-    height: CHART_HEIGHT,
-    plotHeight,
-    maxTokens,
-    bars,
-    labelStride: Math.max(1, Math.ceil(byDay.length / MAX_LABELS)),
-  };
-}
+const PURPOSE_COLORS = [
+  '#4f46e5',
+  '#0ea5e9',
+  '#10b981',
+  '#8b5cf6',
+  '#f59e0b',
+  '#ec4899',
+  '#64748b',
+] as const;
 
 @Component({
   selector: 'app-usage-panel',
-  imports: [CommonModule, IconComponent, ProgressBarComponent, EmptyStateComponent],
+  imports: [
+    CommonModule,
+    IconComponent,
+    ProgressBarComponent,
+    EmptyStateComponent,
+    ActivityBarChartComponent,
+    DonutChartComponent,
+  ],
   templateUrl: './usage-panel.component.html',
 })
 export class UsagePanelComponent {
@@ -96,5 +54,42 @@ export class UsagePanelComponent {
 
   protected readonly estimatedSavedTokens = computed(() => this.summary()?.totalEstimatedSavedTokens ?? 0);
   protected readonly estimatedNetTokens = computed(() => this.summary()?.estimatedNetTokens ?? 0);
-  protected readonly chart = computed(() => buildChart(this.summary()?.byDay ?? []));
+
+  protected readonly savingsMultiple = computed(() => {
+    const summary = this.summary();
+    if (!summary || summary.totalTokens <= 0) {
+      return null;
+    }
+    return summary.totalEstimatedSavedTokens / summary.totalTokens;
+  });
+
+  protected readonly purposeSegments = computed<readonly DonutSegment[]>(() => {
+    const summary = this.summary();
+    if (!summary) {
+      return [];
+    }
+    return summary.byPurpose.map((p, index) => ({
+      label: p.purpose,
+      value: p.tokens > 0 ? p.tokens : p.estimatedSavedTokens,
+      color: PURPOSE_COLORS[index % PURPOSE_COLORS.length],
+      hint: `${p.calls} calls · saved ${p.estimatedSavedTokens.toLocaleString()} est.`,
+    }));
+  });
+
+  protected readonly purposeTotal = computed(() =>
+    this.purposeSegments().reduce((sum, seg) => sum + seg.value, 0),
+  );
+
+  protected purposeColor(index: number): string {
+    return PURPOSE_COLORS[index % PURPOSE_COLORS.length];
+  }
+
+  protected purposeSharePercent(tokens: number, saved: number): number {
+    const total = this.purposeTotal();
+    if (total <= 0) {
+      return 0;
+    }
+    const metric = tokens > 0 ? tokens : saved;
+    return Math.min(100, Math.round((metric / total) * 100));
+  }
 }

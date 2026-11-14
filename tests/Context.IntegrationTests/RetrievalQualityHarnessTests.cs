@@ -19,7 +19,7 @@ using Xunit.Abstractions;
 namespace Context.IntegrationTests;
 
 /// <summary>
-/// BACKLOG-12 (see ARCHITECTURE_ASSESSMENT.md RAG-3): a golden-query retrieval-quality evaluation
+/// Golden-query retrieval-quality evaluation
 /// harness for the code-search path (<see cref="ISearchEngine.SearchAsync"/> -&gt;
 /// <see cref="HybridSearchEngine"/> -&gt; <c>HybridScorer</c>). Before this test existed, the only
 /// coverage of that path was formula-level unit tests against hand-rolled fakes

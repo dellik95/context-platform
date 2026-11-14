@@ -33,9 +33,9 @@ public sealed class BackupDbJobHandler(
 
         var backupPath = Path.Combine(backupsDir, $"context-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}.db");
 
-        // Parameterized via FormattableString -> ExecuteSqlInterpolatedAsync so the path is never
+        // Parameterized via FormattableString -> ExecuteSqlAsync so the path is never
         // string-concatenated into the SQL text, even though it's a process-generated path here.
-        await db.Database.ExecuteSqlInterpolatedAsync($"VACUUM INTO {backupPath}", ct).ConfigureAwait(false);
+        await db.Database.ExecuteSqlAsync($"VACUUM INTO {backupPath}", ct).ConfigureAwait(false);
 
         PruneOldBackups(backupsDir);
     }

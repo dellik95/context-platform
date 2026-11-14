@@ -71,7 +71,20 @@
       icon="search"
       title="Ready to search"
       description="Search across indexed code, memories, and architecture summaries for this project."
-    />
+    >
+      <div class="flex flex-wrap items-center justify-center gap-2">
+        <span class="text-[11px] font-medium text-slate-400">Try:</span>
+        @for (example of exampleQueries; track example) {
+          <button
+            type="button"
+            class="rounded-full border border-indigo-200 bg-indigo-50/70 px-3 py-1 text-xs font-medium text-indigo-700 transition hover:bg-indigo-100"
+            (click)="runExampleQuery(example)"
+          >
+            {{ example }}
+          </button>
+        }
+      </div>
+    </app-empty-state>
   } @else if (result(); as pack) {
     @if (pack.architectureSummary) {
       <section class="rounded-2xl border border-indigo-200 bg-indigo-50/60 p-5">
@@ -99,7 +112,11 @@
                 </app-badge>
                 <span class="truncate font-mono text-sm font-medium text-slate-900">{{ hit.label }}</span>
               </div>
-              <span class="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-600">
+              <span
+                class="inline-flex items-center gap-1.5 rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700"
+                title="Hybrid relevance score"
+              >
+                <span class="h-1.5 w-1.5 rounded-full bg-indigo-500"></span>
                 {{ hit.score | number: '1.3-3' }}
               </span>
             </div>

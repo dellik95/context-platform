@@ -6,7 +6,7 @@ the same container image that would run against any other repo.
 
 The image (built from the `Dockerfile` at the repo root) publishes `Context.Dashboard.Server` (the
 always-on API/MCP/worker process) for `linux-x64`, on top of the official
-`mcr.microsoft.com/dotnet/aspnet:10.0` runtime image. It needs no external services — SQLite and
+`mcr.microsoft.com/dotnet/aspnet:11.0` runtime image. It needs no external services — SQLite and
 the tree-sitter native grammars are both self-contained inside the .NET packages the app already
 depends on, and every AI provider defaults to its offline/no-op implementation.
 
@@ -21,22 +21,26 @@ This builds the image, starts `Context.Dashboard.Server` bound to `127.0.0.1:479
 `docker-compose.yml`'s `HOST_PROJECT_PATH` defaults to `.`, so out of the box it's set up to index
 Context Platform's own source tree.
 
-Then drive it exactly like the bare-metal CLI, via the `context` wrapper baked into the image:
+Then open the Dashboard at **`http://127.0.0.1:47923`** (enter `CONTEXT_PLATFORM_ADMIN_TOKEN` when prompted) to create the project at `/workspace`, trigger indexing, explore Search/Graph/Memories, and check system status — or drive the REST API directly:
 
 ```bash
-docker compose exec context-platform context project create --name self --path /workspace
-docker compose exec context-platform context index --project <id> --full
-docker compose exec context-platform context search "job dispatcher" --project <id>
-docker compose exec context-platform context doctor --project <id>
+# 1. Register /workspace (returns the project id + one-time project bearer token)
+curl -fsS -X POST http://127.0.0.1:47923/api/projects \
+  -H "X-Admin-Token: ${CONTEXT_PLATFORM_ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"self","rootPath":"/workspace"}'
+
+# 2. Trigger a full reindex and run a search using the project bearer token
+curl -fsS -X POST "http://127.0.0.1:47923/api/projects/<id>/index?full=true" \
+  -H "Authorization: Bearer <project-token>"
+curl -fsS "http://127.0.0.1:47923/api/search?q=job+dispatcher" \
+  -H "Authorization: Bearer <project-token>"
+
+# 3. Host health check
+curl -fsS http://127.0.0.1:47923/health
 ```
 
-`context claude install` is **not** part of this quick start — see "Read-only workspace mount"
-below for why, and what to do if you want it.
-
-Project creation above needs an admin token: `docker-compose.yml` requires
-`CONTEXT_PLATFORM_ADMIN_TOKEN` to be set (`POST /api/projects` is gated by it — see
-`AdminTokenAuth`), and `docker compose exec` inherits it from the container's own environment, so
-`context project create` above picks it up with no extra flags.
+Installing Claude Code integration into the repo (`POST /api/projects/{id}/claude/install`) is **not** part of this read-only quick start — see "Read-only workspace mount" below for why, and how to set it up.
 
 ## Read-only workspace mount
 
@@ -45,15 +49,10 @@ indexing/search/embedding only ever needs to *read* the source tree, so nothing 
 can modify the real repo it's indexing — a bug or a compromised dependency here can't corrupt your
 working copy.
 
-One consequence: `context claude install` (and the dashboard's "write settings locally" option)
-write `.mcp.json`/`.claude/context-platform.local.json` *into the project root* — that's how a
-host-side Claude Code picks them up — and that write now fails against the read-only mount. If you
-want that integration:
+One consequence: the Dashboard's **Register Claude Code integration** button (`POST /api/projects/{id}/claude/install` and "write settings locally") tries to write `.mcp.json`/`.claude/settings.json` *into the project root* so host-side Claude Code picks them up, and that write fails against the read-only mount. If you want that integration:
 
-- run `context claude install` from a bare-metal `dotnet run`/`context` instead (same shared
-  database format, so switching between bare-metal and container is safe), or
-- temporarily drop the `:ro` in `docker-compose.yml`'s workspace volume line, run `context claude
-  install` once, then put it back.
+- run bare-metal `Context.Dashboard.Server` once from the host to install hooks/`.mcp.json` (same SQLite schema), or
+- temporarily remove `:ro` from `docker-compose.yml`'s workspace volume mount, run **Register Claude Code integration** from **Settings**, then restore `:ro`.
 
 The app's own data (see "Logs and data" below) is unaffected either way: it lives on its own
 writable volume, not under this read-only mount.

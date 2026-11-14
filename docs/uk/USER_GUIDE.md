@@ -20,7 +20,7 @@
 
 | Компонент | Мінімальна версія | Для чого потрібен |
 | :--- | :--- | :--- |
-| **.NET SDK** | `10.0.100` (`global.json`) | Збірка та запуск `Context.Dashboard.Server` і тестів |
+| **.NET SDK** | `11.0.100` (`global.json`) | Збірка та запуск `Context.Dashboard.Server` і тестів |
 | **Node.js & npm** | Node 22+ / npm 11+ | Збірка Angular 22 + Tailwind CSS v4 фронтенду |
 | **Ollama / Foundry Local** *(опціонально)* | Актуальна | Локальні ембединги (`embeddinggemma`) та LLM (`qwen2.5-coder:1.5b`) |
 | **OpenAI / Anthropic API Key** *(опціонально)* | — | Хмарні провайдери ембедингів / чату з автоматичним редагуванням секретів |
@@ -84,11 +84,11 @@ docker compose up -d --build
 
 ### 3.1. Список проєктів (`Projects`)
 
-Стартова сторінка відображає всі зареєстровані проєкти, їхній кореневий шлях, кількість проіндексованих файлів і символів.
+Стартова сторінка зустрічає hero-блоком із коротким описом можливостей платформи та адаптивною сіткою зареєстрованих проєктів (кореневий шлях, статус індексації, кількість файлів, символів та спогадів).
 
 ![Список проєктів](../images/projects.png)
 
-- **Add project** — створення нового проєкту з вбудованим провідником папок (**Folder Picker**) на серверній файловій системі (`GET /api/fs/browse`).
+- **Register a project / Add project** — створення нового проєкту з вбудованим провідником папок (**Folder Picker**) на серверній файловій системі (`GET /api/fs/browse`).
 - На локальному хості (`127.0.0.1`) адмін-токен завантажується автоматично без екрана логіну.
 - Якщо створюється проєкт на віддаленому/не-loopback хості, введіть `CONTEXT_PLATFORM_ADMIN_TOKEN` один раз у панелі адміністратора.
 
@@ -96,17 +96,17 @@ docker compose up -d --build
 
 ### 3.2. Головна панель проєкту (`Dashboard`)
 
-Вкладка **Dashboard** показує оперативний стан конкретного проєкту: прогрес індексації в реальному часі, активні черги фонових завдань і потік викликів Claude-хуків.
+Вкладка **Dashboard** показує оперативний стан конкретного проєкту: ключові метрики, стан хоста й AI-провайдерів, живу кільцеву діаграму черги завдань і стрічку Claude-хуків.
 
 ![Головна панель Dashboard](../images/dashboard.png)
 
-- **Статус-картки:** кількість файлів, символів, графових вузлів, активних/історичних спогадів, час останньої індексації.
-- **Швидкі дії:**
-  - `Reindex` — інкрементальна переіндексація змінених файлів;
+- **KPI-картки з іконками:** `Files indexed`, `Symbols mapped`, `Memories stored`, `Last indexed`.
+- **Панель швидких дій:**
+  - `Reindex changed files` — інкрементальна переіндексація змінених файлів;
   - `Full reindex` — повне пересканування та перебудова графу;
   - `Rebuild Vectors` — повторне створення векторних колекцій `sqlite-vec` (корисно після зміни моделі або провайдера ембедингів);
   - `Cancel running index` — скасування активної індексації.
-- **Job Queue Card:** моніторинг завдань у станах `Pending`, `Running`, `Done`, `Failed`, кнопки **Retry failed**, **Force unstuck** та **View logs** (хвіст поточного Serilog-логу у модальному вікні).
+- **Host runtime & AI stack + `Job queue distribution` (`DonutChart`):** індикатори працездатності `Database`, `Job dispatcher`, `MCP server`, активні моделі `Embeddings` / `LLM`, аптайм хоста, кнопка **Host logs** (модальне вікно з останніми логами Serilog) та інтерактивна кільцева діаграма розподілу завдань (`Pending`, `Running`, `Failed`, `Completed`) із підсумковими картками та діями **Retry failed** / **Clear completed**.
 - **Hook Activity Card:** жива стрічка викликів хуків (`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PostCompact`, `Stop`, `SessionEnd`), що оновлюється через SignalR.
 
 ---
@@ -117,25 +117,25 @@ docker compose up -d --build
 
 ![Гібридний пошук та Context Pack](../images/search.png)
 
-Доступні два режими пошуку:
-- **Context Pack (`context_search`)** — повертає структурований пакет із урахуванням токенного бюджету (`TokenBudget`): архітектурне резюме (`ArchitectureSummary`), первинні фрагменти коду (`PrimaryHits`), історичні нотатки памʼяті (`HistoricalNotes`) та відкриті питання (`OpenIssues`).
+- **Швидкі підказки запитів** (`hybrid search`, `JobDispatcher`, `MemoryConsolidator`, `MCP tools` тощо) та панель **Advanced options** (`Scope path`, `Token budget`, режим **Context Pack** або **Code Search**).
+- **Context Pack (`context_search`)** — повертає структурований пакет із урахуванням токенного бюджету: картка `ARCHITECTURE SUMMARY`, первинні фрагменти коду (`PrimaryHits` із типом символу та фіолетовим індикатором скору), історичні нотатки памʼяті (`HistoricalNotes`) та відкриті питання (`OpenIssues`).
 - **Code Search (`code_search`)** — сирий ранжований список збігів по коду та файлових саммарі без обрізання секцій бюджетувальником.
 
 ---
 
 ### 3.4. База знань та реконсолідація (`Memories`)
 
-Вкладка **Memories** керує довготривалою памʼяттю проєкту.
+Вкладка **Memories** керує довготривалою памʼяттю проєкту та візуалізує її склад.
 
 ![Управління памʼяттю проєкту](../images/memories.png)
 
-Кожна картка памʼяті показує:
-- **Тип (`MemoryType`):** `Decision`, `Architecture`, `Constraint`, `Behavior`, `Configuration`, `Discovery`, `Procedure`, `Issue`, `Fact`;
-- **Статус (`MemoryStatus`) та рівень (`MemoryTier`):** `Active` / `Contested` / `Superseded` / `Obsolete` та `Working` / `LongTerm`;
-- **Тему (`Topic`), скоуп (`ScopePath`), впевненість (`Confidence`) та кількість підтверджень (`Reinforcements`, `Sources`)**;
-- **Атомарні факти (`Facts`)** — стислий список тез для швидкої інʼєкції в контекст із мінімумом токенів;
-- **Повʼязані файли та докази (`Evidence`)** — розкривається натисканням, показуючи першоджерела (сесії, злиття, ручні записи) або позначки перевірки коду (`Verify against code`).
-- **Дії над карткою:** `Pin` (закріпити від згасання), `Delete`, фільтрація за текстом і статусом (`Include inactive`), а також `Refresh` / `Cleanup empty`.
+- **Knowledge distribution & клікабельні фільтри:** кольорова смуга розподілу знань і чіпи швидкої фільтрації за `MemoryType` (`Decision`, `Architecture`, `Constraint`, `Behavior`, `Configuration`, `Discovery`, `Procedure`, `Issue`, `Fact`), плюс текстовий пошук і перемикач `Include inactive`.
+- **Картка памʼяті** показує:
+  - кольоровий тип (`MemoryType`), статус (`Active` / `Contested` / `Superseded` / `Obsolete`) і рівень (`Working` / `LongTerm`);
+  - тему (`Topic`), скоуп (`ScopePath`), візуальний індикатор впевненості (`Confidence` %) та кількість підтверджень (`Reinforcements`, `Sources`);
+  - **атомарні факти (`Facts`)** — стислий список тез для швидкої інʼєкції в контекст із мінімумом токенів;
+  - **повʼязані файли та докази (`Evidence`)** — розкривається натисканням, показуючи першоджерела (сесії, злиття, ручні записи) та статус верифікації в коді (`Verify against code`);
+  - дії над карткою: `Pin` (закріпити від згасання), `Delete`, а також верхні дії **Consolidate** / **Cleanup empty**.
 
 #### Інтерактивна реконсолідація (`Consolidate Memories`)
 
@@ -169,8 +169,8 @@ docker compose up -d --build
 
 ![Граф коду та Blast Radius](../images/graph.png)
 
-- **Режим пошуку (Blast Radius):** знайдіть будь-який символ (`ContextEngine`, клас, метод, інтерфейс) через автодоповнення, задайте `Max hops` (за замовчуванням `3`) і досліджуйте вузли інтерактивно.
-- **Права панель-інспектор (`Node Inspector`):** показує повне кваліфіковане імʼя вузла, `Node ID`, `Ref ID`, та дозволяє перецентрувати граф (`Re-center on this node`) або перейти до blast radius конкретного вузла.
+- **Режим пошуку (Blast Radius):** знайдіть будь-який символ (`JobDispatcher`, клас, метод, інтерфейс) через автодоповнення, задайте `Max hops` (за замовчуванням `3`) і досліджуйте граф із плаваючими елементами керування маcштабом (`+`, `−`, `Fit graph`) та кольоровою легендою вузлів (`Class / Type`, `Method / Fn`, `Interface`, `File`, `Test`, `Structural`).
+- **Права панель-інспектор (`Node Inspector`):** відображає коротку назву вибраного вузла, бейджі типу й стану (`Centered`), повне кваліфіковане імʼя, `Node ID`, `Ref ID`, та кнопку **Re-center on this node**.
 - **Списки під графом:** структуровані бакети `Methods`, `Callers`, `Implementers` та `Covering tests` (такі ж дані отримує агент через MCP-інструмент `graph_impact`).
 - **Перемикач `Full graph`:** завантажує топологію всього репозиторію (`GET /api/graph/full`) з автоматичним спрощенням рендерингу для великих графів (>300 вузлів).
 
@@ -197,8 +197,9 @@ docker compose up -d --build
 ![Аналітика витрат та економії токенів](../images/usage.png)
 
 - Перемикач вікна: `7d`, `30d`, `90d`.
-- **KPI-картки:** `Total tokens spent`, `Total LLM / MCP calls`, `Avg tokens / call`, `Tokens saved EST.` (зелений акцент — оцінка токенів, які не довелося читати повністю з файлів), та `Net balance EST.` (`saved - spent`).
-- Графік денних витрат (`Tokens spent by day`) і таблиця розбивки за призначенням (`session_summarize`, `file_summarize`, `memory_extract`, `context_pack`, `code_search`).
+- **5 KPI-карток:** `Total tokens spent`, `Total LLM / MCP calls`, `Avg tokens / call`, `Tokens saved EST.` (зелений градієнтний акцент — оцінка токенів, які не довелося читати повністю з файлів), та `Net balance EST.` (`saved - spent`) із індикатором мультиплікатора економії (`2.1x`).
+- **Інтерактивний графік `Daily activity — tokens spent vs. saved (est.)`:** згруповані стовпчики витрачених та зекономлених токенів по днях із перемикачем серій (`Both` / `Spent` / `Saved est.`) та hover-деталізацією за день.
+- **`Breakdown by purpose` + `Distribution by purpose` (`DonutChart`):** таблиця витрат та оціненої економії з пропорційними смугами частки й кільцева діаграма розподілу за призначенням (`memory_extraction`, `session_summary`, `context_search`, `file_summary`, `code_search`, `graph_impact`).
 
 ---
 
@@ -234,7 +235,7 @@ docker compose up -d --build
 
 ## 6. Тестування та перевірка кодової бази
 
-У WSL / Linux:
+Запуск усіх модульних та інтеграційних тестів із кореня репозиторію:
 ```bash
 dotnet test ContextPlatform.slnx --no-restore
 ```

@@ -5,40 +5,23 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- EF Core / SQLite -->
-    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12" />
-    <!-- 10.0.12, not 9.0.0: Microsoft.SemanticKernel.Connectors.SqliteVec 1.74.0-preview requires
-         Microsoft.Data.Sqlite >= 9.0.10, and the stale 9.0.0 pin caused an NU1109 package-downgrade
-         restore error for every project that pulls SqliteVec transitively. -->
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.12" />
-    <!-- Transitive-pin overrides for CVEs in EF Core Sqlite/Design's own dependencies (NU1903):
-         SQLitePCLRaw.lib.e_sqlite3 2.1.11 -> CVE-2025-6965 (needs SQLite >= 3.50.2);
-         System.Security.Cryptography.Xml 9.0.0 -> CVE-2026-26171 (fixed 9.0.15/10.0.6+). -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="11.0.0" />
     <PackageVersion Include="SQLitePCLRaw.core" Version="3.0.5" />
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
     <PackageVersion Include="SQLitePCLRaw.provider.e_sqlite3" Version="3.0.5" />
-    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.12" />
-    <!-- Transitive pin: Microsoft.AspNetCore.OpenApi 10.0.12 pulls Microsoft.OpenApi 2.x -
-         CVE-2026-49451 (circular schema reference causes stack-overflow crash), fixed 2.7.5+.
-         Held at the latest 2.x (not the 3.x major): AspNetCore.OpenApi's XmlCommentGenerator source
-         generator targets the 2.x `Microsoft.OpenApi` namespace shape - 3.x broke the build
-         (CS0234, namespace not found) even though both compile standalone. -->
-    <PackageVersion Include="Microsoft.OpenApi" Version="2.12.2" />
-    <!-- ASP.NET / SignalR client (server libs come from the shared framework) -->
-    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
-    <!-- Context.Dashboard.Server: dev-only SpaProxy hosting-startup middleware, see its own
-         SpaRoot/SpaProxyServerUrl/SpaProxyLaunchCommand properties in the csproj. -->
-    <PackageVersion Include="Microsoft.AspNetCore.SpaProxy" Version="10.0.12" />
-    <!-- CLI -->
-    <!-- MCP - bumped off the 0.2.0-preview API surface onto the 2.x stable release; needs a
-         build/test pass, the API shape moved significantly since that preview. -->
-    <PackageVersion Include="ModelContextProtocol" Version="2.2.0" />
-    <!-- Multi-instance job dispatch (IJobSignal Redis pub/sub backend, opt-in via CONTEXT_PLATFORM_REDIS).
-         3.x is a major bump over 2.9.17 - needs a build/test pass. -->
-    <PackageVersion Include="StackExchange.Redis" Version="3.3.1" />
-    <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
+    <PackageVersion Include="System.Security.Cryptography.Xml" Version="11.0.0" />
+    <!-- ASP.NET Core / OpenAPI / SignalR / SpaProxy -->
+    <PackageVersion Include="Microsoft.OpenApi" Version="3.11.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.SpaProxy" Version="11.0.0" />
+    <!-- MCP & Redis -->
+    <PackageVersion Include="ModelContextProtocol" Version="2.4.0" />
+    <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.4.0" />
+    <PackageVersion Include="StackExchange.Redis" Version="3.4.35" />
     <!-- Logging -->
     <PackageVersion Include="Serilog" Version="4.4.0" />
     <PackageVersion Include="Serilog.AspNetCore" Version="10.0.0" />
@@ -46,61 +29,39 @@
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageVersion Include="Serilog.Extensions.Hosting" Version="10.0.0" />
     <!-- Utilities -->
-    <PackageVersion Include="System.IO.Abstractions" Version="22.2.0" />
-    <!-- Microsoft.Extensions (DI/Options/Logging abstractions, used outside ASP.NET hosts too) -->
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
-    <!-- Context.Shared: SharedDataLocation reads the same IConfiguration (env-var backed) the host
-         and CLI already build, so it resolves the CONTEXT_PLATFORM_DATA_DIR override consistently. -->
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.12" />
-    <!-- Context.Application: JobDispatcher is a hosted-service-friendly IJobQueue (see JobDispatcher.cs) -->
-    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.12" />
-    <!-- Providers (Context.Providers): DI/HTTP plumbing for provider implementations -->
-    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.12" />
-    <!-- Context.Providers: ready-made retry/timeout for Ollama/Anthropic HTTP calls (AddResilienceHandler),
-         instead of hand-rolling retry logic; see ServiceCollectionExtensions.ConfigureLlmRetry. -->
-    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.10.0" />
-    <!-- Context.Providers: AI provider integrations built on Microsoft.Extensions.AI's IChatClient/
-         IEmbeddingGenerator instead of hand-rolled HTTP calls. -->
-    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.10.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.0" />
-    <PackageVersion Include="OllamaSharp" Version="5.4.30" />
+    <PackageVersion Include="System.IO.Abstractions" Version="23.0.0" />
+    <!-- Microsoft.Extensions -->
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Systemd" Version="11.0.0" />
+    <!-- AI Providers -->
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="11.0.0" />
+    <PackageVersion Include="OllamaSharp" Version="5.5.2" />
     <PackageVersion Include="Anthropic.SDK" Version="5.10.0" />
-    <!-- Context.Application: real ANN vector search (sqlite-vec) for chunk embeddings, replacing
-         SqliteSearchIndex's old brute-force cosine scan. Held at 10.1.0, NOT bumped with the rest:
-         Microsoft.SemanticKernel.Connectors.SqliteVec is still on the same 1.74.0-preview build (no
-         newer release exists) that was compiled against 10.1.0's VectorSearchOptions&lt;T&gt; shape;
-         anything newer removes a member it binds to, throwing MissingMethodException at runtime
-         despite both compiling cleanly (verified live against a throwaway probe app). Revisit once
-         SqliteVec itself ships a build against a newer VectorData.Abstractions. -->
+    <!-- Vector index: SqliteVec 1.74.0-preview was built against VectorData.Abstractions 10.1.0;
+         bumping VectorData.Abstractions higher removes VectorSearchOptions<T> members it binds to. -->
     <PackageVersion Include="Microsoft.Extensions.VectorData.Abstractions" Version="10.1.0" />
     <PackageVersion Include="Microsoft.SemanticKernel.Connectors.SqliteVec" Version="1.74.0-preview" />
-    <!-- Context.Application: token-aware overlapping-window chunking for whole-file doc/markdown
-         chunks (see IndexingPipeline.IndexUnparsedFileAsync), same 10.10.0 line as the
-         Microsoft.Extensions.AI packages above; still preview-only, no stable release exists yet. -->
-    <PackageVersion Include="Microsoft.Extensions.DataIngestion" Version="10.10.0-preview.1.26459.2" />
-    <PackageVersion Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
-    <!-- The vocabulary data TiktokenTokenizer.CreateForModel loads at runtime: without it every file that has
-         no language parser (markdown, JSON, config) fails to chunk with "tokenizer data file ... could not be loaded". -->
-    <PackageVersion Include="Microsoft.ML.Tokenizers.Data.O200kBase" Version="2.0.0" />
-    <!-- Context.Dashboard.Server: run as a native OS service on either platform (both packages are no-ops
-         when the process isn't actually launched by that platform's service manager). -->
-    <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.12" />
-    <!-- Context.IntegrationTests: in-process HTTP testing against Context.Dashboard.Server's real Program. -->
-    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.12" />
-    <!-- Context.Indexing: real tree-sitter bindings + bundled native grammars for every RID
-         (win/linux/osx, x64/x86/arm64) in one self-contained package — verified working directly
-         against the real native libs, no separate language-pack/runtime-redirect package needed. -->
+    <!-- Token-aware ingestion & tokenizers -->
+    <PackageVersion Include="Microsoft.Extensions.DataIngestion" Version="11.0.0-preview.1.26560.3" />
+    <PackageVersion Include="Microsoft.ML.Tokenizers" Version="3.0.0" />
+    <PackageVersion Include="Microsoft.ML.Tokenizers.Data.O200kBase" Version="3.0.0" />
+    <!-- AST parsing -->
     <PackageVersion Include="TreeSitter.DotNet" Version="1.3.0" />
     <!-- Testing -->
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.12.0" />
     <PackageVersion Include="xunit" Version="2.9.3" />
-    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
-    <!-- 8.10.0: v8+ requires a paid Xceed license for commercial use - confirmed accepted. -->
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
     <PackageVersion Include="FluentAssertions" Version="8.11.0" />
     <PackageVersion Include="Moq" Version="4.21.0" />
-    <PackageVersion Include="coverlet.collector" Version="10.0.1" />
+    <PackageVersion Include="coverlet.collector" Version="10.1.0" />
   </ItemGroup>
 </Project>

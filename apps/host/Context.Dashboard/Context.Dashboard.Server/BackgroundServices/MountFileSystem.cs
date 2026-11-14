@@ -41,7 +41,7 @@ internal static partial class MountFileSystem
 
     internal static string? GetFileSystemType(string path, IEnumerable<string> procMountsLines)
     {
-        var fullPath = Path.GetFullPath(path).TrimEnd('/');
+        var fullPath = (OperatingSystem.IsLinux() ? Path.GetFullPath(path) : path).TrimEnd('/');
         string? bestType = null;
         var bestLength = -1;
 
