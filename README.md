@@ -1,132 +1,130 @@
 # Context Platform
 
-**Локальна платформа довготривалої інженерної памʼяті, гібридного пошуку по коду (RAG) та аналізу графу викликів для AI-агентів (Claude Code / MCP).**
+**Language / Мова:** English | [Українська (посібник)](docs/uk/USER_GUIDE.md)
 
-Context Platform допомагає Claude Code та іншим MCP-сумісним агентам миттєво орієнтуватися в кодовій базі, розуміти радіус ураження змін (*blast radius*) і памʼятати архітектурні рішення між сесіями — витрачаючи мінімум токенів замість повторного читання десятків файлів із нуля.
+**Local-first long-term memory, hybrid code search, and call-graph impact analysis for AI coding agents (Claude Code / MCP).**
 
----
-
-## Чому Context Platform?
-
-- **Економія токенів та вимірювана вигода:** Цільовий контекст через `context_search` і `code_search` із бюджетом токенів, включно з підрахунком оціненої економії (`SavedTokens`) відносно читання цілих файлів.
-- **Гібридний пошук + AST + граф коду:** Поєднання FTS5 (BM25), векторного ANN-індексу `sqlite-vec` та близькості по графу символів на базі **Tree-sitter** (`C#`, `TypeScript`, `TSX`, `JavaScript`, `Python`).
-- **Автономна багаторівнева памʼять:** Автоматичне витягування фактів, рішень та обмежень із хуків Claude Code, онлайн-злиття дублікатів, періодична реконсолідація та верифікація фактів по реальному коду.
-- **Мультипроєктний вебдашборд без зайвих залежностей:** Сучасний UI на **Angular 22 + Tailwind CSS v4** із live-оновленнями через **SignalR**, інтерактивним графом (`vis-network`) і керуванням чергами завдань.
-- **100% локально за замовчуванням (`local-first`):** Один файл SQLite (WAL + FTS5 + `sqlite-vec`) та офлайн-режим `noop` out-of-the-box, з можливістю миттєвого перемикання на **Ollama**, **Foundry Local**, **OpenAI** або **Anthropic**.
+Context Platform indexes your repository locally using **SQLite (FTS5 + `sqlite-vec`)** and **Tree-sitter**, remembers architectural decisions across sessions, and exposes 13 targeted MCP tools plus lifecycle hooks so Claude Code spends tokens answering questions instead of re-reading dozens of files from scratch.
 
 ---
 
-## Загальна архітектура
+## Key Capabilities
+
+- **Token-budgeted retrieval (`context_search`, `code_search`):** combines SQLite FTS5 (BM25 + CamelCase/snake_case splitting), `sqlite-vec` vector search, and code-graph neighbors into a strict `TokenBudget`, while `McpSavingsTracker` deduplicates repeat reads to estimate realistic token savings.
+- **Tree-sitter AST & Blast Radius (`graph_impact`):** parses `C#`, `TypeScript`, `TSX`, `JavaScript`, and `Python` without needing an LLM, mapping callers, interface/base implementers, and covering tests across files.
+- **Multi-tier session memory:** captures session checkpoints across `/compact` boundaries, extracts structured facts, merges duplicates online and in batch consolidation, and checks referenced symbols against real code.
+- **Modern Angular 22 + Tailwind CSS v4 dashboard:** live job queue charts, interactive `vis-network` dependency graph, memory consolidation preview, session checkpoints, and runtime provider switching (`NoOp`, `Ollama`, `Foundry Local`, `OpenAI`, `Anthropic`).
+- **Private & local by default:** runs out of the box in offline `noop` mode backed by a single SQLite WAL database with per-project bearer-token isolation.
+
+---
+
+## High-Level Architecture
 
 ```mermaid
 flowchart LR
-    Agent["Claude Code / MCP Client"] -->|"MCP Streamable HTTP (/mcp)"| Server["Context.Dashboard.Server (ASP.NET Core 11)"]
+    Agent["Claude Code / MCP Client"] -->|"MCP Streamable HTTP (/mcp)"| Server["Context.Dashboard.Server (.NET 11)"]
     Agent -->|"Lifecycle Hooks (/hooks/*)"| Server
     Browser["Angular 22 + Tailwind v4 SPA"] -->|"REST API + SignalR (/hubs/indexing)"| Server
 
     Server --> Facade["ContextEngine (IContextEngine)"]
     Facade --> Retrieval["Context.Retrieval (FTS5 + sqlite-vec + Graph + ContextPack)"]
-    Facade --> Indexing["Context.Indexing (Tree-sitter + SymbolDiffer + Graph)"]
-    Facade --> Memory["Context.Memory (Extraction + Consolidation + Reconsolidation)"]
-    Facade --> Jobs["JobDispatcher (Per-project Lanes + Retry Policy)"]
+    Facade --> Indexing["Context.Indexing (Tree-sitter + SymbolDiffer)"]
+    Facade --> Memory["Context.Memory (Extraction + Consolidation + Code Check)"]
+    Facade --> Jobs["JobDispatcher (Per-project Lanes + Retries)"]
 
     Retrieval --> SQLite["SQLite (WAL + FTS5 + sqlite-vec)"]
     Indexing --> SQLite
     Memory --> SQLite
     Jobs --> SQLite
     Memory -->|"Hot-swapped per project"| Providers["Context.Providers (NoOp / Ollama / Foundry / OpenAI / Anthropic)"]
-    Jobs -.->|"Optional multi-host signal"| Redis["Redis Pub/Sub"]
 ```
 
 ---
 
-## Інтерфейс у дії
+## Dashboard Screenshots
 
-| Огляд проєкту, черга завдань та хуки | Інтерактивний граф коду та Blast Radius |
+| Project Overview, Jobs & Hooks | Interactive Code Graph & Blast Radius |
 | :---: | :---: |
-| ![Дашборд проєкту](docs/images/dashboard.png) | ![Граф символів і впливу змін](docs/images/graph.png) |
+| ![Project dashboard](docs/images/dashboard.png) | ![Symbol graph and blast radius](docs/images/graph.png) |
 
 ---
 
-## Швидкий старт
+## Quick Start
 
-### Варіант 1: Локальний запуск (.NET 11 + Angular 22)
+### Option 1: Run Locally (.NET 11 + Angular 22)
 
-**Передумови:** `.NET SDK 11.0.100+` (`global.json`), `Node.js 22+` та `npm 11+`.
+**Requirements:** `.NET SDK 11.0.100+` (`global.json`), `Node.js 22+`, `npm 11+`.
 
-1. **Клонуйте репозиторій та зберіть SPA-клієнт:**
+1. **Install and build the frontend client:**
    ```bash
    git clone https://github.com/dellik95/context-platform.git
    cd context-platform/apps/host/Context.Dashboard/context.dashboard.client
    npm ci
    npm run build
    ```
-
-2. **Режим розробки (ASP.NET Core SpaProxy автоматично піднімає `ng serve`):**
+2. **Start the server in development mode (`SpaProxy` starts `ng serve` automatically):**
    ```bash
    cd ../Context.Dashboard.Server
    dotnet run
    ```
-   Або підготуйте production-збірку з копіюванням SPA у `wwwroot/`:
+   Or build a standalone production bundle:
    ```bash
-   # Із кореня репозиторію
    dotnet publish apps/host/Context.Dashboard/Context.Dashboard.Server -c Release -o ./publish/host
-   cp -r apps/host/Context.Dashboard/context.dashboard.client/dist/dashboard/browser ./publish/host/wwwroot
+   cp -r apps/host/Context.Dashboard/context.dashboard.client/dist/dashboard/browser/* ./publish/host/wwwroot/
    dotnet exec ./publish/host/Context.Dashboard.Server.dll
    ```
+3. **Open the dashboard:** [http://127.0.0.1:47923](http://127.0.0.1:47923)
+   On localhost (`127.0.0.1`), the UI bootstraps its admin token automatically without a login screen.
 
-3. **Відкрийте дашборд:** [http://127.0.0.1:47923](http://127.0.0.1:47923)
-   На локальній петлі (`127.0.0.1`) дашборд автоматично отримує admin-токен через loopback-endpoint `/api/auth/admin-token`.
-
-### Варіант 2: Docker Compose (з опціональним Redis)
+### Option 2: Docker Compose (with optional Redis)
 
 ```bash
-# Створіть .env або експортуйте обовʼязковий адмін-токен
 export CONTEXT_PLATFORM_ADMIN_TOKEN="$(openssl rand -base64 32)"
 docker compose up -d --build
 ```
 
-Контейнер монтує поточну теку проєкту в режимі лише читання (`/workspace:ro`) і зберігає SQLite БД, логи та резервні копії у named volume `context-data` (`/data/context-platform`). Детальніше про мережеву взаємодію з хостовим Ollama та production-розгортання див. у [deploy/README.md](deploy/README.md) та [Посібнику користувача](docs/uk/USER_GUIDE.md).
+The container mounts your repository read-only at `/workspace:ro` and persists SQLite data, logs, and backups in the `context-data` volume. See [deploy/README.md](deploy/README.md) for `systemd` / Windows Service scripts.
 
 ---
 
-## Підключення до Claude Code
+## Connect Claude Code
 
-Після створення проєкту в дашборді натисніть **Register Claude Code integration** у вкладці **Settings** (або викличте `POST /api/projects/{id}/claude/install`). Інсталятор безпечно створить резервну копію і налаштує:
+Create a project in the dashboard, open **Settings**, and click **Register Claude Code integration** (or call `POST /api/projects/{id}/claude/install`). It backs up existing files and writes:
 
-- `.mcp.json` — підключення до `/mcp` із персональним проєктним Bearer-токеном;
-- `.claude/settings.json` та `.claude/hooks/*.ps1` / `*.sh` — хуки `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PostCompact`, `Stop`, `SessionEnd`;
-- `.claude/skills/context-memory/SKILL.md` — інструкція-скіл для агента щодо пріоритетного використання `context_search`, `memory_search`, `graph_impact` тощо.
+- `.mcp.json` — MCP server config with a project-scoped bearer token;
+- `.claude/settings.json` & `.claude/hooks/*.ps1` / `*.sh` — `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PostCompact`, `Stop`, `SessionEnd` hooks;
+- `.claude/skills/context-memory/SKILL.md` — guidance telling Claude when to use MCP search and graph tools.
 
 ---
 
-## Основні змінні середовища
+## Environment Variables
 
-| Змінна | За замовчуванням | Опис |
+| Variable | Default | Purpose |
 | :--- | :--- | :--- |
-| `CONTEXT_PLATFORM_PORT` | `47923` | TCP-порт хоста `Context.Dashboard.Server` |
-| `CONTEXT_PLATFORM_BIND_HOST` | `127.0.0.1` (`0.0.0.0` у контейнері) | Інтерфейс прослуховування Kestrel |
-| `CONTEXT_PLATFORM_DATA_DIR` | Директорія бінарника | Каталог для `context.db`, `logs/` та `backups/` |
-| `CONTEXT_PLATFORM_ROOT` | Найближчий `.git`-корінь | Коренева директорія за замовчуванням для CLI/хоста |
-| `CONTEXT_PLATFORM_ADMIN_TOKEN` | Авто на `127.0.0.1` | Адмін-токен для `POST/GET /api/projects` та `/api/fs/browse` |
-| `CONTEXT_PLATFORM_REDIS` | `null` | Рядок підключення Redis (`host:6379`) для сигналу між репліками |
-| `CONTEXT_EMBEDDING_PROVIDER` | `noop` | Стартовий провайдер ембедингів (`noop`, `ollama`, `foundry`, `openai`) |
-| `CONTEXT_LLM_PROVIDER` | `noop` | Стартовий LLM-провайдер (`noop`, `ollama`, `foundry`, `anthropic`) |
-| `CONTEXT_OLLAMA_BASE_URL` | `http://localhost:11434` | URL сервера Ollama |
-| `CONTEXT_OLLAMA_EMBEDDING_MODEL` | `embeddinggemma` | Модель ембедингів Ollama |
-| `CONTEXT_OLLAMA_CHAT_MODEL` | `qwen2.5-coder:1.5b` | Чат-модель Ollama для саммарі та витягування памʼяті |
-| `CONTEXT_FOUNDRY_BASE_URL` | `http://127.0.0.1:5273/v1` | URL Microsoft Foundry Local |
-| `CONTEXT_OPENAI_API_KEY` | `null` | Хостовий API-ключ OpenAI (`text-embedding-3-small`) |
-| `CONTEXT_ANTHROPIC_API_KEY` | `null` | Хостовий API-ключ Anthropic (`claude-3-5-sonnet-20241022`) |
+| `CONTEXT_PLATFORM_PORT` | `47923` | Listening port for `Context.Dashboard.Server` |
+| `CONTEXT_PLATFORM_BIND_HOST` | `127.0.0.1` (`0.0.0.0` in Docker) | Host bind interface |
+| `CONTEXT_PLATFORM_DATA_DIR` | Binary directory | Folder for `context.db`, logs, and backups |
+| `CONTEXT_PLATFORM_ROOT` | Nearest `.git` root | Default project root for CLI/host |
+| `CONTEXT_PLATFORM_ADMIN_TOKEN` | Auto on `127.0.0.1` | Admin bearer token for project & folder-picker APIs |
+| `CONTEXT_PLATFORM_REDIS` | `null` | Optional Redis connection string for multi-host signals |
+| `CONTEXT_EMBEDDING_PROVIDER` | `noop` | Default embedding provider (`noop`, `ollama`, `foundry`, `openai`) |
+| `CONTEXT_LLM_PROVIDER` | `noop` | Default chat provider (`noop`, `ollama`, `foundry`, `anthropic`) |
+| `CONTEXT_OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+| `CONTEXT_OLLAMA_EMBEDDING_MODEL` | `embeddinggemma` | Default Ollama embedding model |
+| `CONTEXT_OLLAMA_CHAT_MODEL` | `qwen2.5-coder:1.5b` | Default Ollama chat model |
+| `CONTEXT_FOUNDRY_BASE_URL` | `http://127.0.0.1:5273/v1` | Microsoft Foundry Local endpoint |
+| `CONTEXT_OPENAI_API_KEY` | `null` | OpenAI API key (`text-embedding-3-small`) |
+| `CONTEXT_ANTHROPIC_API_KEY` | `null` | Anthropic API key (`claude-3-5-sonnet-20241022`) |
 
-> Усі параметри вибору провайдера (`EmbeddingProvider`, `LlmProvider`, моделі та URL для `ollama`/`foundry`) також перевизначаються на рівні окремого проєкту через UI вкладки **Settings** і застосовуються **миттєво без перезапуску сервера**.
+> Provider choices, model names, and URLs can also be changed per project in the **Settings** tab at runtime with no restart.
 
 ---
 
-## Документація
+## Documentation
 
-- 📘 **[Посібник користувача (USER_GUIDE.md)](docs/uk/USER_GUIDE.md)** — покрокове встановлення, огляд усіх вкладок дашборду зі скриншотами, інтеграція з Claude Code, типові сценарії та усунення неполадок.
-- 🏗️ **[Архітектура системи (ARCHITECTURE.md)](docs/uk/ARCHITECTURE.md)** — шари проєкту, декомпозиція backend-координаторів, UI-система на Tailwind CSS v4, SQLite + `sqlite-vec`, черга завдань `JobDispatcher`, SignalR та модель безпеки з діаграмами.
-- ⚙️ **[Головні можливості та алгоритми (FEATURES.md)](docs/uk/FEATURES.md)** — формула гібридного скорингу, бюджетування `ContextPackBuilder`, Tree-sitter AST & `SymbolDiffer`, цикл памʼяті та реконсолідація з перевіркою по коду, телеметрія економії токенів.
-- 🗺️ **[Roadmap (ROADMAP.md)](ROADMAP.md)** — статус реалізованих і запланованих фіч (англійською).
-- 🚀 **[Service Deployment (deploy/README.md)](deploy/README.md)** — інсталяція у `systemd` та Windows Service (англійською).
+| Topic | English | Українська |
+| :--- | :--- | :--- |
+| **User Guide & Setup** | [docs/en/USER_GUIDE.md](docs/en/USER_GUIDE.md) | [docs/uk/USER_GUIDE.md](docs/uk/USER_GUIDE.md) |
+| **System Architecture** | [docs/en/ARCHITECTURE.md](docs/en/ARCHITECTURE.md) | [docs/uk/ARCHITECTURE.md](docs/uk/ARCHITECTURE.md) |
+| **Features, Quality & Honest Analysis** | [docs/en/FEATURES.md](docs/en/FEATURES.md) | [docs/uk/FEATURES.md](docs/uk/FEATURES.md) |
+| **Deployment Scripts & Roadmap** | [deploy/README.md](deploy/README.md) · [ROADMAP.md](ROADMAP.md) | — |

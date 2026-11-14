@@ -1,6 +1,8 @@
 # Посібник користувача Context Platform
 
-Цей посібник описує розгортання, первинне налаштування, щоденну роботу у вебдашборді та інтеграцію Context Platform із Claude Code.
+**Мова / Language:** Українська | [English](../en/USER_GUIDE.md)
+
+Цей посібник пояснює, як розгорнути Context Platform, працювати у вебдашборді, вибрати AI-провайдерів і підключити Claude Code.
 
 ---
 
@@ -9,44 +11,42 @@
 1. [Передумови](#1-передумови)
 2. [Варіанти встановлення та запуску](#2-варіанти-встановлення-та-запуску)
 3. [Тур вебдашбордом (зі скриншотами)](#3-тур-вебдашбордом-зі-скриншотами)
-4. [Налаштування AI-провайдерів](#4-налаштування-ai-провайдерів)
-5. [Інтеграція з Claude Code: MCP-інструменти та хуки](#5-інтеграція-з-claude-code-mcp-інструменти-та-хуки)
-6. [Тестування та перевірка кодової бази](#6-тестування-та-перевірка-кодової-бази)
-7. [Усунення типових проблем](#7-усунення-типових-проблем)
+4. [Вибір AI-провайдерів](#4-вибір-ai-провайдерів)
+5. [Підключення Claude Code (MCP та хуки)](#5-підключення-claude-code-mcp-та-хуки)
+6. [Запуск тестів](#6-запуск-тестів)
+7. [Типові проблеми](#7-типові-проблеми)
 
 ---
 
 ## 1. Передумови
 
-| Компонент | Мінімальна версія | Для чого потрібен |
+| Компонент | Мінімальна версія | Навіщо потрібен |
 | :--- | :--- | :--- |
-| **.NET SDK** | `11.0.100` (`global.json`) | Збірка та запуск `Context.Dashboard.Server` і тестів |
-| **Node.js & npm** | Node 22+ / npm 11+ | Збірка Angular 22 + Tailwind CSS v4 фронтенду |
-| **Ollama / Foundry Local** *(опціонально)* | Актуальна | Локальні ембединги (`embeddinggemma`) та LLM (`qwen2.5-coder:1.5b`) |
-| **OpenAI / Anthropic API Key** *(опціонально)* | — | Хмарні провайдери ембедингів / чату з автоматичним редагуванням секретів |
-| **Docker & Docker Compose** *(опціонально)* | 24+ | Контейнеризований запуск хоста та Redis |
+| **.NET SDK** | `11.0.100` (`global.json`) | Збірка та запуск сервера і тестів |
+| **Node.js & npm** | Node 22+ / npm 11+ | Збірка фронтенду Angular 22 + Tailwind CSS v4 |
+| **Ollama / Foundry Local** *(опціонально)* | Актуальна | Локальні ембединги та чат-моделі (`embeddinggemma`, `qwen2.5-coder:1.5b`) |
+| **OpenAI / Anthropic API Key** *(опціонально)* | — | Хмарні моделі, якщо не запускаєте моделі локально |
+| **Docker & Docker Compose** *(опціонально)* | 24+ | Запуск сервера в контейнері (з опціональним Redis) |
 
 ---
 
 ## 2. Варіанти встановлення та запуску
 
-### А. Локальна розробка (Hot Reload через SpaProxy)
+### А. Локальна розробка (з автоперезавантаженням)
 
-1. Установіть npm-залежності клієнта:
+1. Встановіть залежності клієнта:
    ```bash
    cd apps/host/Context.Dashboard/context.dashboard.client
    npm ci
    ```
-2. Запустіть backend у середовищі `Development`:
+2. Запустіть backend у режимі розробки:
    ```bash
    cd ../Context.Dashboard.Server
    dotnet run
    ```
-   `Context.Dashboard.Server` автоматично підніме `ng serve` (через `Microsoft.AspNetCore.SpaProxy`) та налаштує двостороннє проксування запитів `/api/*`, `/hooks/*`, `/hubs/*` і `/mcp`.
+   ASP.NET Core автоматично запустить `ng serve` через `SpaProxy` і проксуватиме запити API, хуків, SignalR та MCP.
 
-### Б. Автономна production-збірка (Bare-Metal)
-
-Для production-хостингу ASP.NET Core роздає зібраний статичний бандл із `wwwroot/`:
+### Б. Окрема production-збірка
 
 ```bash
 # 1. Зберіть Angular-клієнт
@@ -55,192 +55,159 @@ npm ci
 npm run build
 cd ../../../..
 
-# 2. Опублікуйте .NET-сервер та скопіюйте SPA
-dotnet publish apps/host/Context.Dashboard/Context.Dashboard.Server -c Release -o /opt/context-platform
-cp -r apps/host/Context.Dashboard/context.dashboard.client/dist/dashboard/browser/* /opt/context-platform/wwwroot/
+# 2. Опублікуйте .NET-сервер та скопіюйте фронтенд у wwwroot/
+dotnet publish apps/host/Context.Dashboard/Context.Dashboard.Server -c Release -o ./publish/host
+cp -r apps/host/Context.Dashboard/context.dashboard.client/dist/dashboard/browser/* ./publish/host/wwwroot/
 
-# 3. Задайте каталог даних (якщо інсталяційна папка read-only) і запустіть
+# 3. Задайте каталог для SQLite-бази та запустіть сервер
 export CONTEXT_PLATFORM_DATA_DIR="$HOME/.local/share/context-platform"
-dotnet exec /opt/context-platform/Context.Dashboard.Server.dll
+dotnet exec ./publish/host/Context.Dashboard.Server.dll
 ```
 
-Для фонових служб у Linux (`systemd`) та Windows Service скористайтеся скриптами у [deploy/README.md](../../deploy/README.md).
+Скрипти для запуску як фонового сервісу (`systemd` / Windows Service) знаходяться у [deploy/README.md](../../deploy/README.md).
 
 ### В. Docker Compose
 
 ```bash
 export CONTEXT_PLATFORM_ADMIN_TOKEN="$(openssl rand -base64 32)"
-# Опціонально: шлях до індексованого проєкту (за замовчуванням ".")
 export HOST_PROJECT_PATH="/path/to/your/repo"
 
 docker compose up -d --build
 ```
 
-> **Примітка для WSL2 та Docker + Ollama:** У режимі контейнера `OllamaHostFallbackHandler` автоматично перевіряє `host.docker.internal` та `172.17.0.1`, якщо налаштований URL недоступний. Якщо файрвол хоста блокує порт Ollama `11434` із мережі Docker (наприклад, на Windows із Rancher Desktop), запускайте `Context.Dashboard.Server` локально (bare-metal або в WSL2).
+> **Примітка для Docker + Ollama:** у контейнері `OllamaHostFallbackHandler` сам перевіряє `host.docker.internal` та `172.17.0.1`. Якщо файрвол хоста блокує порт `11434`, запустіть `Context.Dashboard.Server` безпосередньо в ОС або у WSL2.
 
 ---
 
 ## 3. Тур вебдашбордом (зі скриншотами)
 
+Відкрийте [http://127.0.0.1:47923](http://127.0.0.1:47923). На локальному хості (`127.0.0.1`) дашборд автоматично отримує адмін-токен без екрана входу.
+
 ### 3.1. Список проєктів (`Projects`)
 
-Стартова сторінка зустрічає hero-блоком із коротким описом можливостей платформи та адаптивною сіткою зареєстрованих проєктів (кореневий шлях, статус індексації, кількість файлів, символів та спогадів).
+Головна сторінка показує підключені репозиторії та дає змогу додати або видалити проєкт.
 
 ![Список проєктів](../images/projects.png)
 
-- **Register a project / Add project** — створення нового проєкту з вбудованим провідником папок (**Folder Picker**) на серверній файловій системі (`GET /api/fs/browse`).
-- На локальному хості (`127.0.0.1`) адмін-токен завантажується автоматично без екрана логіну.
-- Якщо створюється проєкт на віддаленому/не-loopback хості, введіть `CONTEXT_PLATFORM_ADMIN_TOKEN` один раз у панелі адміністратора.
+- Натисніть **New project** і виберіть локальну папку через вбудований файловий оглядач.
+- Після створення зʼявиться проєктний Bearer-токен і готове посилання, якщо ви хочете налаштувати зовнішні інструменти вручну.
 
 ---
 
-### 3.2. Головна панель проєкту (`Dashboard`)
+### 3.2. Панель проєкту (`Dashboard`)
 
-Вкладка **Dashboard** показує оперативний стан конкретного проєкту: ключові метрики, стан хоста й AI-провайдерів, живу кільцеву діаграму черги завдань і стрічку Claude-хуків.
+Вкладка **Dashboard** показує актуальний стан індексації, черги завдань, стан сервера та стрічку останніх хуків Claude Code.
 
 ![Головна панель Dashboard](../images/dashboard.png)
 
-- **KPI-картки з іконками:** `Files indexed`, `Symbols mapped`, `Memories stored`, `Last indexed`.
-- **Панель швидких дій:**
-  - `Reindex changed files` — інкрементальна переіндексація змінених файлів;
-  - `Full reindex` — повне пересканування та перебудова графу;
-  - `Rebuild Vectors` — повторне створення векторних колекцій `sqlite-vec` (корисно після зміни моделі або провайдера ембедингів);
-  - `Cancel running index` — скасування активної індексації.
-- **Host runtime & AI stack + `Job queue distribution` (`DonutChart`):** індикатори працездатності `Database`, `Job dispatcher`, `MCP server`, активні моделі `Embeddings` / `LLM`, аптайм хоста, кнопка **Host logs** (модальне вікно з останніми логами Serilog) та інтерактивна кільцева діаграма розподілу завдань (`Pending`, `Running`, `Failed`, `Completed`) із підсумковими картками та діями **Retry failed** / **Clear completed**.
-- **Hook Activity Card:** жива стрічка викликів хуків (`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PostCompact`, `Stop`, `SessionEnd`), що оновлюється через SignalR.
+- **Лічильники:** проіндексовані файли, знайдені символи, збережені спогади та час останнього оновлення.
+- **Швидкі дії:**
+  - **Reindex changed files** — оновлює лише змінені файли;
+  - **Full reindex** — перескановує весь репозиторій та перебудовує граф;
+  - **Rebuild vectors** — перераховує векторні індекси після зміни моделі ембедингів;
+  - **Cancel running index** — коректно зупиняє поточну переіндексацію.
+- **Черга завдань та хост:** індикатори стану БД, `JobDispatcher` та MCP, діаграма завдань (`Pending`, `Running`, `Failed`, `Completed`), модальне вікно **Host logs** і кнопки **Retry failed** / **Clear completed**.
+- **Hook Activity:** живий потік викликів хуків.
 
 ---
 
-### 3.3. Гібридний пошук (`Search`)
+### 3.3. Пошук (`Search`)
 
-Вкладка **Search** дозволяє тестувати пошуковий пайплайн точно так, як його бачить Claude Code через MCP-інструменти.
+Вкладка **Search** дозволяє запускати ті самі запити, якими користується Claude Code через MCP.
 
 ![Гібридний пошук та Context Pack](../images/search.png)
 
-- **Швидкі підказки запитів** (`hybrid search`, `JobDispatcher`, `MemoryConsolidator`, `MCP tools` тощо) та панель **Advanced options** (`Scope path`, `Token budget`, режим **Context Pack** або **Code Search**).
-- **Context Pack (`context_search`)** — повертає структурований пакет із урахуванням токенного бюджету: картка `ARCHITECTURE SUMMARY`, первинні фрагменти коду (`PrimaryHits` із типом символу та фіолетовим індикатором скору), історичні нотатки памʼяті (`HistoricalNotes`) та відкриті питання (`OpenIssues`).
-- **Code Search (`code_search`)** — сирий ранжований список збігів по коду та файлових саммарі без обрізання секцій бюджетувальником.
+- **Context Pack (`context_search`)** збирає пакет у межах токенного бюджету: фрагменти коду, доречні спогади, відкриті питання та короткий опис архітектури.
+- **Code Search (`code_search`)** повертає ранжований список збігів у коді без секцій памʼяті.
+- **Advanced options** дозволяють обмежити шлях/мову пошуку та змінити ліміт токенів.
 
 ---
 
-### 3.4. База знань та реконсолідація (`Memories`)
+### 3.4. Памʼять та реконсолідація (`Memories`)
 
-Вкладка **Memories** керує довготривалою памʼяттю проєкту та візуалізує її склад.
+Вкладка **Memories** зберігає довготривалі нотатки, витягнуті з ваших робочих сесій.
 
 ![Управління памʼяттю проєкту](../images/memories.png)
 
-- **Knowledge distribution & клікабельні фільтри:** кольорова смуга розподілу знань і чіпи швидкої фільтрації за `MemoryType` (`Decision`, `Architecture`, `Constraint`, `Behavior`, `Configuration`, `Discovery`, `Procedure`, `Issue`, `Fact`), плюс текстовий пошук і перемикач `Include inactive`.
-- **Картка памʼяті** показує:
-  - кольоровий тип (`MemoryType`), статус (`Active` / `Contested` / `Superseded` / `Obsolete`) і рівень (`Working` / `LongTerm`);
-  - тему (`Topic`), скоуп (`ScopePath`), візуальний індикатор впевненості (`Confidence` %) та кількість підтверджень (`Reinforcements`, `Sources`);
-  - **атомарні факти (`Facts`)** — стислий список тез для швидкої інʼєкції в контекст із мінімумом токенів;
-  - **повʼязані файли та докази (`Evidence`)** — розкривається натисканням, показуючи першоджерела (сесії, злиття, ручні записи) та статус верифікації в коді (`Verify against code`);
-  - дії над карткою: `Pin` (закріпити від згасання), `Delete`, а також верхні дії **Consolidate** / **Cleanup empty**.
+- Фільтруйте записи за типом (`Decision`, `Architecture`, `Constraint`, `Behavior`, `Configuration`, `Discovery`, `Procedure`, `Issue`, `Fact`) або ключовими словами.
+- Кожна картка показує короткі **Facts**, довший **Narrative**, рівень впевненості, кількість підтверджень, файлові докази (**Evidence**) і кнопки **Pin** / **Delete**.
 
-#### Інтерактивна реконсолідація (`Consolidate Memories`)
-
-Кнопка **Consolidate** запускає аналіз кластерів повʼязаних спогадів або відкриває історію dry-run звітів:
+#### Обʼєднання схожих записів (`Consolidate`)
 
 ![Діалог реконсолідації памʼяті](../images/consolidation.png)
 
-У модальному вікні **Memory consolidation** можна:
-1. Запустити безпечний попередній перегляд (**Run dry preview**), який групує семантично близькі спогади без зміни БД.
-2. Переглянути кожну групу (`Sources -> Canonicals`), запропоновані оновлення тексту, виявлені **суперечності (`Contradictions`)**, застарілі **change-логи для архівації (`Change logs to retire`)** та результати верифікації тверджень по реальному коду (`CodeCheckResult`: `Verified` / `Refuted` / `Unknown`).
-3. Виключити небажані групи чекбоксами, застосувати план (`Apply`) або відхилити звіт (`Discard`).
+1. Натисніть **Consolidate** і спершу запустіть **Dry preview** — план створюється без змін у базі.
+2. Перегляньте групи злиття (`Sources -> Canonicals`), знайдені суперечності (`Contradictions`), застарілі change-логи й позначки перевірки в коді (`Verified`, `Refuted`, `Unknown`).
+3. Зніміть прапорці з небажаних груп і натисніть **Apply** або **Discard**.
 
 ---
 
-### 3.5. Історія сесій (`Sessions`)
+### 3.5. Сесії (`Sessions`)
 
-Вкладка **Sessions** групує сесії Claude Code по днях і показує детальний підсумок роботи агента.
+Вкладка **Sessions** групує сесії за датами та показує структурований підсумок (`Completed`, `Discovered`, `Decisions`, `OpenIssues`, `NextSteps`, `ChangedFiles`), а також проміжні контрольні точки (**Checkpoints**).
 
 ![Сесії та проміжні контрольні точки](../images/sessions.png)
 
-- У лівій панелі — список активних і завершених сесій із назвою (`Title`), часом старту/завершення та коротким ідентифікатором сесії.
-- У правій панелі — структуровані поля `SessionSummary`:
-  - `Completed`, `Discovered`, `Decisions`, `OpenIssues`, `NextSteps`, `ChangedFiles`;
-  - Розкривна секція **Checkpoint history** із хронологічними `SessionSummaryChunk`-ами, згенерованими при `/compact` або за періодичним розкладом.
-
 ---
 
-### 3.6. Граф символів та радіус ураження (`Graph`)
+### 3.6. Граф символів (`Graph`)
 
-Вкладка **Graph** візуалізує AST-граф символів і звʼязків проєкту на базі `vis-network`.
+Вкладка **Graph** малює залежності коду на основі Tree-sitter та `vis-network`.
 
 ![Граф коду та Blast Radius](../images/graph.png)
 
-- **Режим пошуку (Blast Radius):** знайдіть будь-який символ (`JobDispatcher`, клас, метод, інтерфейс) через автодоповнення, задайте `Max hops` (за замовчуванням `3`) і досліджуйте граф із плаваючими елементами керування маcштабом (`+`, `−`, `Fit graph`) та кольоровою легендою вузлів (`Class / Type`, `Method / Fn`, `Interface`, `File`, `Test`, `Structural`).
-- **Права панель-інспектор (`Node Inspector`):** відображає коротку назву вибраного вузла, бейджі типу й стану (`Centered`), повне кваліфіковане імʼя, `Node ID`, `Ref ID`, та кнопку **Re-center on this node**.
-- **Списки під графом:** структуровані бакети `Methods`, `Callers`, `Implementers` та `Covering tests` (такі ж дані отримує агент через MCP-інструмент `graph_impact`).
-- **Перемикач `Full graph`:** завантажує топологію всього репозиторію (`GET /api/graph/full`) з автоматичним спрощенням рендерингу для великих графів (>300 вузлів).
+- Знайдіть клас, record, інтерфейс, властивість або метод і задайте глибину (`Max hops`, за замовчуванням `3`).
+- Під графом показані **Callers**, **Implementers** та **Covering tests**; натискайте будь-який вузол для перегляду деталей або увімкніть **Full graph**.
 
 ---
 
-### 3.7. Налаштування проєкту (`Settings`)
+### 3.7. Налаштування (`Settings`)
 
-Вкладка **Settings** керує параметрами провайдерів, політиками стійкості, розкладами та інтеграціями **безпосередньо в рантаймі (без рестарту сервера)**.
+Вкладка **Settings** змінює AI-провайдерів, політики повторів, розклади фонових задач та інтеграцію з Claude Code одразу під час роботи — **без перезапуску сервера**.
 
 ![Налаштування проєкту](../images/settings.png)
 
-Основні секції:
-- **Providers:** вибір `Embedding provider` (`noop`, `openai`, `ollama`, `foundry`) та `LLM provider` (`noop`, `anthropic`, `ollama`, `foundry`), розмір батчу ембедингів (`EmbeddingBatchSize`), URL та назви моделей для локальних провайдерів.
-- **Provider resilience:** загальний таймаут запиту (`LlmTimeoutSeconds`), експоненціальні повтори (`LlmMaxRetries`, `LlmRetryBaseDelaySeconds`) та пауза після HTTP 429 (`RateLimitCooldownMinutes`, `RateLimitMaxCooldownMinutes`).
-- **Reindexing / Session summaries / Memory extraction & retrieval / Memory merging / Retention & cleanup:** гнучкі пороги подій, інтервали фонових планувальників, параметри групового злиття та політики очищення старих подій/хуків.
-- **Claude Code integration & Danger zone:** одно-клікова реєстрація інтеграції у репозиторій та безпечне видалення проєкту.
-
 ---
 
-### 3.8. Використання токенів та економія (`Usage`)
+### 3.8. Використання та економія (`Usage`)
 
-Вкладка **Usage & Savings** розділяє фактичні витрати на LLM та контрфактуальну економію від роботи MCP.
+Вкладка **Usage** показує окремо фактичні витрати токенів LLM і оцінку зекономлених токенів завдяки цільовому MCP-пошуку замість читання цілих файлів.
 
 ![Аналітика витрат та економії токенів](../images/usage.png)
 
-- Перемикач вікна: `7d`, `30d`, `90d`.
-- **5 KPI-карток:** `Total tokens spent`, `Total LLM / MCP calls`, `Avg tokens / call`, `Tokens saved EST.` (зелений градієнтний акцент — оцінка токенів, які не довелося читати повністю з файлів), та `Net balance EST.` (`saved - spent`) із індикатором мультиплікатора економії (`2.1x`).
-- **Інтерактивний графік `Daily activity — tokens spent vs. saved (est.)`:** згруповані стовпчики витрачених та зекономлених токенів по днях із перемикачем серій (`Both` / `Spent` / `Saved est.`) та hover-деталізацією за день.
-- **`Breakdown by purpose` + `Distribution by purpose` (`DonutChart`):** таблиця витрат та оціненої економії з пропорційними смугами частки й кільцева діаграма розподілу за призначенням (`memory_extraction`, `session_summary`, `context_search`, `file_summary`, `code_search`, `graph_impact`).
+- Перемикайте вікно (`7d`, `30d`, `90d`), серії графіка (`Both`, `Spent`, `Saved est.`) та таблицю за призначенням запитів.
 
 ---
 
-## 4. Налаштування AI-провайдерів
+## 4. Вибір AI-провайдерів
 
-| Провайдер | Рекомендовані моделі за замовчуванням | Особливості |
+| Провайдер | Моделі за замовчуванням | Коли використовувати |
 | :--- | :--- | :--- |
-| **`noop`** | Вбудований детерміністський | Нульові зовнішні виклики; ідеально для тестів, офлайн-огляду графа та FTS5-пошуку |
-| **`ollama`** | `embeddinggemma` + `qwen2.5-coder:1.5b` | Локальний інференс; є автообробка лімітів контексту і 429 cooldown; фолбек-хости у Docker |
-| **`foundry`** | `qwen3-embedding-0.6b` + `phi-3.5-mini` | Локальний OpenAI-сумісний сервер Microsoft Foundry Local (`foundry model load <alias>`) |
-| **`openai`** / **`anthropic`** | `text-embedding-3-small` / `claude-3-5-sonnet-20241022` | API-ключі задаються централізовано через змінні середовища; вихідний текст сканується на секрети (`SecretRedactor`) |
+| **`noop`** | Вбудований детерміністський | Нуль налаштувань, тести, точний FTS5-пошук і аналіз графу викликів |
+| **`ollama`** | `embeddinggemma` + `qwen2.5-coder:1.5b` | Локальний семантичний пошук і автоматичне витягування памʼяті без хмари |
+| **`foundry`** | `qwen3-embedding-0.6b` + `phi-3.5-mini` | Локальний запуск моделей через Microsoft Foundry Local |
+| **`openai`** / **`anthropic`** | `text-embedding-3-small` / `claude-3-5-sonnet-20241022` | Максимальна якість витягування знань (секрети редагуються перед відправкою) |
 
 ---
 
-## 5. Інтеграція з Claude Code: MCP-інструменти та хуки
+## 5. Підключення Claude Code (MCP та хуки)
 
-Після реєстрації Claude Code у проєкті агент отримує доступ до:
+Відкрийте **Settings** у своєму проєкті й натисніть **Register Claude Code integration** (або `POST /api/projects/{id}/claude/install`). Після створення резервної копії інсталятор запише:
 
-1. **13 MCP-інструментів (`/mcp`):**
-   - Пошук: `context_search`, `code_search`, `symbol_search`
-   - Памʼять: `memory_search`, `memory_get`, `memory_remember`, `memory_forget`
-   - Граф: `graph_neighbors`, `graph_path`, `graph_impact`
-   - Сесії та метадані: `session_search`, `session_get`, `project_info`
-2. **6 життєвих хуків (`/hooks/*`):**
-   - `SessionStart` — реєструє або відновлює сесію й інʼєктує стартовий контекст проєкту;
-   - `UserPromptSubmit` — підтягує релевантний `ContextPack` під поточний запит;
-   - `PostToolUse` — зберігає події редагування/команд/читання (при накопиченні `MinEventsForMemoryExtraction` автоматично запускає пакетне витягування памʼяті);
-   - `PostCompact` — фіксує контрольну точку саммарі та витягує памʼять із компакт-резюме;
-   - `Stop` — записує фінальну відповідь ходу;
-   - `SessionEnd` — закриває сесію, скидає невитрачені події на витягування і формує фінальне `SessionSummary`.
+- `.mcp.json` — 13 MCP-інструментів (`context_search`, `code_search`, `symbol_search`, `memory_search`, `memory_get`, `memory_remember`, `memory_forget`, `graph_neighbors`, `graph_path`, `graph_impact`, `session_search`, `session_get`, `project_info`).
+- `.claude/settings.json` та `.claude/hooks/*` — 6 хуків життєвого циклу (`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PostCompact`, `Stop`, `SessionEnd`).
+- `.claude/skills/context-memory/SKILL.md` — інструкція для Claude щодо використання MCP-інструментів.
 
 ---
 
-## 6. Тестування та перевірка кодової бази
+## 6. Запуск тестів
 
-Запуск усіх модульних та інтеграційних тестів із кореня репозиторію:
+Backend (.NET 11):
 ```bash
 dotnet test ContextPlatform.slnx --no-restore
 ```
 
-Frontend unit-тести (Vitest) та production-збірка:
+Frontend (Angular 22 / Vitest):
 ```bash
 cd apps/host/Context.Dashboard/context.dashboard.client
 npm test -- --watch=false
@@ -249,9 +216,9 @@ npm run build
 
 ---
 
-## 7. Усунення типових проблем
+## 7. Типові проблеми
 
-- **Дашборд повертає 404 на кореневому `/` у production-режимі:** переконайтеся, що Angular SPA зібрано (`npm run build`) і вміст `dist/dashboard/browser` скопійовано в `wwwroot/` поряд із `Context.Dashboard.Server.dll` (у `Development` використовуйте `dotnet run` зі `SpaProxy`).
-- **Помилка `401 Unauthorized` на `/api/projects` при розгортанні на `0.0.0.0`:** хост свідомо не генерує admin-токен на зовнішніх інтерфейсах — явно задайте `CONTEXT_PLATFORM_ADMIN_TOKEN`.
-- **Порожні результати векторного пошуку після зміни провайдера ембедингів:** натисніть **Rebuild Vectors** у картці швидких дій на `Dashboard`, щоб заповнити колекцію `chunk_vectors_{provider}` для нової розмірності векторів.
-- **Зникло підключення Ollama з Docker-контейнера:** перевірте правила файрволу для порту `11434` на машині-хості або запустіть сервер напряму в хостовій ОС / WSL2.
+- **404 на `/` у Release-режимі:** переконайтеся, що виконано `npm run build`, а файли з `dist/dashboard/browser/*` скопійовано в `wwwroot/` поруч із `Context.Dashboard.Server.dll`. Для локальної розробки запускайте `dotnet run`.
+- **`401 Unauthorized` при привʼязці до `0.0.0.0`:** автоматична видача адмін-токена працює лише на `127.0.0.1`; для зовнішніх адрес задайте `CONTEXT_PLATFORM_ADMIN_TOKEN`.
+- **Немає векторних результатів після зміни моделі ембедингів:** натисніть **Rebuild vectors** у вкладці **Dashboard**, щоб створити колекцію з новою розмірністю векторів.
+- **Контейнер Docker не бачить локальний Ollama:** перевірте файрвол на порту `11434` або запустіть `Context.Dashboard.Server` на хості / у WSL2.
