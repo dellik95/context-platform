@@ -7,38 +7,29 @@ using Microsoft.Extensions.Options;
 namespace Context.Dashboard.Server.BackgroundServices;
 
 /// <summary>
-/// Owns one <see cref="ProjectFileWatcher"/> per <see cref="Project"/> this host serves. Replaces
-/// the old single-project <c>FileWatcherHostedService</c>, which assumed exactly one project bound
-/// to the whole process — no longer true once <c>CurrentProjectAccessor</c> resolves "which
-/// project" per-request (Phase 3) and one host can serve many projects at once.
-/// <para/>
-/// Registered as both a singleton and an <see cref="IHostedService"/> — the same
-/// "singleton-plays-both-roles" idiom <c>Context.Application.Jobs.JobDispatcher</c> already uses
-/// (see <c>Context.Application.ServiceCollectionExtensions.AddJobDispatcher</c>) — so
-/// <see cref="StartAsync"/> gives every already-registered project a watcher at host startup, while
-/// the same instance is resolvable by <c>Context.Dashboard.Server.Api.ProjectEndpoints</c> to call
-/// <see cref="StartWatching"/> the moment a *new* project is created, with no host restart needed.
+/// Owns one <see cref="ProjectFileWatcher"/> per <see cref="Project"/> this host serves.
+/// Registered as both a singleton and an <see cref="IHostedService"/> so startup wires existing
+/// projects while API requests can attach or remove watchers without restarting.
 /// </summary>
 public sealed class ProjectFileWatcherManager(
     IServiceScopeFactory scopeFactory,
     Func<string, IIgnoreMatcher> ignoreMatcherFactory,
     ILoggerFactory loggerFactory,
-    IOptions<FileWatchingOptions>? options = null) : IHostedService, IDisposable
+    IOptions<FileWatchingOptions>? options = null) : IHostedService, IDisposable, IAsyncDisposable
 {
     private readonly FileWatchingOptions _options = options?.Value ?? new FileWatchingOptions();
     private readonly ILogger _managerLogger = loggerFactory.CreateLogger<ProjectFileWatcherManager>();
     private readonly ILogger _watcherLogger = loggerFactory.CreateLogger<ProjectFileWatcher>();
-    private readonly ConcurrentDictionary<Guid, ProjectFileWatcher> _watchers = new();
+    private readonly Lock _watchersLock = new();
+    private readonly Dictionary<Guid, ProjectFileWatcher> _watchers = new();
     private readonly ConcurrentDictionary<Task, byte> _backgroundSetupTasks = new();
-    private CancellationTokenSource _stopCts = new();
+    private readonly CancellationTokenSource _stopCts = new();
     private int _disposed;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
         var stopToken = _stopCts.Token;
-        // Long-running: intentionally not awaited so the host's StartAsync returns promptly — IHostedService
-        // StartAsync calls run sequentially before Kestrel binds. Uses the manager's own lifetime token
-        // (not the StartAsync startup token) so setup survives startup completion and cancels cleanly on StopAsync.
+        // Intentionally backgrounded so IHostedService.StartAsync returns before Kestrel binds.
         var task = Task.Run(async () =>
         {
             try
@@ -54,14 +45,13 @@ public sealed class ProjectFileWatcherManager(
                         break;
                     }
 
-                    // One project's unreadable root must not leave every project after it unwatched.
                     try
                     {
                         StartWatching(project);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        _managerLogger.LogError(ex, "Could not start watching project {ProjectId} at '{Root}'; the remaining projects are still being set up.", project.Id, project.RootPath);
+                        _managerLogger.LogError(ex, "Could not start watching project {ProjectId} at '{Root}'; remaining projects continue.", project.Id, project.RootPath);
                     }
                 }
             }
@@ -92,21 +82,22 @@ public sealed class ProjectFileWatcherManager(
             }
         }
 
-        foreach (var projectId in _watchers.Keys.ToArray())
+        ProjectFileWatcher[] active;
+        lock (_watchersLock)
         {
-            StopWatching(projectId);
+            active = [.. _watchers.Values];
+            _watchers.Clear();
+        }
+
+        foreach (var watcher in active)
+        {
+            await watcher.DisposeAsync().ConfigureAwait(false);
         }
     }
 
-    /// <summary>
-    /// Starts watching <paramref name="project"/>'s root, replacing any watcher already running for
-    /// it (e.g. after <see cref="Project.RootPath"/> changed). A root that doesn't exist on disk is
-    /// skipped with a warning rather than crashing the caller — a shared host may have projects
-    /// registered whose filesystem isn't currently accessible.
-    /// </summary>
     public void StartWatching(Project project)
     {
-        if (_stopCts.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
+        if (IsShuttingDown())
         {
             return;
         }
@@ -119,30 +110,37 @@ public sealed class ProjectFileWatcherManager(
             return;
         }
 
-        StopWatching(project.Id);
         TimeSpan? pollingInterval = ShouldPoll(project.RootPath)
             ? TimeSpan.FromSeconds(Math.Max(0.5, _options.PollingIntervalSeconds))
             : null;
-        _watchers[project.Id] = new ProjectFileWatcher(
+
+        var nextWatcher = new ProjectFileWatcher(
             project, scopeFactory, ignoreMatcherFactory, _watcherLogger, pollingInterval, stopToken: _stopCts.Token);
+
+        ProjectFileWatcher? previous = null;
+        var keepNew = false;
+        lock (_watchersLock)
+        {
+            if (!IsShuttingDown())
+            {
+                _watchers.TryGetValue(project.Id, out previous);
+                _watchers[project.Id] = nextWatcher;
+                keepNew = true;
+            }
+        }
+
+        if (!keepNew)
+        {
+            nextWatcher.Dispose();
+            return;
+        }
+
+        previous?.Dispose();
     }
 
-    private bool ShouldPoll(string rootPath) => _options.Mode switch
-    {
-        FileWatchMode.Polling => true,
-        FileWatchMode.Events => false,
-        _ => Environment.GetEnvironmentVariable("DOTNET_USE_POLLING_FILE_WATCHER") is "1" or "true" or "True"
-             || MountFileSystem.LacksReliableChangeEvents(rootPath),
-    };
-
-    /// <summary>
-    /// <see cref="StartWatching"/> off the caller's thread, for request paths: registering the
-    /// watches for a large root on DrvFS can take many minutes (see <see cref="StartAsync"/>).
-    /// </summary>
     public void StartWatchingInBackground(Project project)
     {
-        var stopToken = _stopCts.Token;
-        if (stopToken.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
+        if (IsShuttingDown())
         {
             return;
         }
@@ -162,23 +160,15 @@ public sealed class ProjectFileWatcherManager(
         TrackBackgroundTask(task);
     }
 
-    private void TrackBackgroundTask(Task task)
-    {
-        _backgroundSetupTasks[task] = 0;
-        _ = task.ContinueWith(
-            static (t, state) => ((ConcurrentDictionary<Task, byte>)state!).TryRemove(t, out _),
-            _backgroundSetupTasks,
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-    }
-
     public void StopWatching(Guid projectId)
     {
-        if (_watchers.TryRemove(projectId, out var watcher))
+        ProjectFileWatcher? watcher;
+        lock (_watchersLock)
         {
-            watcher.Dispose();
+            _watchers.Remove(projectId, out watcher);
         }
+
+        watcher?.Dispose();
     }
 
     public void Dispose()
@@ -189,12 +179,71 @@ public sealed class ProjectFileWatcherManager(
         }
 
         _stopCts.Cancel();
-        foreach (var projectId in _watchers.Keys.ToArray())
+        ProjectFileWatcher[] active;
+        lock (_watchersLock)
         {
-            StopWatching(projectId);
+            active = [.. _watchers.Values];
+            _watchers.Clear();
+        }
+
+        foreach (var watcher in active)
+        {
+            watcher.Dispose();
         }
 
         _stopCts.Dispose();
         GC.SuppressFinalize(this);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        await _stopCts.CancelAsync().ConfigureAwait(false);
+        var pending = _backgroundSetupTasks.Keys.ToArray();
+        if (pending.Length > 0)
+        {
+            await Task.WhenAll(pending).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        }
+
+        ProjectFileWatcher[] active;
+        lock (_watchersLock)
+        {
+            active = [.. _watchers.Values];
+            _watchers.Clear();
+        }
+
+        foreach (var watcher in active)
+        {
+            await watcher.DisposeAsync().ConfigureAwait(false);
+        }
+
+        _stopCts.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
+    private bool IsShuttingDown() =>
+        Volatile.Read(ref _disposed) != 0 || _stopCts.IsCancellationRequested;
+
+    private bool ShouldPoll(string rootPath) => _options.Mode switch
+    {
+        FileWatchMode.Polling => true,
+        FileWatchMode.Events => false,
+        _ => Environment.GetEnvironmentVariable("DOTNET_USE_POLLING_FILE_WATCHER") is "1" or "true" or "True"
+             || MountFileSystem.LacksReliableChangeEvents(rootPath),
+    };
+
+    private void TrackBackgroundTask(Task task)
+    {
+        _backgroundSetupTasks[task] = 0;
+        _ = task.ContinueWith(
+            static (t, state) => ((ConcurrentDictionary<Task, byte>)state!).TryRemove(t, out _),
+            _backgroundSetupTasks,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 }

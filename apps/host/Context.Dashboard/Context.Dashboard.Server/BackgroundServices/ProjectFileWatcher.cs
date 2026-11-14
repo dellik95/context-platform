@@ -15,28 +15,14 @@ namespace Context.Dashboard.Server.BackgroundServices;
 /// <see cref="FileSystemWatcher"/>, or by polling a snapshot of the non-ignored tree where
 /// file-system events are slow or unreliable (see <see cref="MountFileSystem"/>) — and enqueues a
 /// <see cref="JobType.IndexFile"/> job for every changed/created/deleted/renamed file, debounced per
-/// path (400ms) so a burst of writes to the same file — an editor's atomic save, or several tool
-/// calls in a row — triggers one reindex, not several.
-/// <para/>
-/// Extracted from the old single-project <c>FileWatcherHostedService</c> (see git history) once a
-/// shared host could no longer assume exactly one bound project. One instance per project;
-/// <see cref="ProjectFileWatcherManager"/> owns the project-to-instance mapping, constructs these,
-/// and disposes them.
+/// path (400ms).
 /// </summary>
-/// <remarks>
-/// <b>Known gap (accepted per the original Context.Dashboard.Server task brief §3, carried over unchanged):</b>
-/// this is a minimal watcher, not a rename-aware one. <see cref="IIndexingPipeline"/> exposes only
-/// a per-path <see cref="IIndexingPipeline.IndexFileAsync"/> — no "move" operation — so a rename is
-/// scheduled as two independent reindexes: the old path (treated as a delete once nothing exists
-/// there any more) and the new path as a fresh index. A renamed file's symbols therefore get new
-/// <see cref="Guid"/> ids rather than being carried over; cross-references (graph nodes, memory
-/// links) keyed on the old symbol ids are not preserved across the rename.
-/// </remarks>
-public sealed class ProjectFileWatcher : IDisposable
+public sealed class ProjectFileWatcher : IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan DebounceDelay = TimeSpan.FromMilliseconds(400);
     private static readonly TimeSpan DefaultEnqueueRetryDelay = TimeSpan.FromSeconds(5);
     private const int MaxEnqueueAttempts = 12;
+    private const int MaxConcurrentEnqueues = 4;
 
     private static readonly StringComparer PathComparer =
         OperatingSystem.IsLinux() ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
@@ -48,21 +34,16 @@ public sealed class ProjectFileWatcher : IDisposable
     private readonly IIgnoreMatcher _ignore;
     private readonly FileSystemWatcher? _watcher;
     private readonly CancellationTokenSource _disposeCts;
+    private readonly CancellationToken _stopToken;
 
     private readonly Lock _timerLock = new();
     private readonly Dictionary<string, Timer> _debounceTimers = new(PathComparer);
     private readonly ConcurrentDictionary<string, int> _enqueueFailures = new(PathComparer);
+    private readonly ConcurrentDictionary<Task, byte> _inFlightTasks = new();
+    private readonly SemaphoreSlim _enqueueGate = new(MaxConcurrentEnqueues, MaxConcurrentEnqueues);
     private readonly TimeSpan _enqueueRetryDelay;
     private volatile bool _disposed;
 
-    /// <summary>
-    /// Starts watching immediately; a non-null <paramref name="pollingInterval"/> polls instead of
-    /// using file-system events, taking its baseline snapshot before returning. Callers
-    /// (<see cref="ProjectFileWatcherManager"/>) are expected to have already verified
-    /// <paramref name="project"/>.<see cref="Project.RootPath"/> exists on disk — both modes throw
-    /// otherwise, and this type does not repeat that check so the caller's warning/skip decision has
-    /// exactly one place to live.
-    /// </summary>
     public ProjectFileWatcher(
         Project project,
         IServiceScopeFactory scopeFactory,
@@ -79,6 +60,7 @@ public sealed class ProjectFileWatcher : IDisposable
         _logger = logger;
         _ignore = ignoreMatcherFactory(_root);
         _disposeCts = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
+        _stopToken = _disposeCts.Token;
 
         if (pollingInterval is { } interval)
         {
@@ -88,7 +70,7 @@ public sealed class ProjectFileWatcher : IDisposable
                 "Polling '{Root}' for project {ProjectId} file changes every {IntervalSeconds}s ({FileCount} files, first scan took {ElapsedMs}ms).",
                 _root, _projectId, interval.TotalSeconds, baseline.Count, stopwatch.ElapsedMilliseconds);
 
-            _ = Task.Run(() => PollAsync(baseline, interval, _disposeCts.Token), CancellationToken.None);
+            TrackTask(Task.Run(() => PollAsync(baseline, interval, _stopToken), CancellationToken.None));
             return;
         }
 
@@ -113,34 +95,35 @@ public sealed class ProjectFileWatcher : IDisposable
 
     private void OnFileSystemEvent(object sender, FileSystemEventArgs e) => ScheduleIndex(e.FullPath);
 
-    /// <summary>An error (typically an internal buffer overflow) means events were lost, and nothing says which
-    /// files changed: an incremental reindex re-checks every file's hash, which is the only way to catch up.</summary>
     private void OnWatcherError(object sender, ErrorEventArgs e)
     {
-        var token = _disposeCts.Token;
-        if (_disposed || token.IsCancellationRequested)
+        if (_disposed || _stopToken.IsCancellationRequested)
         {
             return;
         }
 
         _logger.LogWarning(e.GetException(), "FileSystemWatcher raised an error for project {ProjectId} root '{Root}'; queueing an incremental reindex to catch up.", _projectId, _root);
-        _ = Task.Run(async () =>
+        RunTrackedBackground(async ct =>
         {
             try
             {
                 using var scope = _scopeFactory.CreateScope();
                 await scope.ServiceProvider.GetRequiredService<ReindexRequester>()
-                    .RequestAsync(_projectId, full: false, skipIfActive: true, token).ConfigureAwait(false);
+                    .RequestAsync(_projectId, full: false, skipIfActive: true, ct).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 // Watcher disposed during shutdown.
+            }
+            catch (ObjectDisposedException) when (_disposed)
+            {
+                // Scope factory disposed during shutdown.
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Could not queue a catch-up reindex for project {ProjectId} after a file watcher error.", _projectId);
             }
-        }, CancellationToken.None);
+        });
     }
 
     private void OnRenamed(object sender, RenamedEventArgs e)
@@ -163,23 +146,8 @@ public sealed class ProjectFileWatcher : IDisposable
 
         var normalized = relativePath.Replace('\\', '/');
 
-        // Hard, non-overridable skip for Context Platform's own data directory: without this, every
-        // write the indexing pipeline itself makes (context.db and its -wal/-shm siblings, log
-        // files) would re-trigger this very watcher, which would trigger another index pass,
-        // forever. GitignoreStyleMatcher's built-in denylist doesn't know about ".context/" — that's
-        // a Context.Dashboard.Server concern, not a generic ignore rule — so this check runs independently of,
-        // and in addition to, `_ignore` below.
-        if (IsContextDataPath(normalized))
-        {
-            return;
-        }
-
-        if (Directory.Exists(fullPath))
-        {
-            return; // Directory-level event; the files inside raise their own events.
-        }
-
-        if (_ignore.IsIgnored(normalized))
+        // Hard skip for Context Platform's own data directory so DB/log writes never self-trigger reindexes.
+        if (IsContextDataPath(normalized) || Directory.Exists(fullPath) || _ignore.IsIgnored(normalized))
         {
             return;
         }
@@ -191,7 +159,7 @@ public sealed class ProjectFileWatcher : IDisposable
     {
         lock (_timerLock)
         {
-            if (_disposed || _disposeCts.IsCancellationRequested)
+            if (_disposed || _stopToken.IsCancellationRequested)
             {
                 return;
             }
@@ -220,7 +188,7 @@ public sealed class ProjectFileWatcher : IDisposable
                 var current = TakeSnapshot();
                 if (ct.IsCancellationRequested)
                 {
-                    return; // Disposed mid-scan; don't start debounce timers Dispose already swept.
+                    return;
                 }
 
                 foreach (var (path, stamp) in current)
@@ -247,14 +215,11 @@ public sealed class ProjectFileWatcher : IDisposable
             }
             catch (Exception ex)
             {
-                // Keep the old snapshot: a root that's briefly unreachable must not read as every file deleted.
                 _logger.LogWarning(ex, "Polling scan of '{Root}' for project {ProjectId} failed; retrying next interval.", _root, _projectId);
             }
         }
     }
 
-    // Prunes ignored directories before descending, like FileSystemScanner, so node_modules/bin/obj
-    // cost nothing per scan. Symlinked directories aren't followed, to rule out cycles.
     private Dictionary<string, (DateTimeOffset Modified, long Length)> TakeSnapshot()
     {
         var options = new EnumerationOptions
@@ -313,44 +278,81 @@ public sealed class ProjectFileWatcher : IDisposable
                 timer.Dispose();
             }
 
-            if (_disposed || _disposeCts.IsCancellationRequested)
+            if (_disposed || _stopToken.IsCancellationRequested)
             {
                 return;
             }
         }
 
-        var token = _disposeCts.Token;
-        // Enqueued rather than indexed inline: a `git checkout` of a large branch fires thousands of
-        // these within the debounce window, and running them as unbounded Task.Run continuations
-        // would open a DbContext and an embedding-provider call per file at once. The queue caps
-        // concurrency, retries on failure, and survives a restart mid-burst.
-        _ = Task.Run(async () =>
+        // Enqueue via a bounded semaphore so branch switches do not flood SQLite with thousands of parallel DbContexts.
+        RunTrackedBackground(async ct =>
         {
+            var acquired = false;
             try
             {
+                await _enqueueGate.WaitAsync(ct).ConfigureAwait(false);
+                acquired = true;
                 using var scope = _scopeFactory.CreateScope();
                 var queue = scope.ServiceProvider.GetRequiredService<IJobQueue>();
                 await queue.EnqueueAsync(
                     JobType.IndexFile,
                     new IndexFilePayload(_projectId, relativePath),
                     _projectId,
-                    ct: token).ConfigureAwait(false);
+                    ct: ct).ConfigureAwait(false);
                 _enqueueFailures.TryRemove(relativePath, out _);
             }
-            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 // Watcher disposed during shutdown.
+            }
+            catch (ObjectDisposedException) when (_disposed)
+            {
+                // Semaphore or scope factory disposed during shutdown.
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to enqueue a reindex of '{RelativePath}' for project {ProjectId} after a file-system change.", relativePath, _projectId);
                 RetryEnqueueLater(relativePath);
             }
-        }, CancellationToken.None);
+            finally
+            {
+                if (acquired && !_disposed)
+                {
+                    try
+                    {
+                        _enqueueGate.Release();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // Disposed concurrently.
+                    }
+                }
+            }
+        });
     }
 
-    /// <summary>Re-arms the file's debounce timer on a longer delay instead of dropping the change: the debounce
-    /// timers live in memory only, so a swallowed failure would otherwise lose the change until the next edit.</summary>
+    private void RunTrackedBackground(Func<CancellationToken, Task> work)
+    {
+        if (_disposed || _stopToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        var token = _stopToken;
+        TrackTask(Task.Run(() => work(token), CancellationToken.None));
+    }
+
+    private void TrackTask(Task task)
+    {
+        _inFlightTasks[task] = 0;
+        _ = task.ContinueWith(
+            static (t, state) => ((ConcurrentDictionary<Task, byte>)state!).TryRemove(t, out _),
+            _inFlightTasks,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
     private void RetryEnqueueLater(string relativePath)
     {
         if (_disposed || _enqueueFailures.AddOrUpdate(relativePath, 1, (_, failures) => failures + 1) > MaxEnqueueAttempts)
@@ -364,12 +366,42 @@ public sealed class ProjectFileWatcher : IDisposable
 
     public void Dispose()
     {
+        if (!BeginDispose())
+        {
+            return;
+        }
+
+        _disposeCts.Dispose();
+        _enqueueGate.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (!BeginDispose())
+        {
+            return;
+        }
+
+        var pending = _inFlightTasks.Keys.ToArray();
+        if (pending.Length > 0)
+        {
+            await Task.WhenAll(pending).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        }
+
+        _disposeCts.Dispose();
+        _enqueueGate.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
+    private bool BeginDispose()
+    {
         Timer[] timersToDispose;
         lock (_timerLock)
         {
             if (_disposed)
             {
-                return;
+                return false;
             }
 
             _disposed = true;
@@ -378,7 +410,6 @@ public sealed class ProjectFileWatcher : IDisposable
         }
 
         _disposeCts.Cancel();
-        _disposeCts.Dispose();
 
         if (_watcher is not null)
         {
@@ -391,6 +422,6 @@ public sealed class ProjectFileWatcher : IDisposable
             timer.Dispose();
         }
 
-        GC.SuppressFinalize(this);
+        return true;
     }
 }

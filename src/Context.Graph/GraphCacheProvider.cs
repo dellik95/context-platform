@@ -12,7 +12,8 @@ namespace Context.Graph;
 public sealed class GraphCacheProvider : IGraphCacheProvider
 {
     private readonly IGraphPersistence _persistence;
-    private readonly ConcurrentDictionary<Guid, Task<InMemoryGraphCache>> _caches = new();
+    private readonly ConcurrentDictionary<Guid, Lazy<Task<InMemoryGraphCache>>> _caches = new();
+    private readonly ConcurrentDictionary<Guid, InMemoryGraphCache> _loadedCaches = new();
 
     public GraphCacheProvider(IGraphPersistence persistence)
     {
@@ -21,42 +22,43 @@ public sealed class GraphCacheProvider : IGraphCacheProvider
 
     public async Task<InMemoryGraphCache> GetOrCreateAsync(Guid projectId, CancellationToken ct)
     {
-        var task = _caches.GetOrAdd(projectId, id => InMemoryGraphCache.CreateAsync(id, _persistence, ct));
+        var lazy = _caches.GetOrAdd(
+            projectId,
+            id => new Lazy<Task<InMemoryGraphCache>>(() => CreateAndTrackAsync(id)));
         try
         {
-            return await task.ConfigureAwait(false);
+            return await lazy.Value.WaitAsync(ct).ConfigureAwait(false);
         }
-        catch
+        catch when (lazy.IsValueCreated && (lazy.Value.IsFaulted || lazy.Value.IsCanceled))
         {
             // Don't let a failed/cancelled build permanently poison the slot - next caller retries.
-            _caches.TryRemove(new KeyValuePair<Guid, Task<InMemoryGraphCache>>(projectId, task));
+            // Caller-side WaitAsync(ct) cancellation does not evict an in-flight healthy load.
+            _caches.TryRemove(new KeyValuePair<Guid, Lazy<Task<InMemoryGraphCache>>>(projectId, lazy));
+            _loadedCaches.TryRemove(projectId, out _);
             throw;
         }
     }
 
-    public bool TryGetLoaded(Guid projectId, out InMemoryGraphCache? cache)
-    {
-        if (_caches.TryGetValue(projectId, out var task) && task.IsCompletedSuccessfully)
-        {
-            cache = task.Result;
-            return true;
-        }
-
-        cache = null;
-        return false;
-    }
+    public bool TryGetLoaded(Guid projectId, out InMemoryGraphCache? cache) =>
+        _loadedCaches.TryGetValue(projectId, out cache);
 
     public InMemoryGraphCache? FindCacheContaining(Guid nodeId)
     {
-        foreach (var task in _caches.Values)
+        foreach (var cache in _loadedCaches.Values)
         {
-            if (task.IsCompletedSuccessfully && task.Result.ContainsNode(nodeId))
-                return task.Result;
+            if (cache.ContainsNode(nodeId))
+                return cache;
         }
 
         return null;
     }
 
-    public IReadOnlyCollection<InMemoryGraphCache> LoadedCaches =>
-        _caches.Values.Where(t => t.IsCompletedSuccessfully).Select(t => t.Result).ToArray();
+    public IReadOnlyCollection<InMemoryGraphCache> LoadedCaches => [.. _loadedCaches.Values];
+
+    private async Task<InMemoryGraphCache> CreateAndTrackAsync(Guid projectId)
+    {
+        var cache = await InMemoryGraphCache.CreateAsync(projectId, _persistence, CancellationToken.None).ConfigureAwait(false);
+        _loadedCaches[projectId] = cache;
+        return cache;
+    }
 }
