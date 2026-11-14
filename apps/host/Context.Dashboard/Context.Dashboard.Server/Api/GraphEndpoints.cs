@@ -61,7 +61,7 @@ public static class GraphEndpoints
     {
         // IGraphTraversal is keyed purely by node id with no ProjectId of its own, and only warms a
         // project's InMemoryGraphCache on the first access that project ever gets (see Context.
-        // Graph.GraphCacheProvider) - mirrors ContextEngine.GraphImpactAsync's/ContextMcpTools'
+        // Graph.GraphCacheProvider) - mirrors ContextEngine.GraphImpactAsync's/McpNodeResolver's
         // WarmGraphCacheForNodeAsync dance so a cold, never-touched project's graph is found too.
         var projectId = await ResolveProjectIdForNodeAsync(nodeId, symbols, files, ct).ConfigureAwait(false);
         if (projectId != currentProject.ProjectId)

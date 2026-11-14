@@ -1,262 +1,144 @@
-<div class="page">
-  <mat-button-toggle-group class="mode-toggle" [value]="mode()" (change)="onModeChange($event)">
-    <mat-button-toggle value="search">
-      <mat-icon>search</mat-icon>
-      Search
-    </mat-button-toggle>
-    <mat-button-toggle value="full">
-      <mat-icon>hub</mat-icon>
-      Full graph
-    </mat-button-toggle>
-  </mat-button-toggle-group>
+<div class="space-y-5">
+  <header class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-xl font-semibold text-slate-900">Graph & Impact</h1>
+      <p class="text-sm text-slate-500">Inspect call graphs, implementers, covering tests, and whole-project topology.</p>
+    </div>
+
+    <div class="inline-flex rounded-xl border border-slate-200 bg-slate-100/80 p-1" role="group" aria-label="Graph view mode">
+      <button
+        type="button"
+        class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors"
+        [class.bg-white]="mode() === 'search'"
+        [class.text-slate-900]="mode() === 'search'"
+        [class.shadow-xs]="mode() === 'search'"
+        [class.text-slate-600]="mode() !== 'search'"
+        (click)="setMode('search')"
+      >
+        <app-icon name="search" sizeClass="w-3.5 h-3.5" />
+        Search
+      </button>
+      <button
+        type="button"
+        class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors"
+        [class.bg-white]="mode() === 'full'"
+        [class.text-slate-900]="mode() === 'full'"
+        [class.shadow-xs]="mode() === 'full'"
+        [class.text-slate-600]="mode() !== 'full'"
+        (click)="setMode('full')"
+      >
+        <app-icon name="hub" sizeClass="w-3.5 h-3.5" />
+        Full graph
+      </button>
+    </div>
+  </header>
 
   @if (mode() === 'search') {
-    <mat-card class="search-card">
-      <div class="search-row">
-        <mat-form-field appearance="outline" class="symbol-field">
-          <mat-label>Search for a symbol</mat-label>
-          <input
-            matInput
-            [formControl]="searchControl"
-            [matAutocomplete]="auto"
-            placeholder="e.g. ProjectContextService"
+    <section class="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-end">
+        <div class="min-w-0 flex-1">
+          <app-symbol-autocomplete
+            [matches]="matches()"
+            [searching]="searching()"
+            [selectedLabel]="selectedSymbol()?.name ?? ''"
+            (queryChanged)="onQueryChanged($event)"
+            (symbolSelected)="onSymbolSelected($event)"
           />
-          <mat-autocomplete #auto="matAutocomplete" [displayWith]="displaySymbol" (optionSelected)="onSymbolSelected($event)">
-            @for (match of matches(); track match.id) {
-              <mat-option [value]="match">
-                <div class="symbol-option">
-                  <span class="symbol-name">{{ match.name }}</span>
-                  <mat-chip-set>
-                    <mat-chip>{{ match.kind }}</mat-chip>
-                  </mat-chip-set>
-                  <span class="symbol-qualified">{{ match.qualifiedName }}</span>
-                </div>
-              </mat-option>
-            }
-          </mat-autocomplete>
-        </mat-form-field>
+        </div>
 
-        <mat-form-field appearance="outline" class="hops-field">
-          <mat-label>Max hops</mat-label>
-          <input matInput type="number" [formField]="maxHopsForm" />
-        </mat-form-field>
+        <label class="block sm:w-28">
+          <span class="mb-1 block text-xs font-medium text-slate-700">Max hops</span>
+          <input
+            type="number"
+            [formField]="maxHopsForm"
+            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+          />
+        </label>
 
         <button
-          mat-stroked-button
+          type="button"
+          class="inline-flex h-[38px] shrink-0 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 text-sm font-medium text-slate-700 shadow-xs transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
           [disabled]="!selectedSymbol() || loadingImpact()"
-          [showProgress]="loadingImpact()"
           (click)="reloadImpact()"
         >
-          <mat-spinner progressIndicator diameter="18" />
-          <mat-icon>refresh</mat-icon>
+          @if (loadingImpact()) {
+            <app-spinner sizeClass="w-4 h-4 text-indigo-600" />
+          } @else {
+            <app-icon name="refresh" sizeClass="w-4 h-4" />
+          }
           Recompute
         </button>
       </div>
-
-      @if (searching()) {
-        <mat-progress-bar mode="indeterminate" />
-      }
-    </mat-card>
+    </section>
   }
 
-  @if (mode() === 'full') {
-    <mat-card class="graph-view-card">
-      <div class="graph-view-toolbar">
-        <h2>Full project graph</h2>
-        @if (loadingFullGraph()) {
-          <mat-progress-bar mode="indeterminate" />
-        }
-        <button mat-stroked-button [disabled]="loadingFullGraph()" (click)="loadFullGraph()">
-          <mat-icon>refresh</mat-icon>
-          Refresh
-        </button>
-      </div>
-      <div class="graph-view-body">
-        <div #graphCanvas class="graph-canvas"></div>
-        <mat-card class="node-info-panel" [class.node-info-empty]="!selectedNode()">
-          @if (selectedNode(); as node) {
-            <div class="node-info-header">
-              <mat-icon>account_tree</mat-icon>
-              <span class="node-info-label">{{ node.label }}</span>
-            </div>
-            <mat-chip-set>
-              <mat-chip>{{ node.kind }}</mat-chip>
-            </mat-chip-set>
-            <dl class="node-info-meta">
-              <dt>Node ID</dt>
-              <dd>{{ node.id }}</dd>
-              @if (node.refId) {
-                <dt>Ref ID</dt>
-                <dd>{{ node.refId }}</dd>
-              }
-            </dl>
-            <button mat-stroked-button (click)="focusBlastRadius(node)">
-              <mat-icon>account_tree</mat-icon>
-              Show blast radius
-            </button>
-          } @else {
-            <p class="section-empty">Click a node in the graph to inspect it.</p>
-          }
-        </mat-card>
-      </div>
-    </mat-card>
-  } @else if (!selectedSymbol()) {
-    <mat-card class="empty-state">
-      <p>Search for a symbol to see its blast radius.</p>
-    </mat-card>
+  @if (mode() === 'search' && !selectedSymbol()) {
+    <app-empty-state
+      icon="account-tree"
+      title="Search for a symbol"
+      description="Type a class, interface, method, or function name to inspect its blast radius and callers."
+    />
   } @else {
-    <div class="selected-symbol">
-      <mat-icon>account_tree</mat-icon>
-      <span class="selected-name">{{ selectedSymbol()!.name }}</span>
-      <mat-chip-set>
-        <mat-chip>{{ selectedSymbol()!.kind }}</mat-chip>
-      </mat-chip-set>
-      <span class="selected-qualified">{{ selectedSymbol()!.qualifiedName }}</span>
-    </div>
+    @if (mode() === 'search' && selectedSymbol(); as sym) {
+      <div class="flex flex-wrap items-center gap-2 px-1">
+        <app-icon name="account-tree" sizeClass="w-4 h-4 text-indigo-600" />
+        <span class="text-sm font-semibold text-slate-900">{{ sym.name }}</span>
+        <app-badge tone="primary">{{ sym.kind }}</app-badge>
+        <span class="min-w-0 truncate font-mono text-xs text-slate-500" [title]="sym.qualifiedName">
+          {{ sym.qualifiedName }}
+        </span>
+      </div>
+    }
 
-    <mat-card class="graph-view-card">
-      <div class="graph-view-toolbar">
-        <h2>Graph view</h2>
-        @if (loadingNeighborhood()) {
-          <mat-progress-bar mode="indeterminate" />
-        }
-      </div>
-      <div class="graph-view-body">
-        <div #graphCanvas class="graph-canvas"></div>
-        <mat-card class="node-info-panel" [class.node-info-empty]="!selectedNode()">
-          @if (selectedNode(); as node) {
-            <div class="node-info-header">
-              <mat-icon>account_tree</mat-icon>
-              <span class="node-info-label">{{ node.label }}</span>
+    <section class="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+      <div class="mb-3 flex items-center justify-between gap-3">
+        <h2 class="text-sm font-semibold text-slate-900">
+          {{ mode() === 'full' ? 'Full project graph' : 'Graph view' }}
+        </h2>
+
+        <div class="flex items-center gap-3">
+          @if (loadingFullGraph() || loadingNeighborhood()) {
+            <div class="w-28">
+              <app-progress-bar height="sm" />
             </div>
-            <mat-chip-set>
-              <mat-chip>{{ node.kind }}</mat-chip>
-              @if (node.id === graphRootId()) {
-                <mat-chip>Centered</mat-chip>
-              }
-            </mat-chip-set>
-            @if (selectedNodeQualifiedName(); as qualifiedName) {
-              <div class="node-info-qualified">{{ qualifiedName }}</div>
-            }
-            <dl class="node-info-meta">
-              <dt>Node ID</dt>
-              <dd>{{ node.id }}</dd>
-              @if (node.refId) {
-                <dt>Ref ID</dt>
-                <dd>{{ node.refId }}</dd>
-              }
-            </dl>
-            <button
-              mat-stroked-button
-              [disabled]="loadingNeighborhood() || node.id === graphRootId()"
-              [showProgress]="loadingNeighborhood()"
-              (click)="recenterOn(node)"
-            >
-              <mat-spinner progressIndicator diameter="18" />
-              <mat-icon>center_focus_strong</mat-icon>
-              Re-center on this node
-            </button>
-          } @else {
-            <p class="section-empty">Click a node in the graph to inspect it.</p>
           }
-        </mat-card>
+          @if (mode() === 'full') {
+            <button
+              type="button"
+              class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              [disabled]="loadingFullGraph()"
+              (click)="loadFullGraph()"
+            >
+              <app-icon name="refresh" sizeClass="w-3.5 h-3.5" />
+              Refresh
+            </button>
+          }
+        </div>
       </div>
-    </mat-card>
+
+      <div class="flex flex-col gap-4 lg:flex-row lg:items-stretch">
+        <app-graph-canvas
+          [graph]="graphData()"
+          [rootId]="graphRootId()"
+          (nodeSelected)="onNodeSelected($event)"
+        />
+        <app-graph-node-inspector
+          [node]="selectedNode()"
+          [qualifiedName]="selectedNodeQualifiedName()"
+          [isCentered]="selectedNode() !== null && selectedNode()!.id === graphRootId()"
+          [mode]="mode()"
+          [loading]="loadingNeighborhood()"
+          (actionRequested)="onInspectorAction($event)"
+        />
+      </div>
+    </section>
   }
 
   @if (selectedNode()) {
-    @if (loadingImpact()) {
-      <mat-progress-bar mode="indeterminate" />
-    }
-
-    <div class="impact-sections">
-      <mat-card class="impact-section">
-        <h2>Methods</h2>
-        @if (containedNodes().length === 0) {
-          <p class="section-empty">No contained methods found.</p>
-        } @else {
-          <ul class="impact-list">
-            @for (child of containedNodes(); track child.id) {
-              <li class="impact-item">
-                <div class="impact-item-header">
-                  <span class="impact-label">{{ child.label }}</span>
-                  <mat-chip-set>
-                    <mat-chip>{{ child.kind }}</mat-chip>
-                  </mat-chip-set>
-                </div>
-              </li>
-            }
-          </ul>
-        }
-      </mat-card>
-
-      @if (impact(); as impactSet) {
-        <mat-card class="impact-section">
-          <h2>Callers</h2>
-          @if (impactSet.callers.length === 0) {
-            <p class="section-empty">No callers found.</p>
-          } @else {
-            <ul class="impact-list">
-              @for (item of impactSet.callers; track item.node.id) {
-                <li class="impact-item">
-                  <div class="impact-item-header">
-                    <span class="impact-label">{{ item.node.label }}</span>
-                    <mat-chip-set>
-                      <mat-chip>{{ item.node.kind }}</mat-chip>
-                    </mat-chip-set>
-                    <span class="impact-hops">{{ item.hops }} hop{{ item.hops === 1 ? '' : 's' }} away</span>
-                  </div>
-                  <div class="impact-path">{{ item.path }}</div>
-                </li>
-              }
-            </ul>
-          }
-        </mat-card>
-
-        <mat-card class="impact-section">
-          <h2>Implementers</h2>
-          @if (impactSet.implementers.length === 0) {
-            <p class="section-empty">No implementers found.</p>
-          } @else {
-            <ul class="impact-list">
-              @for (item of impactSet.implementers; track item.node.id) {
-                <li class="impact-item">
-                  <div class="impact-item-header">
-                    <span class="impact-label">{{ item.node.label }}</span>
-                    <mat-chip-set>
-                      <mat-chip>{{ item.node.kind }}</mat-chip>
-                    </mat-chip-set>
-                    <span class="impact-hops">{{ item.hops }} hop{{ item.hops === 1 ? '' : 's' }} away</span>
-                  </div>
-                  <div class="impact-path">{{ item.path }}</div>
-                </li>
-              }
-            </ul>
-          }
-        </mat-card>
-
-        <mat-card class="impact-section">
-          <h2>Covering tests</h2>
-          @if (impactSet.coveringTests.length === 0) {
-            <p class="section-empty">No tests found.</p>
-          } @else {
-            <ul class="impact-list">
-              @for (item of impactSet.coveringTests; track item.node.id) {
-                <li class="impact-item">
-                  <div class="impact-item-header">
-                    <span class="impact-label">{{ item.node.label }}</span>
-                    <mat-chip-set>
-                      <mat-chip>{{ item.node.kind }}</mat-chip>
-                    </mat-chip-set>
-                    <span class="impact-hops">{{ item.hops }} hop{{ item.hops === 1 ? '' : 's' }} away</span>
-                  </div>
-                  <div class="impact-path">{{ item.path }}</div>
-                </li>
-              }
-            </ul>
-          }
-        </mat-card>
-      }
-    </div>
+    <app-graph-impact-results
+      [containedNodes]="containedNodes()"
+      [impact]="impact()"
+      [loading]="loadingImpact()"
+    />
   }
 </div>

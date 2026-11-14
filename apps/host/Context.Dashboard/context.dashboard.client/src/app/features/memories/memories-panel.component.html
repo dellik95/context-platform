@@ -1,179 +1,93 @@
-<div class="page">
-  <header class="page-header">
-    <h1>Memories</h1>
-    @if (reloading()) {
-      <mat-progress-bar mode="indeterminate" class="inline-progress" />
-    }
-    <button mat-stroked-button type="button" (click)="openConsolidation()">
-      <mat-icon>merge_type</mat-icon>
-      Consolidation
-    </button>
+<div class="space-y-5">
+  <header class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-xl font-semibold text-slate-900">Memories</h1>
+      <p class="text-sm text-slate-500">Semantic knowledge extracted from sessions, decisions, and code exploration.</p>
+    </div>
+
+    <div class="flex items-center gap-3">
+      @if (reloading()) {
+        <div class="w-28">
+          <app-progress-bar height="sm" />
+        </div>
+      }
+      <button
+        type="button"
+        class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 shadow-xs transition-colors hover:bg-slate-50"
+        (click)="consolidationOpen.set(true)"
+      >
+        <app-icon name="merge" sizeClass="w-4 h-4 text-indigo-600" />
+        Consolidation
+      </button>
+    </div>
   </header>
 
-  <mat-card class="search-card">
-    <form class="search-form" (submit)="$event.preventDefault(); submit()">
-      <mat-form-field appearance="outline" class="query-field">
-        <mat-label>Search</mat-label>
-        <input matInput [formField]="searchForm.query" placeholder="e.g. auth flow, migration, retry logic" />
-        <mat-icon matPrefix>search</mat-icon>
-      </mat-form-field>
+  <section class="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+    <form class="flex flex-col gap-3 sm:flex-row sm:items-end" (submit)="$event.preventDefault(); submit()">
+      <label class="block flex-1">
+        <span class="mb-1 block text-xs font-medium text-slate-700">Search memories</span>
+        <div class="relative">
+          <span class="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400">
+            <app-icon name="search" sizeClass="w-4 h-4" />
+          </span>
+          <input
+            type="text"
+            [formField]="searchForm.query"
+            placeholder="e.g. auth flow, migration, retry logic"
+            class="w-full rounded-lg border border-slate-300 bg-white py-2 pr-3 pl-9 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+          />
+        </div>
+      </label>
 
-      <mat-checkbox [checked]="searchForm.includeSuperseded().value()" (change)="setIncludeSuperseded($event)">
+      <label class="inline-flex h-[38px] cursor-pointer items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm text-slate-700 select-none hover:bg-slate-50">
+        <input
+          type="checkbox"
+          class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+          [checked]="searchForm.includeSuperseded().value()"
+          (change)="setIncludeSuperseded($event)"
+        />
         Include superseded
-      </mat-checkbox>
+      </label>
 
       <button
-        mat-flat-button
-        color="primary"
         type="submit"
+        class="inline-flex h-[38px] shrink-0 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 text-sm font-medium text-white shadow-xs transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
         [disabled]="loading()"
-        [showProgress]="initialLoading()"
       >
-        <mat-spinner progressIndicator diameter="18" />
+        @if (initialLoading()) {
+          <app-spinner sizeClass="w-4 h-4 text-white" />
+        }
         Search
       </button>
     </form>
-  </mat-card>
+  </section>
 
   @if (initialLoading()) {
-    <mat-progress-bar mode="indeterminate" />
+    <app-progress-bar />
   } @else if (memories().length === 0) {
-    <mat-card class="empty-state">
-      <p>No memories found. Try a different search term{{ searchForm.includeSuperseded().value() ? '' : ', or include superseded memories' }}.</p>
-    </mat-card>
+    <app-empty-state
+      icon="psychology"
+      title="No memories found"
+      [description]="
+        'Try a different search term' +
+        (searchForm.includeSuperseded().value() ? '.' : ', or include superseded memories.')
+      "
+    />
   } @else {
-    <div class="memory-list">
+    <div class="space-y-3">
       @for (memory of memories(); track memory.id) {
-        <mat-card class="memory-card" [class.superseded]="memory.status === 'Superseded' || memory.status === 'Obsolete'">
-          <div class="memory-header">
-            <span class="type-chip" [ngClass]="chipClass(memory.type)">{{ memory.type }}</span>
-            <h2 class="memory-title">{{ memory.title }}</h2>
-            @if (memory.status !== 'Active') {
-              <span class="superseded-label" [class.contested-label]="memory.status === 'Contested'">{{ memory.status }}</span>
-            }
-            <button
-              mat-icon-button
-              matTooltip="Delete this memory"
-              [disabled]="deletingId() === memory.id"
-              [showProgress]="deletingId() === memory.id"
-              (click)="deleteMemory(memory)"
-            >
-              <mat-spinner progressIndicator diameter="18" />
-              <mat-icon>delete_outline</mat-icon>
-            </button>
-          </div>
-
-          <mat-tab-group class="memory-tabs" animationDuration="0ms" (selectedTabChange)="onTabChange(memory, $event)">
-            @if (facts(memory); as memoryFacts) {
-              <mat-tab label="Facts">
-                <ul class="memory-facts">
-                  @for (fact of memoryFacts; track fact) {
-                    <li>{{ fact }}</li>
-                  }
-                </ul>
-              </mat-tab>
-            }
-            <mat-tab label="Narrative">
-              <p class="memory-body">{{ memory.body }}</p>
-            </mat-tab>
-            @if (hasDetails(memory)) {
-              <mat-tab label="Details">
-                <div class="memory-details">
-                  @if (concepts(memory); as memoryConcepts) {
-                    <div class="detail-group">
-                      <span class="detail-label">Concepts</span>
-                      <div class="chip-row">
-                        @for (concept of memoryConcepts; track concept) {
-                          <span class="concept-chip">{{ concept }}</span>
-                        }
-                      </div>
-                    </div>
-                  }
-                  @if (filesModified(memory); as modified) {
-                    <div class="detail-group">
-                      <span class="detail-label">Files modified</span>
-                      <ul class="file-list">
-                        @for (file of modified; track file) {
-                          <li>{{ file }}</li>
-                        }
-                      </ul>
-                    </div>
-                  }
-                  @if (filesRead(memory); as read) {
-                    <div class="detail-group">
-                      <span class="detail-label">Files read</span>
-                      <ul class="file-list">
-                        @for (file of read; track file) {
-                          <li>{{ file }}</li>
-                        }
-                      </ul>
-                    </div>
-                  }
-                </div>
-              </mat-tab>
-            }
-            <mat-tab label="Evidence">
-              @switch (details()[memory.id]) {
-                @case ('loading') {
-                  <mat-progress-bar mode="indeterminate" />
-                }
-                @case ('error') {
-                  <p class="memory-body memory-body--secondary">Failed to load evidence.</p>
-                }
-                @default {
-                  @if (detail(memory); as memoryDetail) {
-                    <div class="memory-details">
-                      @if (memoryDetail.entities.length > 0) {
-                        <div class="detail-group">
-                          <span class="detail-label">Entities</span>
-                          <div class="chip-row">
-                            @for (entity of memoryDetail.entities; track entity.key) {
-                              <span class="concept-chip" [matTooltip]="entity.key">{{ entity.display }}</span>
-                            }
-                          </div>
-                        </div>
-                      }
-                      <div class="detail-group">
-                        <span class="detail-label">Evidence</span>
-                        @if (memoryDetail.evidence.length === 0) {
-                          <p class="memory-body memory-body--secondary">No evidence recorded.</p>
-                        } @else {
-                          <ul class="evidence-list">
-                            @for (evidence of memoryDetail.evidence; track evidence.id) {
-                              <li>
-                                <span class="evidence-relation">{{ evidence.relation }}</span>
-                                via {{ evidence.source }} · {{ evidence.observedAt | date: 'short' }}
-                                @if (evidence.note) {
-                                  <span class="evidence-note">— {{ evidence.note }}</span>
-                                }
-                              </li>
-                            }
-                          </ul>
-                        }
-                      </div>
-                    </div>
-                  }
-                }
-              }
-            </mat-tab>
-          </mat-tab-group>
-
-          <div class="memory-meta">
-            <span class="tier" [class.tier--working]="memory.tier === 'Working'">{{ memory.tier }}</span>
-            @if (memory.pinned) {
-              <mat-icon class="pin-icon" aria-label="Pinned">push_pin</mat-icon>
-            }
-            @if (memory.topic) {
-              <span class="topic">{{ memory.topic }}</span>
-            }
-            <span class="confidence">{{ memory.confidence | percent: '1.0-0' }} confidence</span>
-            <span class="sources">{{ memory.sourceCount }} {{ memory.sourceCount === 1 ? 'source' : 'sources' }}</span>
-            @if (memory.reinforcementCount > 0) {
-              <span class="reinforcement">reinforced ×{{ memory.reinforcementCount }}</span>
-            }
-          </div>
-        </mat-card>
+        <app-memory-card
+          [memory]="memory"
+          [detailState]="details()[memory.id]"
+          [deleting]="deletingId() === memory.id"
+          (deleteRequested)="deleteMemory($event)"
+          (evidenceRequested)="loadEvidence($event)"
+        />
       }
     </div>
   }
 </div>
+
+@if (consolidationOpen()) {
+  <app-consolidation-dialog (closed)="consolidationOpen.set(false)" />
+}

@@ -1,565 +1,382 @@
-<div class="page">
-  <header class="page-header">
-    <h1>Settings</h1>
+<div class="space-y-5">
+  <header>
+    <h1 class="text-xl font-semibold text-slate-900">Settings</h1>
+    <p class="text-sm text-slate-500">Configure AI providers, background schedules, memory merging, and project lifecycle.</p>
   </header>
 
   @if (loading()) {
-    <mat-progress-bar mode="indeterminate" />
+    <app-progress-bar />
   } @else {
-    <form class="settings-form" (submit)="$event.preventDefault(); save()">
-      <mat-card class="settings-card" appearance="outlined">
-        <h2 class="card-title">Providers</h2>
-        <p class="note">
-          <mat-icon>info</mat-icon>
-          <span>
-            OpenAI/Anthropic keys and models are shared across all projects (set via environment
-            variables); the provider choice and Ollama's/Foundry Local's own endpoint/models below are
-            specific to this project and take effect immediately, no restart needed.
-          </span>
-        </p>
+    <form class="space-y-4" (submit)="$event.preventDefault(); save()">
+      <app-settings-providers-card
+        [model]="settingsModel()"
+        [settingsForm]="settingsForm"
+        (providerChanged)="setProvider($event)"
+      />
 
-        <div class="field-grid">
-          <mat-form-field appearance="outline" subscriptSizing="dynamic">
-            <mat-label>Embedding provider</mat-label>
-            <mat-select
-              [value]="settingsForm.embeddingProvider().value()"
-              (selectionChange)="setEmbeddingProvider($event)"
-            >
-              <mat-option value="noop">noop</mat-option>
-              <mat-option value="openai">openai</mat-option>
-              <mat-option value="ollama">ollama</mat-option>
-              <mat-option value="foundry">foundry (Foundry Local)</mat-option>
-            </mat-select>
-          </mat-form-field>
-
-          <mat-form-field appearance="outline" subscriptSizing="dynamic">
-            <mat-label>LLM provider</mat-label>
-            <mat-select
-              [value]="settingsForm.llmProvider().value()"
-              (selectionChange)="setLlmProvider($event)"
-            >
-              <mat-option value="noop">noop</mat-option>
-              <mat-option value="anthropic">anthropic</mat-option>
-              <mat-option value="ollama">ollama</mat-option>
-              <mat-option value="foundry">foundry (Foundry Local)</mat-option>
-            </mat-select>
-          </mat-form-field>
-        </div>
-
-        @if (showCloudDisclosure()) {
-          <p class="note note--danger provider-note--cloud-disclosure">
-            <mat-icon>cloud_upload</mat-icon>
-            <span>
-              Indexed code and content will be sent to the selected external provider
-              (OpenAI/Anthropic) for processing. Choose <strong>ollama</strong>,
-              <strong>foundry</strong> or <strong>noop</strong> instead to keep everything on this machine.
-            </span>
-          </p>
-        }
-
-        @if (showOllamaBaseUrl() || showOllamaEmbeddingModel() || showOllamaChatModel()) {
-          <div class="field-grid">
-            @if (showOllamaBaseUrl()) {
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Ollama base URL</mat-label>
-                <input
-                  matInput
-                  [formField]="settingsForm.ollamaBaseUrl"
-                  placeholder="http://localhost:11434"
-                />
-              </mat-form-field>
-            }
-            @if (showOllamaEmbeddingModel()) {
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Ollama embedding model</mat-label>
-                <input
-                  matInput
-                  [formField]="settingsForm.ollamaEmbeddingModel"
-                  placeholder="e.g. embeddinggemma"
-                />
-              </mat-form-field>
-            }
-            @if (showOllamaChatModel()) {
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Ollama chat model</mat-label>
-                <input
-                  matInput
-                  [formField]="settingsForm.ollamaChatModel"
-                  placeholder="e.g. qwen2.5-coder:1.5b"
-                />
-              </mat-form-field>
-            }
-          </div>
-        }
-
-        @if (showFoundryBaseUrl()) {
-          <p class="note">
-            <mat-icon>info</mat-icon>
-            <span>
-              Foundry Local only serves models that are loaded (<code>foundry model load &lt;alias&gt;</code>)
-              and picks a new port on every start unless one is pinned
-              (<code>foundry config set port 5273</code>).
-            </span>
-          </p>
-          <div class="field-grid">
-            <mat-form-field appearance="outline" subscriptSizing="dynamic">
-              <mat-label>Foundry Local base URL</mat-label>
+      <div class="space-y-3">
+        <app-settings-section-card title="Provider resilience" [summary]="resilienceSummary()">
+          <div class="grid gap-4 sm:grid-cols-2">
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Request timeout (seconds)</span>
               <input
-                matInput
-                [formField]="settingsForm.foundryBaseUrl"
-                placeholder="http://127.0.0.1:5273/v1"
+                type="number"
+                [formField]="settingsForm.llmTimeoutSeconds"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
               />
-            </mat-form-field>
-            @if (showFoundryEmbeddingModel()) {
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Foundry embedding model</mat-label>
-                <input
-                  matInput
-                  [formField]="settingsForm.foundryEmbeddingModel"
-                  placeholder="e.g. qwen3-embedding-0.6b"
-                />
-              </mat-form-field>
-            }
-            @if (showFoundryChatModel()) {
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Foundry chat model</mat-label>
-                <input
-                  matInput
-                  [formField]="settingsForm.foundryChatModel"
-                  placeholder="e.g. phi-3.5-mini"
-                />
-              </mat-form-field>
-            }
+              <span class="mt-1 block text-xs text-slate-500">Budget for one embedding/chat call, retries included</span>
+            </label>
           </div>
-        }
 
-        <div class="field-grid">
-          <mat-form-field appearance="outline" subscriptSizing="dynamic">
-            <mat-label>Embedding batch size</mat-label>
-            <input matInput type="number" [formField]="settingsForm.embeddingBatchSize" />
-            <mat-hint>Texts per embedding request: 0 = provider default, 1 = no batching</mat-hint>
-          </mat-form-field>
-        </div>
-      </mat-card>
+          <h3 class="pt-2 text-xs font-semibold tracking-wide text-slate-500 uppercase">Retries</h3>
+          <app-alert-banner tone="info">
+            Off by default: a failed job is already retried later by the job queue. When on, only connection errors, 408
+            and 5xx are retried, each wait doubling from the base delay. A 429 or a timeout is never retried.
+          </app-alert-banner>
+          <app-settings-toggle
+            [checked]="settingsForm.llmRetryEnabled().value()"
+            (checkedChange)="setFlag('llmRetryEnabled', $event)"
+          >
+            Retry failed provider calls
+          </app-settings-toggle>
 
-      <mat-accordion class="settings-accordion" multi>
-        <mat-expansion-panel class="settings-panel">
-          <mat-expansion-panel-header>
-            <mat-panel-title>Provider resilience</mat-panel-title>
-            <mat-panel-description>{{ resilienceSummary() }}</mat-panel-description>
-          </mat-expansion-panel-header>
+          <div class="grid gap-4 sm:grid-cols-2">
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Max retries</span>
+              <input
+                type="number"
+                [formField]="settingsForm.llmMaxRetries"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+            </label>
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Base delay (seconds)</span>
+              <input
+                type="number"
+                [formField]="settingsForm.llmRetryBaseDelaySeconds"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+              <span class="mt-1 block text-xs text-slate-500">Exponential backoff with jitter</span>
+            </label>
+          </div>
 
-          <div class="panel-body">
-            <div class="field-grid">
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Request timeout (seconds)</mat-label>
-                <input matInput type="number" [formField]="settingsForm.llmTimeoutSeconds" />
-                <mat-hint>Budget for one embedding/chat call, retries included</mat-hint>
-              </mat-form-field>
-            </div>
+          <h3 class="pt-2 text-xs font-semibold tracking-wide text-slate-500 uppercase">Rate limits (Ollama)</h3>
+          <div class="grid gap-4 sm:grid-cols-2">
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Cooldown after 429 (minutes)</span>
+              <input
+                type="number"
+                [formField]="settingsForm.rateLimitCooldownMinutes"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+              <span class="mt-1 block text-xs text-slate-500">Chat calls pause this long; doubles on each repeat</span>
+            </label>
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Max cooldown (minutes)</span>
+              <input
+                type="number"
+                [formField]="settingsForm.rateLimitMaxCooldownMinutes"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+            </label>
+          </div>
+        </app-settings-section-card>
 
-            <h3 class="subsection-title">Retries</h3>
-            <p class="note">
-              <mat-icon>info</mat-icon>
-              <span>
-                Off by default: a failed job is already retried later by the job queue. When on,
-                only connection errors, 408 and 5xx are retried, each wait doubling from the base
-                delay. A 429 or a timeout is never retried.
+        <app-settings-section-card title="Reindexing" [summary]="reindexSummary()">
+          <app-settings-toggle
+            [checked]="settingsForm.reindexEnabled().value()"
+            (checkedChange)="setFlag('reindexEnabled', $event)"
+          >
+            Enable scheduled reindexing
+          </app-settings-toggle>
+
+          <div class="grid gap-4 sm:grid-cols-2">
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Interval (minutes)</span>
+              <input
+                type="number"
+                [formField]="settingsForm.reindexIntervalMinutes"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+              <span class="mt-1 block text-xs text-slate-500">How often the project is rescanned for changed files</span>
+            </label>
+          </div>
+        </app-settings-section-card>
+
+        <app-settings-section-card title="Session summaries" [summary]="sessionSummarySummary()">
+          <app-alert-banner tone="info">
+            By default a session is only summarized when it ends. Enable this to also get periodic summaries (and
+            extracted memories) for sessions that are still running.
+          </app-alert-banner>
+
+          <app-settings-toggle
+            [checked]="settingsForm.sessionSummaryEnabled().value()"
+            (checkedChange)="setFlag('sessionSummaryEnabled', $event)"
+          >
+            Enable periodic session summaries
+          </app-settings-toggle>
+
+          <div class="grid gap-4 sm:grid-cols-2">
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Interval (minutes)</span>
+              <input
+                type="number"
+                [formField]="settingsForm.sessionSummaryIntervalMinutes"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+              <span class="mt-1 block text-xs text-slate-500">Maximum wait between summaries of a running session</span>
+            </label>
+
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Min. new events</span>
+              <input
+                type="number"
+                [formField]="settingsForm.minEventsForSessionSummary"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+              <span class="mt-1 block text-xs text-slate-500">
+                The interval is a max wait — this many new events must also happen first
               </span>
-            </p>
-            <mat-slide-toggle
-              [checked]="settingsForm.llmRetryEnabled().value()"
-              (change)="setLlmRetryEnabled($event)"
-            >
-              Retry failed provider calls
-            </mat-slide-toggle>
-
-            <div class="field-grid">
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Max retries</mat-label>
-                <input matInput type="number" [formField]="settingsForm.llmMaxRetries" />
-              </mat-form-field>
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Base delay (seconds)</mat-label>
-                <input matInput type="number" [formField]="settingsForm.llmRetryBaseDelaySeconds" />
-                <mat-hint>Exponential backoff with jitter</mat-hint>
-              </mat-form-field>
-            </div>
-
-            <h3 class="subsection-title">Rate limits (Ollama)</h3>
-            <div class="field-grid">
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Cooldown after 429 (minutes)</mat-label>
-                <input matInput type="number" [formField]="settingsForm.rateLimitCooldownMinutes" />
-                <mat-hint>Chat calls pause this long; doubles on each repeat</mat-hint>
-              </mat-form-field>
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Max cooldown (minutes)</mat-label>
-                <input matInput type="number" [formField]="settingsForm.rateLimitMaxCooldownMinutes" />
-              </mat-form-field>
-            </div>
+            </label>
           </div>
-        </mat-expansion-panel>
+        </app-settings-section-card>
 
-        <mat-expansion-panel class="settings-panel">
-          <mat-expansion-panel-header>
-            <mat-panel-title>Reindexing</mat-panel-title>
-            <mat-panel-description>{{ reindexSummary() }}</mat-panel-description>
-          </mat-expansion-panel-header>
-
-          <div class="panel-body">
-            <mat-slide-toggle
-              [checked]="settingsForm.reindexEnabled().value()"
-              (change)="setReindexEnabled($event)"
-            >
-              Enable scheduled reindexing
-            </mat-slide-toggle>
-
-            <div class="field-grid">
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Interval (minutes)</mat-label>
-                <input matInput type="number" [formField]="settingsForm.reindexIntervalMinutes" />
-                <mat-hint>How often the project is rescanned for changed files</mat-hint>
-              </mat-form-field>
-            </div>
-          </div>
-        </mat-expansion-panel>
-
-        <mat-expansion-panel class="settings-panel">
-          <mat-expansion-panel-header>
-            <mat-panel-title>Session summaries</mat-panel-title>
-            <mat-panel-description>{{ sessionSummarySummary() }}</mat-panel-description>
-          </mat-expansion-panel-header>
-
-          <div class="panel-body">
-            <p class="note">
-              <mat-icon>info</mat-icon>
-              <span>
-                By default a session is only summarized when it ends. Enable this to also get
-                periodic summaries (and extracted memories) for sessions that are still running.
+        <app-settings-section-card title="Memory extraction & retrieval" [summary]="memoryRetrievalSummary()">
+          <div class="grid gap-4 sm:grid-cols-2">
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Events per memory extraction batch</span>
+              <input
+                type="number"
+                [formField]="settingsForm.minEventsForMemoryExtraction"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+              <span class="mt-1 block text-xs text-slate-500">
+                Raw session events sent to the LLM together; leftovers are extracted at session end
               </span>
-            </p>
+            </label>
 
-            <mat-slide-toggle
-              [checked]="settingsForm.sessionSummaryEnabled().value()"
-              (change)="setSessionSummaryEnabled($event)"
-            >
-              Enable periodic session summaries
-            </mat-slide-toggle>
-
-            <div class="field-grid">
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Interval (minutes)</mat-label>
-                <input
-                  matInput
-                  type="number"
-                  [formField]="settingsForm.sessionSummaryIntervalMinutes"
-                />
-                <mat-hint>Maximum wait between summaries of a running session</mat-hint>
-              </mat-form-field>
-
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Min. new events</mat-label>
-                <input
-                  matInput
-                  type="number"
-                  [formField]="settingsForm.minEventsForSessionSummary"
-                />
-                <mat-hint
-                  >The interval is a max wait — this many new events must also happen
-                  first</mat-hint
-                >
-              </mat-form-field>
-            </div>
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Max memories per section</span>
+              <input
+                type="number"
+                [formField]="settingsForm.maxMemoryNotesPerSection"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+              <span class="mt-1 block text-xs text-slate-500">Ranked memories shown per section of the recalled context</span>
+            </label>
           </div>
-        </mat-expansion-panel>
 
-        <mat-expansion-panel class="settings-panel">
-          <mat-expansion-panel-header>
-            <mat-panel-title>Memory extraction &amp; retrieval</mat-panel-title>
-            <mat-panel-description>{{ memoryRetrievalSummary() }}</mat-panel-description>
-          </mat-expansion-panel-header>
+          <app-settings-toggle
+            [checked]="settingsForm.explicitRememberEnabled().value()"
+            (checkedChange)="setFlag('explicitRememberEnabled', $event)"
+          >
+            Allow agent-initiated memory writes (memory_remember/memory_forget)
+          </app-settings-toggle>
+        </app-settings-section-card>
 
-          <div class="panel-body">
-            <div class="field-grid">
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Events per memory extraction batch</mat-label>
-                <input
-                  matInput
-                  type="number"
-                  [formField]="settingsForm.minEventsForMemoryExtraction"
-                />
-                <mat-hint
-                  >Raw session events sent to the LLM together; leftovers are extracted at session end</mat-hint
-                >
-              </mat-form-field>
+        <app-settings-section-card title="Memory merging" [summary]="memoryMergingSummary()">
+          <app-alert-banner tone="info">
+            Every extracted memory is consolidated on arrival: duplicates reinforce the existing memory, complementary
+            knowledge is merged, newer facts supersede older ones and conflicts are marked contested. Periodic
+            reconsolidation is a separate, optional background pass that regroups live knowledge by topic and entity
+            across the whole project.
+          </app-alert-banner>
 
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Max memories per section</mat-label>
-                <input matInput type="number" [formField]="settingsForm.maxMemoryNotesPerSection" />
-                <mat-hint>Ranked memories shown per section of the recalled context</mat-hint>
-              </mat-form-field>
-            </div>
+          <h3 class="text-xs font-semibold tracking-wide text-slate-500 uppercase">Online merging</h3>
+          <app-settings-toggle
+            [checked]="settingsForm.onlineMergeEnabled().value()"
+            (checkedChange)="setFlag('onlineMergeEnabled', $event)"
+          >
+            Merge complementary memories on arrival
+          </app-settings-toggle>
 
-            <mat-slide-toggle
-              [checked]="settingsForm.explicitRememberEnabled().value()"
-              (change)="setExplicitRememberEnabled($event)"
-            >
-              Allow agent-initiated memory writes (memory_remember/memory_forget)
-            </mat-slide-toggle>
+          <div class="grid gap-4 sm:grid-cols-2">
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Max memories per merge</span>
+              <input
+                type="number"
+                [formField]="settingsForm.onlineMergeMaxSources"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+              <span class="mt-1 block text-xs text-slate-500">
+                Memories one merge combines, the new one included (2–10); 2 merges pairwise
+              </span>
+            </label>
           </div>
-        </mat-expansion-panel>
 
-        <mat-expansion-panel class="settings-panel">
-          <mat-expansion-panel-header>
-            <mat-panel-title>Memory merging</mat-panel-title>
-            <mat-panel-description>{{ memoryMergingSummary() }}</mat-panel-description>
-          </mat-expansion-panel-header>
+          <h3 class="pt-2 text-xs font-semibold tracking-wide text-slate-500 uppercase">Merged memory size</h3>
+          <app-alert-banner tone="info">
+            Past either limit the new memory stays separate instead of being cut.
+          </app-alert-banner>
 
-          <div class="panel-body">
-            <p class="note">
-              <mat-icon>info</mat-icon>
-              <span>
-                Every extracted memory is consolidated on arrival: duplicates reinforce the
-                existing memory, complementary knowledge is merged, newer facts supersede older
-                ones and conflicts are marked contested. Periodic reconsolidation is a separate,
-                optional background pass that regroups live knowledge by topic and entity across
-                the whole project.
-              </span>
-            </p>
+          <div class="grid gap-4 sm:grid-cols-2">
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Max body length (characters)</span>
+              <input
+                type="number"
+                [formField]="settingsForm.mergedMemoryMaxBodyChars"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+              <span class="mt-1 block text-xs text-slate-500">Longest body a merged memory may have (1000–32000)</span>
+            </label>
 
-            <h3 class="subsection-title">Online merging</h3>
-            <mat-slide-toggle
-              [checked]="settingsForm.onlineMergeEnabled().value()"
-              (change)="setOnlineMergeEnabled($event)"
-            >
-              Merge complementary memories on arrival
-            </mat-slide-toggle>
-
-            <div class="field-grid">
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Max memories per merge</mat-label>
-                <input matInput type="number" [formField]="settingsForm.onlineMergeMaxSources" />
-                <mat-hint
-                  >Memories one merge combines, the new one included (2–10); 2 merges pairwise</mat-hint
-                >
-              </mat-form-field>
-            </div>
-
-            <h3 class="subsection-title">Merged memory size</h3>
-            <p class="note">
-              <mat-icon>info</mat-icon>
-              <span>Past either limit the new memory stays separate instead of being cut.</span>
-            </p>
-
-            <div class="field-grid">
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Max body length (characters)</mat-label>
-                <input matInput type="number" [formField]="settingsForm.mergedMemoryMaxBodyChars" />
-                <mat-hint>Longest body a merged memory may have (1000–32000)</mat-hint>
-              </mat-form-field>
-
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Max facts</mat-label>
-                <input matInput type="number" [formField]="settingsForm.mergedMemoryMaxFacts" />
-                <mat-hint>Most facts a merged memory may hold (5–100)</mat-hint>
-              </mat-form-field>
-            </div>
-
-            <h3 class="subsection-title">Periodic reconsolidation</h3>
-            <mat-slide-toggle
-              [checked]="settingsForm.memoryReconsolidationEnabled().value()"
-              (change)="setMemoryReconsolidationEnabled($event)"
-            >
-              Enable periodic memory reconsolidation
-            </mat-slide-toggle>
-
-            <div class="field-grid">
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Interval (minutes)</mat-label>
-                <input
-                  matInput
-                  type="number"
-                  [formField]="settingsForm.memoryReconsolidationIntervalMinutes"
-                />
-                <mat-hint>How often the reconsolidation pass runs</mat-hint>
-              </mat-form-field>
-
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Max group size</mat-label>
-                <input matInput type="number" [formField]="settingsForm.reconsolidationMaxGroupSize" />
-                <mat-hint>Memories one canonical may absorb (2–50)</mat-hint>
-              </mat-form-field>
-
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Min. cluster similarity</mat-label>
-                <input
-                  matInput
-                  type="number"
-                  step="0.05"
-                  [formField]="settingsForm.reconsolidationClusterMinSimilarity"
-                />
-                <mat-hint>How alike memories must be to be grouped (0.30–0.95)</mat-hint>
-              </mat-form-field>
-
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Source excerpt (characters)</mat-label>
-                <input
-                  matInput
-                  type="number"
-                  [formField]="settingsForm.reconsolidationSourceExcerptChars"
-                />
-                <mat-hint>How much of each source body the model sees (500–16000)</mat-hint>
-              </mat-form-field>
-            </div>
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Max facts</span>
+              <input
+                type="number"
+                [formField]="settingsForm.mergedMemoryMaxFacts"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+              <span class="mt-1 block text-xs text-slate-500">Most facts a merged memory may hold (5–100)</span>
+            </label>
           </div>
-        </mat-expansion-panel>
 
-        <mat-expansion-panel class="settings-panel">
-          <mat-expansion-panel-header>
-            <mat-panel-title>Retention &amp; cleanup</mat-panel-title>
-            <mat-panel-description>{{ retentionSummary() }}</mat-panel-description>
-          </mat-expansion-panel-header>
+          <h3 class="pt-2 text-xs font-semibold tracking-wide text-slate-500 uppercase">Periodic reconsolidation</h3>
+          <app-settings-toggle
+            [checked]="settingsForm.memoryReconsolidationEnabled().value()"
+            (checkedChange)="setFlag('memoryReconsolidationEnabled', $event)"
+          >
+            Enable periodic memory reconsolidation
+          </app-settings-toggle>
 
-          <div class="panel-body">
-            <h3 class="subsection-title">Stale sessions</h3>
-            <p class="note">
-              <mat-icon>info</mat-icon>
-              <span>
-                Ends an Active session (with a final summary and memory extraction) after no new
-                activity for this long — protects against a killed terminal or crashed CLI process
-                leaving a session Active forever.
-              </span>
-            </p>
+          <div class="grid gap-4 sm:grid-cols-2">
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Interval (minutes)</span>
+              <input
+                type="number"
+                [formField]="settingsForm.memoryReconsolidationIntervalMinutes"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+              <span class="mt-1 block text-xs text-slate-500">How often the reconsolidation pass runs</span>
+            </label>
 
-            <mat-slide-toggle
-              [checked]="settingsForm.staleSessionCleanupEnabled().value()"
-              (change)="setStaleSessionCleanupEnabled($event)"
-            >
-              Enable stale-session cleanup
-            </mat-slide-toggle>
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Max group size</span>
+              <input
+                type="number"
+                [formField]="settingsForm.reconsolidationMaxGroupSize"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+              <span class="mt-1 block text-xs text-slate-500">Memories one canonical may absorb (2–50)</span>
+            </label>
 
-            <div class="field-grid">
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Timeout (minutes)</mat-label>
-                <input
-                  matInput
-                  type="number"
-                  [formField]="settingsForm.staleSessionTimeoutMinutes"
-                />
-                <mat-hint>Idle time after which an Active session is ended</mat-hint>
-              </mat-form-field>
-            </div>
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Min. cluster similarity</span>
+              <input
+                type="number"
+                step="0.05"
+                [formField]="settingsForm.reconsolidationClusterMinSimilarity"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+              <span class="mt-1 block text-xs text-slate-500">How alike memories must be to be grouped (0.30–0.95)</span>
+            </label>
 
-            <h3 class="subsection-title">Raw session events</h3>
-            <p class="note">
-              <mat-icon>info</mat-icon>
-              <span>
-                Once a batch of raw session events is folded into a summary, it's no longer needed
-                by the memory pipeline — enabling this deletes it from the database. The session
-                detail view and the MCP recall tool then no longer show raw events older than the
-                latest summary.
-              </span>
-            </p>
-
-            <mat-slide-toggle
-              [checked]="settingsForm.deleteSessionEventsAfterSummary().value()"
-              (change)="setDeleteSessionEventsAfterSummary($event)"
-            >
-              Delete raw session events after summarization
-            </mat-slide-toggle>
-
-            <h3 class="subsection-title">Hook invocations</h3>
-            <p class="note">
-              <mat-icon>info</mat-icon>
-              <span>
-                Every hook call (SessionStart, UserPromptSubmit, PostToolUse, Stop, PostCompact, SessionEnd) is logged
-                for the dashboard's live activity feed and never cleaned up elsewhere — enabling
-                this periodically deletes invocations older than the window below.
-              </span>
-            </p>
-
-            <mat-slide-toggle
-              [checked]="settingsForm.hookInvocationRetentionEnabled().value()"
-              (change)="setHookInvocationRetentionEnabled($event)"
-            >
-              Enable hook invocation cleanup
-            </mat-slide-toggle>
-
-            <div class="field-grid">
-              <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                <mat-label>Retention (days)</mat-label>
-                <input
-                  matInput
-                  type="number"
-                  [formField]="settingsForm.hookInvocationRetentionDays"
-                />
-                <mat-hint>Invocations older than this are deleted</mat-hint>
-              </mat-form-field>
-            </div>
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Source excerpt (characters)</span>
+              <input
+                type="number"
+                [formField]="settingsForm.reconsolidationSourceExcerptChars"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+              <span class="mt-1 block text-xs text-slate-500">How much of each source body the model sees (500–16000)</span>
+            </label>
           </div>
-        </mat-expansion-panel>
-      </mat-accordion>
+        </app-settings-section-card>
 
-      <div class="save-bar">
+        <app-settings-section-card title="Retention & cleanup" [summary]="retentionSummary()">
+          <h3 class="text-xs font-semibold tracking-wide text-slate-500 uppercase">Stale sessions</h3>
+          <app-alert-banner tone="info">
+            Ends an Active session (with a final summary and memory extraction) after no new activity for this long —
+            protects against a killed terminal or crashed CLI process leaving a session Active forever.
+          </app-alert-banner>
+
+          <app-settings-toggle
+            [checked]="settingsForm.staleSessionCleanupEnabled().value()"
+            (checkedChange)="setFlag('staleSessionCleanupEnabled', $event)"
+          >
+            Enable stale-session cleanup
+          </app-settings-toggle>
+
+          <div class="grid gap-4 sm:grid-cols-2">
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Timeout (minutes)</span>
+              <input
+                type="number"
+                [formField]="settingsForm.staleSessionTimeoutMinutes"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+              <span class="mt-1 block text-xs text-slate-500">Idle time after which an Active session is ended</span>
+            </label>
+          </div>
+
+          <h3 class="pt-2 text-xs font-semibold tracking-wide text-slate-500 uppercase">Raw session events</h3>
+          <app-alert-banner tone="info">
+            Once a batch of raw session events is folded into a summary, it's no longer needed by the memory pipeline —
+            enabling this deletes it from the database. The session detail view and the MCP recall tool then no longer
+            show raw events older than the latest summary.
+          </app-alert-banner>
+
+          <app-settings-toggle
+            [checked]="settingsForm.deleteSessionEventsAfterSummary().value()"
+            (checkedChange)="setFlag('deleteSessionEventsAfterSummary', $event)"
+          >
+            Delete raw session events after summarization
+          </app-settings-toggle>
+
+          <h3 class="pt-2 text-xs font-semibold tracking-wide text-slate-500 uppercase">Hook invocations</h3>
+          <app-alert-banner tone="info">
+            Every hook call (SessionStart, UserPromptSubmit, PostToolUse, Stop, PostCompact, SessionEnd) is logged for
+            the dashboard's live activity feed and never cleaned up elsewhere — enabling this periodically deletes
+            invocations older than the window below.
+          </app-alert-banner>
+
+          <app-settings-toggle
+            [checked]="settingsForm.hookInvocationRetentionEnabled().value()"
+            (checkedChange)="setFlag('hookInvocationRetentionEnabled', $event)"
+          >
+            Enable hook invocation cleanup
+          </app-settings-toggle>
+
+          <div class="grid gap-4 sm:grid-cols-2">
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-700">Retention (days)</span>
+              <input
+                type="number"
+                [formField]="settingsForm.hookInvocationRetentionDays"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+              />
+              <span class="mt-1 block text-xs text-slate-500">Invocations older than this are deleted</span>
+            </label>
+          </div>
+        </app-settings-section-card>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-3 pt-1">
         <button
-          mat-flat-button
-          color="primary"
           type="submit"
+          class="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-xs transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
           [disabled]="saving() || settingsForm().invalid()"
-          [showProgress]="saving()"
         >
-          <mat-spinner progressIndicator diameter="18" />
+          @if (saving()) {
+            <app-spinner sizeClass="w-4 h-4 text-white" />
+          }
           Save settings
         </button>
+
         @if (settingsForm().invalid()) {
-          <span class="save-bar__hint">
-            <mat-icon>error_outline</mat-icon>
+          <span class="inline-flex items-center gap-1.5 text-xs font-medium text-rose-600">
+            <app-icon name="error" sizeClass="w-4 h-4" />
             Some values are out of range — check the highlighted fields.
           </span>
         }
       </div>
     </form>
 
-    <mat-card class="settings-card" appearance="outlined">
-      <h2 class="card-title">Claude Code integration</h2>
-      <p class="card-description">
-        Writes the hooks, MCP server registration, and skill document that let Claude Code use this
-        project's context automatically.
-      </p>
-      <div class="card-actions">
-        <button
-          mat-stroked-button
-          [disabled]="installing()"
-          [showProgress]="installing()"
-          (click)="installClaude()"
-        >
-          <mat-spinner progressIndicator diameter="18" />
-          <mat-icon>extension</mat-icon>
-          Register Claude Code integration
-        </button>
-      </div>
-    </mat-card>
-
-    <mat-card class="settings-card danger-zone" appearance="outlined">
-      <h2 class="card-title">Danger zone</h2>
-      <p class="card-description">
-        Permanently removes this project's index, memories, sessions, and settings from Context
-        Platform. Files on disk are never touched.
-      </p>
-      <div class="card-actions">
-        <button
-          mat-stroked-button
-          color="warn"
-          [disabled]="deleting()"
-          [showProgress]="deleting()"
-          (click)="deleteProject()"
-        >
-          <mat-spinner progressIndicator diameter="18" />
-          <mat-icon>delete_forever</mat-icon>
-          Delete project
-        </button>
-      </div>
-    </mat-card>
+    <app-settings-actions-cards
+      [installing]="installing()"
+      [deleting]="deleting()"
+      (installClaude)="installClaude()"
+      (deleteProject)="deleteProject()"
+    />
   }
 </div>

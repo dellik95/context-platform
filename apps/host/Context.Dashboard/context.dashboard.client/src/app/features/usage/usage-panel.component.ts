@@ -1,11 +1,10 @@
 import { CommonModule } from '@angular/common';
 import { Component, computed, inject, signal } from '@angular/core';
-import { MatButtonToggleModule, MatButtonToggleChange } from '@angular/material/button-toggle';
-import { MatCardModule } from '@angular/material/card';
-import { MatIconModule } from '@angular/material/icon';
-import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { ApiService } from '../../core/api.service';
 import { UsageDayDto } from '../../core/models';
+import { EmptyStateComponent } from '../../shared/ui/empty-state.component';
+import { IconComponent } from '../../shared/ui/icon.component';
+import { ProgressBarComponent } from '../../shared/ui/progress-bar.component';
 import { ProjectContextService } from '../projects/project-context.service';
 
 type DayRange = 7 | 30 | 90;
@@ -30,15 +29,12 @@ interface UsageChart {
   labelStride: number;
 }
 
-// SVG viewBox units, not pixels -- the <svg> itself scales to its container width via CSS.
 const CHART_WIDTH = 640;
 const CHART_HEIGHT = 180;
-const CHART_BOTTOM_PADDING = 22; // room for the day-label row under the bars
+const CHART_BOTTOM_PADDING = 22;
 const CHART_BAR_GAP = 3;
-const MAX_LABELS = 8; // thin out day labels once the range has more bars than this fits legibly
+const MAX_LABELS = 8;
 
-// day is an ISO date-only string (yyyy-MM-dd); parse as local midnight so the label doesn't
-// shift a day depending on the viewer's timezone offset from UTC.
 function formatDayLabel(day: string): string {
   return new Date(`${day}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
@@ -60,8 +56,6 @@ function buildChart(byDay: UsageDayDto[]): UsageChart | null {
       x: i * (barWidth + CHART_BAR_GAP),
       y: plotHeight - barHeight,
       width: Math.max(barWidth, 0.5),
-      // A day with real (nonzero) tokens always renders at least a sliver, so it doesn't
-      // disappear next to a much larger neighboring bar.
       height: d.tokens > 0 ? Math.max(barHeight, 1) : 0,
     };
   });
@@ -75,37 +69,16 @@ function buildChart(byDay: UsageDayDto[]): UsageChart | null {
   };
 }
 
-/**
- * Usage tab (BACKLOG-27 dashboard follow-up): aggregated token stats for the project, from
- * GET /api/usage — totals, a by-purpose breakdown table, and a hand-rolled inline-SVG bar chart of
- * the by-day spend time series. No charting library: package.json has none to reuse (vis-network is
- * graph-only) and one bar chart doesn't justify adding a dependency for.
- *
- * Two different kinds of numbers are shown side by side, and must stay visually distinct:
- *  - Real spend: totalTokens/totalCalls, from actual LLM calls (SessionSummary, MemoryExtraction,
- *    MemoryConsistencyCheck).
- *  - Estimated savings: totalEstimatedSavedTokens, a counterfactual estimate of tokens *not* spent
- *    because an MCP search tool (context_search/code_search/symbol_search) returned targeted
- *    results instead of the caller reading whole files — max(0, fullFileTokens - returnedTokens)
- *    per call, both sides estimated with the same TokenEstimator heuristic used everywhere else on
- *    the platform (see UsageRecord.SavedTokens). estimatedNetTokens is just
- *    totalEstimatedSavedTokens - totalTokens, offered as a "profit" figure — it mixes a real number
- *    with an estimate, so it's labeled as an estimate too rather than presented as audited.
- *
- * No prompt/completion split is shown even though UsageRecord has PromptTokens/CompletionTokens —
- * UsageRecorder.GetSummaryAsync (the only aggregation this endpoint exposes) sums TotalTokens only,
- * so that split isn't in UsageSummaryDto to bind to.
- */
 @Component({
   selector: 'app-usage-panel',
-  imports: [CommonModule, MatButtonToggleModule, MatCardModule, MatIconModule, MatProgressBarModule],
+  imports: [CommonModule, IconComponent, ProgressBarComponent, EmptyStateComponent],
   templateUrl: './usage-panel.component.html',
-  styleUrl: './usage-panel.component.scss',
 })
 export class UsagePanelComponent {
   private readonly api = inject(ApiService);
   protected readonly ctx = inject(ProjectContextService);
 
+  protected readonly ranges: readonly DayRange[] = [7, 30, 90];
   protected readonly days = signal<DayRange>(30);
 
   private readonly usageResource = this.api.usageSummaryResource(this.ctx.projectId, this.days);
@@ -123,10 +96,5 @@ export class UsagePanelComponent {
 
   protected readonly estimatedSavedTokens = computed(() => this.summary()?.totalEstimatedSavedTokens ?? 0);
   protected readonly estimatedNetTokens = computed(() => this.summary()?.estimatedNetTokens ?? 0);
-
   protected readonly chart = computed(() => buildChart(this.summary()?.byDay ?? []));
-
-  protected setDays(event: MatButtonToggleChange): void {
-    this.days.set(event.value as DayRange);
-  }
 }

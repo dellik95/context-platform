@@ -1,101 +1,167 @@
-<div class="page">
-  <header class="page-header">
-    <h1>Usage</h1>
-    <mat-button-toggle-group class="range-toggle" [value]="days()" (change)="setDays($event)">
-      <mat-button-toggle [value]="7">7d</mat-button-toggle>
-      <mat-button-toggle [value]="30">30d</mat-button-toggle>
-      <mat-button-toggle [value]="90">90d</mat-button-toggle>
-    </mat-button-toggle-group>
+<div class="flex flex-col gap-5">
+  <header class="flex flex-wrap items-center justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-semibold tracking-tight text-slate-900">Usage & Savings</h1>
+      <p class="mt-0.5 text-sm text-slate-500">
+        Actual LLM spend vs. estimated token savings from targeted MCP search retrieval.
+      </p>
+    </div>
+
+    <div class="inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-2xs" role="group" aria-label="Time window">
+      @for (range of ranges; track range) {
+        <button
+          type="button"
+          class="rounded-lg px-3 py-1.5 text-xs font-medium transition"
+          [class]="days() === range ? 'bg-indigo-600 text-white shadow-2xs' : 'text-slate-600 hover:bg-slate-100'"
+          (click)="days.set(range)"
+        >
+          {{ range }}d
+        </button>
+      }
+    </div>
   </header>
 
   @if (loading() && !summary()) {
-    <mat-progress-bar mode="indeterminate" />
+    <app-progress-bar />
   } @else if (error()) {
-    <mat-card class="empty-state">
-      <mat-icon>cloud_off</mat-icon>
-      <p>Could not load usage — is Context.Host running?</p>
-    </mat-card>
+    <app-empty-state
+      icon="error"
+      title="Could not load usage"
+      description="Make sure Context.Dashboard.Server is running and reachable."
+    />
   } @else if (summary(); as usage) {
     @if (usage.totalCalls === 0) {
-      <mat-card class="empty-state">
-        <mat-icon>bar_chart</mat-icon>
-        <p>No usage recorded in the last {{ days() }} days.</p>
-      </mat-card>
+      <app-empty-state
+        icon="monitoring"
+        [title]="'No usage recorded in the last ' + days() + ' days'"
+        description="Run queries via MCP tools or extract memories from sessions to populate spend and savings charts."
+      />
     } @else {
-      <div class="stat-grid">
-        <mat-card class="stat-card">
-          <span class="stat-value">{{ usage.totalTokens | number }}</span>
-          <span class="stat-label">Total tokens spent</span>
-        </mat-card>
-        <mat-card class="stat-card">
-          <span class="stat-value">{{ usage.totalCalls | number }}</span>
-          <span class="stat-label">Total calls</span>
-        </mat-card>
-        <mat-card class="stat-card">
-          <span class="stat-value">{{ avgTokensPerCall() | number }}</span>
-          <span class="stat-label">Avg tokens / call</span>
-        </mat-card>
-        <mat-card class="stat-card stat-card--estimate">
-          <span class="stat-value">{{ estimatedSavedTokens() | number }}</span>
-          <span class="stat-label">Tokens saved <span class="estimate-tag">est.</span></span>
-          <span class="stat-hint">via MCP search tools instead of full-file reads</span>
-        </mat-card>
-        <mat-card class="stat-card stat-card--estimate">
-          <span class="stat-value" [class.stat-value--negative]="estimatedNetTokens() < 0">
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
+          <p class="text-xs font-medium text-slate-500">Total tokens spent</p>
+          <p class="mt-1.5 text-2xl font-semibold tracking-tight text-slate-900">
+            {{ usage.totalTokens | number }}
+          </p>
+        </div>
+
+        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
+          <p class="text-xs font-medium text-slate-500">Total LLM / MCP calls</p>
+          <p class="mt-1.5 text-2xl font-semibold tracking-tight text-slate-900">
+            {{ usage.totalCalls | number }}
+          </p>
+        </div>
+
+        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
+          <p class="text-xs font-medium text-slate-500">Avg tokens / call</p>
+          <p class="mt-1.5 text-2xl font-semibold tracking-tight text-slate-900">
+            {{ avgTokensPerCall() | number }}
+          </p>
+        </div>
+
+        <div class="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4 shadow-2xs">
+          <div class="flex items-center gap-1.5">
+            <p class="text-xs font-medium text-emerald-800">Tokens saved</p>
+            <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 uppercase">
+              est.
+            </span>
+          </div>
+          <p class="mt-1.5 text-2xl font-semibold tracking-tight text-emerald-700">
+            {{ estimatedSavedTokens() | number }}
+          </p>
+          <p class="mt-1 text-[11px] text-emerald-700/80">vs. reading full matched files</p>
+        </div>
+
+        <div class="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4 shadow-2xs">
+          <div class="flex items-center gap-1.5">
+            <p class="text-xs font-medium text-indigo-800">Net balance</p>
+            <span class="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-800 uppercase">
+              est.
+            </span>
+          </div>
+          <p
+            class="mt-1.5 text-2xl font-semibold tracking-tight"
+            [class]="estimatedNetTokens() < 0 ? 'text-rose-700' : 'text-indigo-700'"
+          >
             {{ estimatedNetTokens() > 0 ? '+' : '' }}{{ estimatedNetTokens() | number }}
-          </span>
-          <span class="stat-label">Net tokens <span class="estimate-tag">est.</span></span>
-          <span class="stat-hint">saved minus spent — a rough "profit" figure</span>
-        </mat-card>
+          </p>
+          <p class="mt-1 text-[11px] text-indigo-700/80">saved minus spent</p>
+        </div>
       </div>
 
-      <mat-card class="chart-card">
-        <h2>Tokens by day</h2>
+      <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs">
+        <div class="mb-4 flex items-center gap-2">
+          <app-icon name="monitoring" sizeClass="w-4 h-4 text-indigo-600" />
+          <h2 class="text-sm font-semibold text-slate-900">Tokens spent by day</h2>
+        </div>
+
         @if (chart(); as c) {
-          <svg class="usage-chart" [attr.viewBox]="'0 0 ' + c.width + ' ' + c.height" preserveAspectRatio="none">
+          <svg
+            class="h-44 w-full overflow-visible"
+            [attr.viewBox]="'0 0 ' + c.width + ' ' + c.height"
+            preserveAspectRatio="none"
+          >
             @for (bar of c.bars; track bar.day) {
-              <rect class="usage-bar" [attr.x]="bar.x" [attr.y]="bar.y" [attr.width]="bar.width" [attr.height]="bar.height">
-                <title>{{ bar.label }}: {{ bar.tokens | number }} token{{ bar.tokens === 1 ? '' : 's' }}, {{ bar.calls | number }} call{{ bar.calls === 1 ? '' : 's' }}</title>
+              <rect
+                class="fill-indigo-500 transition-opacity hover:fill-indigo-600"
+                rx="3"
+                [attr.x]="bar.x"
+                [attr.y]="bar.y"
+                [attr.width]="bar.width"
+                [attr.height]="bar.height"
+              >
+                <title>
+                  {{ bar.label }}: {{ bar.tokens | number }} token{{ bar.tokens === 1 ? '' : 's' }},
+                  {{ bar.calls | number }} call{{ bar.calls === 1 ? '' : 's' }}
+                </title>
               </rect>
             }
           </svg>
-          <div class="chart-labels">
+          <div class="mt-1 flex justify-between text-[11px] text-slate-400">
             @for (bar of c.bars; track bar.day; let i = $index) {
-              <span class="chart-label">{{ i % c.labelStride === 0 ? bar.label : '' }}</span>
+              <span class="truncate">{{ i % c.labelStride === 0 ? bar.label : '' }}</span>
             }
           </div>
         } @else {
-          <div class="empty-state">
-            <p>No daily data.</p>
-          </div>
+          <p class="py-8 text-center text-xs text-slate-500">No daily data.</p>
         }
-      </mat-card>
+      </section>
 
-      <mat-card class="breakdown-card">
-        <h2>By purpose</h2>
-        <div class="purpose-table-wrap">
-          <table class="purpose-table">
-            <thead>
+      <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xs">
+        <div class="border-b border-slate-200 px-5 py-3.5">
+          <h2 class="text-sm font-semibold text-slate-900">Breakdown by purpose</h2>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-sm">
+            <thead class="bg-slate-50 text-xs font-medium tracking-wider text-slate-500 uppercase">
               <tr>
-                <th>Purpose</th>
-                <th>Tokens</th>
-                <th>Calls</th>
-                <th>Saved <span class="estimate-tag">est.</span></th>
+                <th class="px-5 py-3">Purpose</th>
+                <th class="px-5 py-3 text-right">Tokens</th>
+                <th class="px-5 py-3 text-right">Calls</th>
+                <th class="px-5 py-3 text-right">
+                  Saved
+                  <span class="ml-1 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-semibold text-emerald-700">
+                    est.
+                  </span>
+                </th>
               </tr>
             </thead>
-            <tbody>
+            <tbody class="divide-y divide-slate-100">
               @for (p of usage.byPurpose; track p.purpose) {
-                <tr>
-                  <td>{{ p.purpose }}</td>
-                  <td>{{ p.tokens | number }}</td>
-                  <td>{{ p.calls | number }}</td>
-                  <td class="saved-cell">{{ p.estimatedSavedTokens > 0 ? (p.estimatedSavedTokens | number) : '—' }}</td>
+                <tr class="hover:bg-slate-50/80">
+                  <td class="px-5 py-3 font-mono text-xs text-slate-800">{{ p.purpose }}</td>
+                  <td class="px-5 py-3 text-right tabular-nums text-slate-700">{{ p.tokens | number }}</td>
+                  <td class="px-5 py-3 text-right tabular-nums text-slate-700">{{ p.calls | number }}</td>
+                  <td class="px-5 py-3 text-right font-medium tabular-nums text-emerald-700">
+                    {{ p.estimatedSavedTokens > 0 ? (p.estimatedSavedTokens | number) : '—' }}
+                  </td>
                 </tr>
               }
             </tbody>
           </table>
         </div>
-      </mat-card>
+      </section>
     }
   }
 </div>

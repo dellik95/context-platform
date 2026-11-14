@@ -1,31 +1,23 @@
 import { CommonModule } from '@angular/common';
 import { Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { MatCardModule } from '@angular/material/card';
-import { MatExpansionModule } from '@angular/material/expansion';
-import { MatIconModule } from '@angular/material/icon';
-import { MatListModule } from '@angular/material/list';
-import { MatProgressBarModule } from '@angular/material/progress-bar';
-import { MatSnackBar } from '@angular/material/snack-bar';
 import { ApiService } from '../../core/api.service';
 import { SessionDetailDto, SessionListItemDto } from '../../core/models';
 import { SignalrService } from '../../core/signalr.service';
+import { BadgeComponent } from '../../shared/ui/badge.component';
+import { CollapsibleSectionComponent } from '../../shared/ui/collapsible-section.component';
+import { EmptyStateComponent } from '../../shared/ui/empty-state.component';
+import { IconComponent } from '../../shared/ui/icon.component';
+import { ProgressBarComponent } from '../../shared/ui/progress-bar.component';
+import { ToastService } from '../../shared/ui/toast.service';
 import { ProjectContextService } from '../projects/project-context.service';
-
-/** Parsed result of SessionDetailDto.changedFilesJson — a free-form field the CLI writes, so a
- *  parse failure is expected (not exceptional) and falls back to showing the raw string. */
-type ChangedFiles = { kind: 'list'; items: string[] } | { kind: 'raw'; raw: string };
+import { SessionSummaryFieldsComponent, parseChangedFilesJson } from './session-summary-fields.component';
 
 interface SessionGroup {
   label: string;
   sessions: SessionListItemDto[];
 }
 
-/** Collapses session-tab entries that share a claudeSessionId (falling back to the session's own
- *  id when it has none) into a single entry. Historical duplicate Session rows — created before
- *  ContextEngine.StartSessionAsync started deduping by claudeSessionId — would otherwise render as
- *  separate tabs for what is really one logical Claude Code session. Input is already newest-first
- *  (see groupSessionsByDay below), so the first entry seen per key is the one kept. */
 function dedupeSessions(sessions: SessionListItemDto[]): SessionListItemDto[] {
   const seen = new Set<string>();
   const deduped: SessionListItemDto[] = [];
@@ -40,8 +32,6 @@ function dedupeSessions(sessions: SessionListItemDto[]): SessionListItemDto[] {
   return deduped;
 }
 
-/** Buckets sessions by calendar day (in the viewer's local time zone), newest group first —
- *  a flat list gets unreadable fast once a project has more than a handful of sessions. */
 function groupSessionsByDay(sessions: SessionListItemDto[]): SessionGroup[] {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -71,8 +61,6 @@ function groupSessionsByDay(sessions: SessionListItemDto[]): SessionGroup[] {
     group.sessions.push(entry);
   }
 
-  // Map preserves insertion order; sessions() is already newest-first, so the first session of
-  // each new day is encountered in newest-day-first order too — no separate sort needed.
   return [...groups.values()];
 }
 
@@ -80,29 +68,27 @@ function groupSessionsByDay(sessions: SessionListItemDto[]): SessionGroup[] {
   selector: 'app-sessions-panel',
   imports: [
     CommonModule,
-    MatCardModule,
-    MatExpansionModule,
-    MatListModule,
-    MatIconModule,
-    MatProgressBarModule,
+    IconComponent,
+    ProgressBarComponent,
+    BadgeComponent,
+    EmptyStateComponent,
+    CollapsibleSectionComponent,
+    SessionSummaryFieldsComponent,
   ],
   templateUrl: './sessions-panel.component.html',
-  styleUrl: './sessions-panel.component.scss',
 })
 export class SessionsPanelComponent {
   private readonly api = inject(ApiService);
-  private readonly snackBar = inject(MatSnackBar);
+  private readonly toast = inject(ToastService);
   private readonly signalr = inject(SignalrService);
   private readonly destroyRef = inject(DestroyRef);
   protected readonly ctx = inject(ProjectContextService);
 
   protected readonly selectedId = signal<string | null>(null);
+  protected readonly historyExpanded = signal(false);
 
   private readonly sessionsResource = this.api.sessionsResource(this.ctx.projectId);
   protected readonly sessions = computed(() => (this.sessionsResource.hasValue() ? this.sessionsResource.value() : []));
-  // Gates the whole list being replaced by a spinner -- true only on the very first load. The
-  // SignalR-triggered reload below (a new/updated session summary) keeps the existing list visible
-  // while it refetches instead of blanking the panel.
   protected readonly initialLoading = computed(() => this.sessionsResource.status() === 'loading');
 
   private readonly detailResource = this.api.sessionDetailResource(this.selectedId);
@@ -110,15 +96,11 @@ export class SessionsPanelComponent {
   protected readonly detailLoading = this.detailResource.isLoading;
   protected readonly initialDetailLoading = computed(() => this.detailLoading() && !this.detailResource.hasValue());
 
-  // Chunk history ("History" expander below the flat summary) -- additive alongside detailResource
-  // above, keyed off the same selectedId so it loads/reloads in lockstep with the session detail.
   private readonly summaryChunksResource = this.api.sessionSummaryChunksResource(this.selectedId);
   protected readonly summaryChunks = computed(() =>
     this.summaryChunksResource.hasValue() ? this.summaryChunksResource.value() : [],
   );
 
-  // Anything fetching behind content that's already on screen: a list/detail reload, or the
-  // history chunks still arriving after the detail they belong to.
   protected readonly backgroundLoading = computed(
     () =>
       this.sessionsResource.status() === 'reloading' ||
@@ -128,20 +110,12 @@ export class SessionsPanelComponent {
 
   protected readonly sessionGroups = computed(() => groupSessionsByDay(dedupeSessions(this.sessions())));
 
-  protected readonly changedFiles = computed<ChangedFiles | null>(() =>
-    this.parseChangedFiles(this.detail()?.changedFilesJson ?? null),
-  );
-
   constructor() {
-    // Switching projects invalidates whatever session was selected for the previous one.
-    // sessionsResource itself already refetches when ctx.projectId() changes.
     effect(() => {
       this.ctx.projectId();
       this.selectedId.set(null);
     });
 
-    // A new/updated summary for this project (session end, or a periodic mid-session summary)
-    // should refresh the list — and the open detail pane, if it's the session that just changed.
     this.signalr.projectActivity$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((event) => {
       if (event.kind !== 'SessionSummaryUpdated' || event.projectId !== this.ctx.projectId()) {
         return;
@@ -155,19 +129,19 @@ export class SessionsPanelComponent {
 
     effect(() => {
       if (this.sessionsResource.error()) {
-        this.snackBar.open('Could not load sessions — is Context.Host running?', 'Dismiss');
+        this.toast.error('Could not load sessions — is Context.Dashboard.Server running?');
       }
     });
 
     effect(() => {
       if (this.detailResource.error()) {
-        this.snackBar.open('Could not load session detail.', 'Dismiss');
+        this.toast.error('Could not load session detail.');
       }
     });
 
     effect(() => {
       if (this.summaryChunksResource.error()) {
-        this.snackBar.open('Could not load session history.', 'Dismiss');
+        this.toast.error('Could not load session history.');
       }
     });
   }
@@ -179,26 +153,12 @@ export class SessionsPanelComponent {
         detail.decisions ||
         detail.openIssues ||
         detail.nextSteps ||
-        this.changedFiles(),
+        parseChangedFilesJson(detail.changedFilesJson),
     );
   }
 
   protected selectSession(entry: SessionListItemDto): void {
     this.selectedId.set(entry.session.id);
-  }
-
-  /** Shared by the top-level merged summary and each per-chunk panel in the History accordion --
-   *  changedFilesJson is a free-form field the CLI writes, so a parse failure is expected (not
-   *  exceptional) and falls back to showing the raw string. */
-  protected parseChangedFiles(json: string | null | undefined): ChangedFiles | null {
-    if (!json) {
-      return null;
-    }
-    try {
-      const parsed = JSON.parse(json);
-      return Array.isArray(parsed) ? { kind: 'list', items: parsed as string[] } : { kind: 'raw', raw: json };
-    } catch {
-      return { kind: 'raw', raw: json };
-    }
+    this.historyExpanded.set(false);
   }
 }

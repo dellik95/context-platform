@@ -1,483 +1,161 @@
-<div class="page">
+<div class="flex flex-col gap-5">
   @if (showReindexProgress() && reindexProgress(); as progress) {
-    <mat-card class="reindex-card">
-      <div class="reindex-header">
-        <mat-icon>sync</mat-icon>
-        <span>Reindexing… {{ progress.filesProcessed }} / {{ progress.filesTotal }} files</span>
+    <section class="rounded-2xl border border-indigo-200 bg-indigo-50/70 p-4 shadow-2xs">
+      <div class="mb-2 flex items-center justify-between gap-3">
+        <div class="flex items-center gap-2 text-sm font-medium text-indigo-950">
+          <app-spinner sizeClass="w-4 h-4 text-indigo-600" />
+          <span>Reindexing… {{ progress.filesProcessed }} / {{ progress.filesTotal }} files</span>
+        </div>
+        @if (!progress.completed) {
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-50 disabled:opacity-45"
+            [disabled]="ctx.cancelling()"
+            (click)="cancelIndex()"
+          >
+            @if (ctx.cancelling()) {
+              <app-spinner sizeClass="w-3.5 h-3.5" />
+            } @else {
+              <app-icon name="stop" sizeClass="w-3.5 h-3.5" />
+            }
+            <span>Stop indexing</span>
+          </button>
+        }
       </div>
-      <mat-progress-bar mode="determinate" [value]="reindexPercent(progress)" />
-      @if (!progress.completed) {
-        <button
-          mat-button
-          color="warn"
-          [disabled]="ctx.cancelling()"
-          [showProgress]="ctx.cancelling()"
-          (click)="cancelIndex()"
-        >
-          <mat-spinner progressIndicator diameter="18" />
-          <mat-icon>stop_circle</mat-icon>
-          Stop indexing
-        </button>
-      }
-    </mat-card>
+      <app-progress-bar [value]="reindexPercent(progress)" height="md" />
+    </section>
   }
 
   @if (ctx.loading() && !ctx.status()) {
-    <mat-progress-bar mode="indeterminate" />
+    <app-progress-bar />
   }
 
   @if (ctx.status(); as projectStatus) {
-    <div class="stat-grid">
-      <mat-card class="stat-card">
-        <span class="stat-value">{{ projectStatus.filesIndexed }}</span>
-        <span class="stat-label">Files indexed</span>
-      </mat-card>
-      <mat-card class="stat-card">
-        <span class="stat-value">{{ projectStatus.symbolsIndexed }}</span>
-        <span class="stat-label">Symbols</span>
-      </mat-card>
-      <mat-card class="stat-card">
-        <span class="stat-value">{{ projectStatus.memoriesCount }}</span>
-        <span class="stat-label">Memories</span>
-      </mat-card>
-      <mat-card class="stat-card">
-        <span class="stat-value stat-value--date">{{
-          projectStatus.lastIndexedAt ? (projectStatus.lastIndexedAt | date: 'short') : '—'
-        }}</span>
-        <span class="stat-label">Last indexed</span>
-      </mat-card>
+    <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
+        <p class="text-xs font-medium text-slate-500">Files indexed</p>
+        <p class="mt-1 text-2xl font-semibold text-slate-900 tabular-nums">{{ projectStatus.filesIndexed | number }}</p>
+      </div>
+      <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
+        <p class="text-xs font-medium text-slate-500">Symbols</p>
+        <p class="mt-1 text-2xl font-semibold text-slate-900 tabular-nums">{{ projectStatus.symbolsIndexed | number }}</p>
+      </div>
+      <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
+        <p class="text-xs font-medium text-slate-500">Memories</p>
+        <p class="mt-1 text-2xl font-semibold text-slate-900 tabular-nums">{{ projectStatus.memoriesCount | number }}</p>
+      </div>
+      <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
+        <p class="text-xs font-medium text-slate-500">Last indexed</p>
+        <p class="mt-1 text-sm font-semibold text-slate-900">
+          {{ projectStatus.lastIndexedAt ? (projectStatus.lastIndexedAt | date: 'short') : 'Never' }}
+        </p>
+      </div>
     </div>
 
-    <mat-card class="details-card">
-      <dl>
-        <dt>Root path</dt>
-        <dd>{{ projectStatus.project.rootPath }}</dd>
-        <dt>Created</dt>
-        <dd>{{ projectStatus.project.createdAt | date: 'medium' }}</dd>
+    <section class="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs">
+      <dl class="grid gap-x-8 gap-y-2 sm:grid-cols-2">
+        <div>
+          <dt class="text-xs font-medium text-slate-500">Repository root</dt>
+          <dd class="mt-0.5 font-mono text-xs text-slate-800">{{ projectStatus.project.rootPath }}</dd>
+        </div>
+        <div>
+          <dt class="text-xs font-medium text-slate-500">Created</dt>
+          <dd class="mt-0.5 text-xs text-slate-700">{{ projectStatus.project.createdAt | date: 'medium' }}</dd>
+        </div>
       </dl>
-      <div class="actions">
+
+      <div class="flex flex-wrap items-center gap-2">
         <button
-          mat-stroked-button
+          type="button"
+          class="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
           [disabled]="ctx.reindexing()"
-          [showProgress]="ctx.reindexing() && !reindexingFull()"
           (click)="reindex(false)"
         >
-          <mat-spinner progressIndicator diameter="18" />
-          <mat-icon>sync</mat-icon>
-          Reindex changed files
+          @if (ctx.reindexing() && !reindexingFull()) {
+            <app-spinner sizeClass="w-3.5 h-3.5" />
+          } @else {
+            <app-icon name="refresh" sizeClass="w-3.5 h-3.5" />
+          }
+          <span>Reindex changed files</span>
         </button>
+
         <button
-          mat-flat-button
-          color="primary"
+          type="button"
+          class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-medium text-white shadow-2xs transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-45"
           [disabled]="ctx.reindexing()"
-          [showProgress]="ctx.reindexing() && reindexingFull()"
           (click)="reindex(true)"
         >
-          <mat-spinner progressIndicator diameter="18" />
-          <mat-icon>refresh</mat-icon>
-          Full reindex
+          @if (ctx.reindexing() && reindexingFull()) {
+            <app-spinner sizeClass="w-3.5 h-3.5" />
+          } @else {
+            <app-icon name="bolt" sizeClass="w-3.5 h-3.5" />
+          }
+          <span>Full reindex</span>
         </button>
       </div>
-    </mat-card>
+    </section>
   }
 
   @if (statusError()) {
-    <mat-card class="empty-state">
-      <mat-icon>cloud_off</mat-icon>
-      <p>Could not load system status — is Context.Host running?</p>
-    </mat-card>
+    <app-empty-state
+      icon="error"
+      title="Could not load system status"
+      description="Make sure Context.Dashboard.Server is running and reachable."
+    />
   } @else if (status(); as hostStatus) {
-    <div class="chip-row">
-      <span class="status-chip" [class.healthy]="hostStatus.databaseReachable">
-        <mat-icon>{{ hostStatus.databaseReachable ? 'check_circle' : 'error' }}</mat-icon>
-        Database
-      </span>
-      <span class="status-chip" [class.healthy]="hostStatus.jobDispatcherAlive">
-        <mat-icon>{{ hostStatus.jobDispatcherAlive ? 'check_circle' : 'error' }}</mat-icon>
-        Job dispatcher
-      </span>
-      <span class="status-chip" [class.healthy]="hostStatus.mcpAlive">
-        <mat-icon>{{ hostStatus.mcpAlive ? 'check_circle' : 'error' }}</mat-icon>
-        MCP
-      </span>
-    </div>
+    <section class="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs">
+      <div class="space-y-3">
+        <div class="flex flex-wrap items-center gap-2">
+          <app-badge [tone]="hostStatus.databaseReachable ? 'success' : 'danger'">
+            <app-icon [name]="hostStatus.databaseReachable ? 'check-circle' : 'error'" sizeClass="w-3.5 h-3.5" />
+            Database
+          </app-badge>
+          <app-badge [tone]="hostStatus.jobDispatcherAlive ? 'success' : 'danger'">
+            <app-icon [name]="hostStatus.jobDispatcherAlive ? 'check-circle' : 'error'" sizeClass="w-3.5 h-3.5" />
+            Job dispatcher
+          </app-badge>
+          <app-badge [tone]="hostStatus.mcpAlive ? 'success' : 'danger'">
+            <app-icon [name]="hostStatus.mcpAlive ? 'check-circle' : 'error'" sizeClass="w-3.5 h-3.5" />
+            MCP server
+          </app-badge>
+        </div>
 
-    <mat-card class="details-card">
-      <dl>
-        <dt>Embedding provider</dt>
-        <dd>{{ hostStatus.embeddingProvider }}</dd>
-        <dt>LLM provider</dt>
-        <dd>{{ hostStatus.llmProvider }}</dd>
-        <dt>Uptime</dt>
-        <dd>{{ formatUptime(displayUptimeSeconds() ?? hostStatus.uptimeSeconds) }}</dd>
-      </dl>
-      <div class="actions">
-        <button mat-stroked-button type="button" (click)="openLogs()">
-          <mat-icon>description</mat-icon>
-          Logs
-        </button>
+        <dl class="flex flex-wrap gap-x-6 gap-y-2 text-xs">
+          <div>
+            <dt class="text-slate-500">Embeddings</dt>
+            <dd class="font-medium text-slate-800">{{ hostStatus.embeddingProvider }}</dd>
+          </div>
+          <div>
+            <dt class="text-slate-500">LLM</dt>
+            <dd class="font-medium text-slate-800">{{ hostStatus.llmProvider }}</dd>
+          </div>
+          <div>
+            <dt class="text-slate-500">Uptime</dt>
+            <dd class="font-medium text-slate-800 tabular-nums">
+              {{ formatUptime(displayUptimeSeconds() ?? hostStatus.uptimeSeconds) }}
+            </dd>
+          </div>
+        </dl>
       </div>
-    </mat-card>
 
-    <div class="stat-grid">
-      <mat-card class="stat-card">
-        <span class="stat-value">{{ hostStatus.jobsPending }}</span>
-        <span class="stat-label">Pending</span>
-        @if (hostStatus.jobsPending > 0) {
-          <button
-            mat-icon-button
-            type="button"
-            class="stat-card-action"
-            color="warn"
-            (click)="cleanupPending()"
-            [disabled]="cleaningUpPending()"
-            [showProgress]="cleaningUpPending()"
-            matTooltip="Delete every currently Pending job except hook, memory and summary jobs (discards queued work that hasn't run yet)"
-          >
-            <mat-spinner progressIndicator diameter="18" />
-            <mat-icon>delete_forever</mat-icon>
-          </button>
-        }
-      </mat-card>
-      <mat-card class="stat-card">
-        <span class="stat-value">{{ hostStatus.jobsRunning }}</span>
-        <span class="stat-label">Running</span>
-        @if (hostStatus.jobsRunning > 0) {
-          <button
-            mat-icon-button
-            type="button"
-            class="stat-card-action"
-            (click)="forceAllRunning()"
-            [disabled]="forcingAll()"
-            [showProgress]="forcingAll()"
-            matTooltip="Cancel and restart every Running job now, outside the per-project worker limit"
-          >
-            <mat-spinner progressIndicator diameter="18" />
-            <mat-icon>bolt</mat-icon>
-          </button>
-        }
-      </mat-card>
-      <mat-card class="stat-card" [class.stat-card--alert]="hostStatus.jobsFailed > 0">
-        <span class="stat-value">{{ hostStatus.jobsFailed }}</span>
-        <span class="stat-label">Failed</span>
-      </mat-card>
-      <mat-card class="stat-card">
-        <span class="stat-value">{{ hostStatus.jobsDone }}</span>
-        <span class="stat-label">Done</span>
-        @if (hostStatus.jobsDone > 0) {
-          <button
-            mat-icon-button
-            type="button"
-            class="stat-card-action"
-            (click)="cleanupCompleted()"
-            [disabled]="cleaningUpDone()"
-            [showProgress]="cleaningUpDone()"
-            matTooltip="Remove finished (Done) jobs from the queue"
-          >
-            <mat-spinner progressIndicator diameter="18" />
-            <mat-icon>delete_sweep</mat-icon>
-          </button>
-        }
-      </mat-card>
-    </div>
+      <button
+        type="button"
+        class="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+        (click)="logsOpen.set(true)"
+      >
+        <app-icon name="terminal" sizeClass="w-4 h-4 text-slate-500" />
+        <span>Host logs</span>
+      </button>
+    </section>
+
+    <app-dashboard-jobs-card [status]="hostStatus" />
   } @else {
-    <mat-progress-bar mode="indeterminate" />
+    <app-progress-bar />
   }
 
-  <mat-expansion-panel class="failed-jobs-panel" [expanded]="true">
-    <mat-expansion-panel-header>
-      <mat-panel-title>
-        <mat-icon>error_outline</mat-icon>
-        Failed jobs
-        @if (failedJobs().length > 0) {
-          <span class="panel-count">{{ failedJobs().length }}</span>
-        }
-      </mat-panel-title>
-    </mat-expansion-panel-header>
-
-    <div class="panel-toolbar">
-      <button mat-stroked-button type="button" (click)="loadFailedJobs()" [disabled]="jobsLoading()">
-        <mat-icon>refresh</mat-icon>
-        Refresh
-      </button>
-      @if (failedJobs().length > 0) {
-        <button
-          mat-stroked-button
-          type="button"
-          color="primary"
-          (click)="retryAllFailed()"
-          [disabled]="retryingAll()"
-          [showProgress]="retryingAll()"
-        >
-          <mat-spinner progressIndicator diameter="18" />
-          <mat-icon>replay</mat-icon>
-          Retry all
-        </button>
-      }
-      @if (jobsLoading() && !initialJobsLoading()) {
-        <mat-progress-bar mode="indeterminate" class="inline-progress" />
-      }
-    </div>
-
-    @if (initialJobsLoading()) {
-      <mat-progress-bar mode="indeterminate" />
-    } @else if (jobsError()) {
-      <div class="empty-state">
-        <mat-icon>cloud_off</mat-icon>
-        <p>Could not load failed jobs — is Context.Host running?</p>
-      </div>
-    } @else if (failedJobs().length === 0) {
-      <div class="empty-state">
-        <mat-icon>check_circle</mat-icon>
-        <p>No failed jobs.</p>
-      </div>
-    } @else {
-      <div class="jobs-table-wrap">
-        <table class="jobs-table">
-          <thead>
-            <tr>
-              <th>Type</th>
-              <th>Attempts</th>
-              <th>Last error</th>
-              <th>Created</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (job of failedJobs(); track job.id) {
-              <tr>
-                <td>{{ job.type }}</td>
-                <td>{{ job.attempts }}</td>
-                <td class="error-cell">
-                  {{ job.lastError || '—' }}
-                </td>
-                <td>{{ job.createdAt | date: 'short' }}</td>
-                <td class="retry-cell">
-                  <button
-                    mat-button
-                    type="button"
-                    color="primary"
-                    (click)="retryJob(job)"
-                    [disabled]="retryingJobId() === job.id"
-                    [showProgress]="retryingJobId() === job.id"
-                  >
-                    <mat-spinner progressIndicator diameter="18" />
-                    Retry
-                  </button>
-                </td>
-              </tr>
-            }
-          </tbody>
-        </table>
-      </div>
-    }
-  </mat-expansion-panel>
-
-  <mat-expansion-panel class="pending-jobs-panel" (opened)="loadPendingByType()">
-    <mat-expansion-panel-header>
-      <mat-panel-title>
-        <mat-icon>hourglass_empty</mat-icon>
-        Pending jobs by type
-        @if (pendingByType().length > 0) {
-          <span class="panel-count panel-count--neutral">{{ pendingByType().length }}</span>
-        }
-      </mat-panel-title>
-    </mat-expansion-panel-header>
-
-    <div class="panel-toolbar">
-      <button mat-stroked-button type="button" (click)="loadPendingByType()" [disabled]="pendingByTypeLoading()">
-        <mat-icon>refresh</mat-icon>
-        Refresh
-      </button>
-      @if (pendingByTypeLoading() && !initialPendingByTypeLoading()) {
-        <mat-progress-bar mode="indeterminate" class="inline-progress" />
-      }
-    </div>
-
-    @if (initialPendingByTypeLoading()) {
-      <mat-progress-bar mode="indeterminate" />
-    } @else if (pendingByTypeError()) {
-      <div class="empty-state">
-        <mat-icon>cloud_off</mat-icon>
-        <p>Could not load pending jobs — is Context.Host running?</p>
-      </div>
-    } @else if (pendingByType().length === 0) {
-      <div class="empty-state">
-        <mat-icon>check_circle</mat-icon>
-        <p>No pending jobs.</p>
-      </div>
-    } @else {
-      <div class="jobs-table-wrap">
-        <table class="jobs-table">
-          <thead>
-            <tr>
-              <th>Type</th>
-              <th>Pending</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (row of pendingByType(); track row.type) {
-              <tr>
-                <td>{{ row.type }}</td>
-                <td>{{ row.count }}</td>
-                <td class="retry-cell">
-                  @if (!isUserDataJobType(row.type)) {
-                    <button
-                      mat-button
-                      type="button"
-                      color="warn"
-                      (click)="cleanupPendingOfType(row.type, row.count)"
-                      [disabled]="cleaningUpPendingType() !== null"
-                      [showProgress]="cleaningUpPendingType() === row.type"
-                      matTooltip="Delete every Pending job of this type"
-                    >
-                      <mat-spinner progressIndicator diameter="18" />
-                      Delete
-                    </button>
-                  }
-                </td>
-              </tr>
-            }
-          </tbody>
-        </table>
-      </div>
-    }
-  </mat-expansion-panel>
-
-  <mat-expansion-panel class="running-jobs-panel" (opened)="loadRunningJobs()">
-    <mat-expansion-panel-header>
-      <mat-panel-title>
-        <mat-icon>pending_actions</mat-icon>
-        Running jobs
-        @if (runningJobs().length > 0) {
-          <span class="panel-count panel-count--neutral">{{ runningJobs().length }}</span>
-        }
-      </mat-panel-title>
-    </mat-expansion-panel-header>
-
-    <div class="panel-toolbar">
-      <button mat-stroked-button type="button" (click)="loadRunningJobs()" [disabled]="runningJobsLoading()">
-        <mat-icon>refresh</mat-icon>
-        Refresh
-      </button>
-      @if (runningJobs().length > 0) {
-        <button
-          mat-stroked-button
-          type="button"
-          color="warn"
-          (click)="forceAllRunning()"
-          [disabled]="forcingAll()"
-          [showProgress]="forcingAll()"
-        >
-          <mat-spinner progressIndicator diameter="18" />
-          <mat-icon>bolt</mat-icon>
-          Force all
-        </button>
-      }
-      @if (runningJobsLoading() && !initialRunningJobsLoading()) {
-        <mat-progress-bar mode="indeterminate" class="inline-progress" />
-      }
-    </div>
-
-    @if (initialRunningJobsLoading()) {
-      <mat-progress-bar mode="indeterminate" />
-    } @else if (runningJobsError()) {
-      <div class="empty-state">
-        <mat-icon>cloud_off</mat-icon>
-        <p>Could not load running jobs — is Context.Host running?</p>
-      </div>
-    } @else if (runningJobs().length === 0) {
-      <div class="empty-state">
-        <mat-icon>check_circle</mat-icon>
-        <p>No running jobs.</p>
-      </div>
-    } @else {
-      <div class="jobs-table-wrap">
-        <table class="jobs-table">
-          <thead>
-            <tr>
-              <th>Type</th>
-              <th>Attempts</th>
-              <th>Started</th>
-              <th>Previous attempt error</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (job of runningJobs(); track job.id) {
-              <tr>
-                <td>{{ job.type }}</td>
-                <td>{{ job.attempts }}</td>
-                <td>{{ job.startedAt ? (job.startedAt | date: 'mediumTime') : '—' }}</td>
-                <td class="error-cell">{{ job.lastError || '—' }}</td>
-                <td class="retry-cell">
-                  <button
-                    mat-button
-                    type="button"
-                    color="warn"
-                    (click)="forceJob(job)"
-                    [disabled]="forcingJobId() === job.id"
-                    [showProgress]="forcingJobId() === job.id"
-                    matTooltip="Cancel this attempt and restart it now as a fresh attempt"
-                  >
-                    <mat-spinner progressIndicator diameter="18" />
-                    Force
-                  </button>
-                </td>
-              </tr>
-            }
-          </tbody>
-        </table>
-      </div>
-    }
-  </mat-expansion-panel>
-
-  <mat-expansion-panel class="hooks-panel">
-    <mat-expansion-panel-header>
-      <mat-panel-title>
-        <mat-icon>webhook</mat-icon>
-        Hook invocations
-        @if (hookCount() > 0) {
-          <span class="panel-count panel-count--neutral">{{ hookCount() }}</span>
-        }
-      </mat-panel-title>
-    </mat-expansion-panel-header>
-
-    <div class="panel-toolbar">
-      <button mat-stroked-button type="button" (click)="loadHooksStatus()" [disabled]="hooksLoading()">
-        <mat-icon>refresh</mat-icon>
-        Refresh
-      </button>
-      @if (hooksLoading() && !initialHooksLoading()) {
-        <mat-progress-bar mode="indeterminate" class="inline-progress" />
-      }
-    </div>
-
-    @if (initialHooksLoading()) {
-      <mat-progress-bar mode="indeterminate" />
-    } @else if (hooksError()) {
-      <div class="empty-state">
-        <mat-icon>cloud_off</mat-icon>
-        <p>Could not load hook invocations — is Context.Host running?</p>
-      </div>
-    } @else if (recentHooks().length === 0) {
-      <div class="empty-state">
-        <mat-icon>info</mat-icon>
-        <p>No hook invocations recorded yet.</p>
-      </div>
-    } @else {
-      <div class="hooks-list">
-        @for (invocation of recentHooks(); track invocation.id) {
-          <div class="hook-entry">
-            <div class="hook-entry-header">
-              <span class="hook-type">{{ invocation.type }}</span>
-              <span class="hook-time">{{ invocation.receivedAt | date: 'short' }}</span>
-            </div>
-            <pre class="raw-json">{{ invocation.payloadJson }}</pre>
-          </div>
-        }
-      </div>
-    }
-  </mat-expansion-panel>
+  <app-dashboard-hooks-card />
 </div>
+
+@if (logsOpen()) {
+  <app-logs-dialog (closed)="logsOpen.set(false)" />
+}

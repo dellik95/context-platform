@@ -1,6 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Signal, signal } from '@angular/core';
-import { MatSnackBar } from '@angular/material/snack-bar';
 import { Subject, of } from 'rxjs';
 import { ApiService } from '../../core/api.service';
 import {
@@ -9,21 +8,24 @@ import {
   ReconsolidationReportSummaryDto,
 } from '../../core/models';
 import { SignalrService } from '../../core/signalr.service';
+import { ConfirmDialogService } from '../../shared/confirm-dialog/confirm-dialog.service';
+import { ToastService } from '../../shared/ui/toast.service';
 import { ProjectContextService } from '../projects/project-context.service';
 import { ConsolidationDialogComponent } from './consolidation-dialog.component';
 
-/**
- * Coverage: a report's details expand inline under its own row (one at a time), and deleting
- * reports collapses/refreshes the list. `ApiService` resources are stubbed with signals so the
- * test drives only the dialog's own state handling.
- */
 describe('ConsolidationDialogComponent', () => {
   let fixture: ComponentFixture<ConsolidationDialogComponent>;
   let reports: ReturnType<typeof signal<ReconsolidationReportSummaryDto[]>>;
   let reloadReports: ReturnType<typeof vi.fn>;
   let deleteReport: ReturnType<typeof vi.fn>;
   let cleanupReports: ReturnType<typeof vi.fn>;
-  let snackBarOpen: ReturnType<typeof vi.fn>;
+  let toastMock: {
+    success: ReturnType<typeof vi.fn>;
+    error: ReturnType<typeof vi.fn>;
+    warning: ReturnType<typeof vi.fn>;
+    show: ReturnType<typeof vi.fn>;
+  };
+  let confirmOpen: ReturnType<typeof vi.fn>;
 
   function summary(id: string, status: ConsolidationReportStatus): ReconsolidationReportSummaryDto {
     return { id, createdAt: '2026-01-01T00:00:00Z', status, appliedAt: null, stats: null };
@@ -60,7 +62,13 @@ describe('ConsolidationDialogComponent', () => {
     reloadReports = vi.fn();
     deleteReport = vi.fn(() => of(undefined));
     cleanupReports = vi.fn(() => of({ removed: 3 }));
-    snackBarOpen = vi.fn();
+    toastMock = {
+      success: vi.fn(),
+      error: vi.fn(),
+      warning: vi.fn(),
+      show: vi.fn(),
+    };
+    confirmOpen = vi.fn().mockResolvedValue(true);
 
     const apiServiceStub: Partial<ApiService> = {
       reconsolidationReportsResource: () =>
@@ -92,7 +100,8 @@ describe('ConsolidationDialogComponent', () => {
         { provide: ApiService, useValue: apiServiceStub },
         { provide: SignalrService, useValue: { jobCountsChanged$: new Subject<void>() } },
         { provide: ProjectContextService, useValue: { projectId: () => 'test-project' } },
-        { provide: MatSnackBar, useValue: { open: snackBarOpen } },
+        { provide: ToastService, useValue: toastMock },
+        { provide: ConfirmDialogService, useValue: { open: confirmOpen } },
       ],
     }).compileComponents();
 
@@ -105,18 +114,21 @@ describe('ConsolidationDialogComponent', () => {
   const root = () => fixture.nativeElement as HTMLElement;
   const items = () => [...root().querySelectorAll<HTMLElement>('.report-item')];
   const viewButton = (index: number) => items()[index].querySelector<HTMLButtonElement>('.report-row button')!;
-  const deleteButton = (index: number) => items()[index].querySelector<HTMLButtonElement>('button[mat-icon-button]')!;
+  const deleteButton = (index: number) =>
+    items()[index].querySelector<HTMLButtonElement>('button[data-action="delete-report"]')!;
   const clearButton = () =>
-    [...root().querySelectorAll<HTMLButtonElement>('.toolbar button')].find((b) => b.textContent?.includes('Clear finished'))!;
+    [...root().querySelectorAll<HTMLButtonElement>('.toolbar button')].find((b) =>
+      b.textContent?.includes('Clear finished'),
+    )!;
 
-  function click(button: HTMLButtonElement): void {
+  async function click(button: HTMLButtonElement): Promise<void> {
     button.click();
+    await fixture.whenStable();
     fixture.detectChanges();
   }
 
   beforeEach(() => {
     Element.prototype.scrollIntoView = vi.fn();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
   });
 
   afterEach(() => vi.restoreAllMocks());
@@ -127,33 +139,34 @@ describe('ConsolidationDialogComponent', () => {
 
     expect(hasDetail()).toEqual([false, false, false]);
 
-    click(viewButton(1));
+    await click(viewButton(1));
     expect(hasDetail()).toEqual([false, true, false]);
 
-    click(viewButton(0));
+    await click(viewButton(0));
     expect(hasDetail()).toEqual([true, false, false]);
 
-    click(viewButton(0));
+    await click(viewButton(0));
     expect(hasDetail()).toEqual([false, false, false]);
   });
 
   it('deletes a report, collapses it when expanded and refreshes the list', async () => {
     await create([summary('a', 'Pending'), summary('b', 'Applied')]);
 
-    click(viewButton(1));
-    click(deleteButton(1));
+    await click(viewButton(1));
+    await click(deleteButton(1));
 
+    expect(confirmOpen).toHaveBeenCalled();
     expect(deleteReport).toHaveBeenCalledWith('b');
     expect(root().querySelector('.report-detail')).toBeNull();
     expect(reloadReports).toHaveBeenCalled();
-    expect(snackBarOpen).toHaveBeenCalledWith('Report deleted.', 'Dismiss', expect.anything());
+    expect(toastMock.success).toHaveBeenCalledWith('Report deleted.', 3000);
   });
 
   it('keeps the expanded report when another one is deleted', async () => {
     await create([summary('a', 'Pending'), summary('b', 'Applied')]);
 
-    click(viewButton(0));
-    click(deleteButton(1));
+    await click(viewButton(0));
+    await click(deleteButton(1));
 
     expect(items()[0].querySelector('.report-detail')).not.toBeNull();
   });
@@ -179,12 +192,13 @@ describe('ConsolidationDialogComponent', () => {
   it('clears the finished reports and reports how many were removed', async () => {
     await create([summary('a', 'Pending'), summary('b', 'Applied'), summary('c', 'Failed')]);
 
-    click(viewButton(1));
-    click(clearButton());
+    await click(viewButton(1));
+    await click(clearButton());
 
+    expect(confirmOpen).toHaveBeenCalled();
     expect(cleanupReports).toHaveBeenCalledWith();
     expect(root().querySelector('.report-detail')).toBeNull();
     expect(reloadReports).toHaveBeenCalled();
-    expect(snackBarOpen).toHaveBeenCalledWith('Removed 3 reports.', 'Dismiss', expect.anything());
+    expect(toastMock.success).toHaveBeenCalledWith('Removed 3 reports.', 3000);
   });
 });

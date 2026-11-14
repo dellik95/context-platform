@@ -1,108 +1,76 @@
-using System.Text.Json;
 using Context.Application.Abstractions;
 using Context.Application.Jobs;
-using Context.Domain.Entities;
 using Context.Domain.Enums;
-using Context.Indexing;
 using Context.Indexing.Abstractions;
 using Context.Infrastructure.Abstractions;
-using Context.Providers;
 using Context.Providers.Abstractions;
-using Context.Shared;
-using Microsoft.Extensions.DataIngestion;
-using Microsoft.Extensions.DataIngestion.Chunkers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.ML.Tokenizers;
 using DomainFile = Context.Domain.Entities.File;
 
 namespace Context.Application.Indexing;
 
 /// <summary>
-/// Default <see cref="IIndexingPipeline"/>. Wires Context.Indexing's scanner/ignore-matcher/
-/// hasher/parsers and <see cref="SymbolDiffer"/> together with the Context.Infrastructure
-/// repositories, doing symbol-level incremental work per the task brief §4:
-/// <list type="bullet">
-/// <item>a file whose content hash hasn't changed is skipped entirely;</item>
-/// <item>symbols are matched across reindex by <c>QualifiedName</c> and diffed by a hash of their
-/// body text (via <see cref="SymbolDiffer"/>), reusing each matched symbol's previous
-/// <see cref="Symbol.Id"/> so cross-references (graph nodes, memory links) stay stable;</item>
-/// <item><c>EmbedChunk</c> is only enqueued for a chunk whose content hash has no
-/// <see cref="Domain.Entities.Embedding"/> row yet;</item>
-/// <item><c>UpdateGraph</c> is only enqueued when something about the file's symbol set actually
-/// changed (or on first index).</item>
-/// </list>
-/// <see cref="ReindexProjectAsync"/> processes files concurrently (bounded by machine core count),
-/// each inside its own DI scope — see that method's own remarks.
+/// Default <see cref="IIndexingPipeline"/>. Orchestrates full-project scans, change detection,
+/// deletion cleanup, and dispatches per-file indexing to <see cref="ParsedFileIndexer"/> or
+/// <see cref="UnparsedFileIndexer"/>.
 /// </summary>
-/// <remarks>
-/// <see cref="Symbol"/> only persists <see cref="Symbol.BodyHash"/> (a hash of raw body text
-/// alone — currently write-only, not read back by anything), not text <see cref="SymbolDiffer.Diff"/>
-/// could re-hash for comparison. This pipeline instead recovers a usable proxy for a symbol's
-/// previous diff-text from its corresponding <see cref="Chunk.Text"/> (which is
-/// <see cref="SymbolDiffer.CombinedText"/> of the symbol's signature and body, without its doc
-/// comment — see <see cref="IndexParsedFileAsync"/> — so re-diffing on it via an empty
-/// reconstructed SignatureText and the symbol's current <see cref="Symbol.DocComment"/>, per
-/// <see cref="SymbolDiffer.CombinedText"/>'s own null/empty handling, reproduces the same value).
-/// The one edge case this can't recover from is a symbol indexed
-/// before this pairing existed (or whose chunk was otherwise lost): its proxy body text is empty,
-/// which <see cref="SymbolDiffer"/> then reports as "Changed" even if the symbol didn't actually
-/// change — a harmless one-time false positive that self-heals on the very next reindex.
-/// </remarks>
-public sealed class IndexingPipeline(
-    IProjectRepository projects,
-    IFileRepository files,
-    ISymbolRepository symbols,
-    IChunkRepository chunks,
-    IEmbeddingRepository embeddings,
-    IProviderResolver providerResolver,
-    IFileScanner scanner,
-    Func<string, IIgnoreMatcher> ignoreFactory,
-    IEnumerable<ILanguageParser> parsers,
-    IContentHasher hasher,
-    IJobQueue jobQueue,
-    IServiceScopeFactory scopeFactory,
-    ILogger<IndexingPipeline>? logger = null,
-    IIndexingProgressReporter? progressReporter = null,
-    IFileSummarizer? fileSummarizer = null) : IIndexingPipeline
+public sealed class IndexingPipeline : IIndexingPipeline
 {
-    /// <summary>Safety cap on a single chunk's text so one pathological symbol/file can't blow up storage/search.</summary>
-    private const int MaxChunkChars = 20_000;
-
-    /// <summary>Safety cap on the whole document handed to <see cref="SplitUnparsedTextAsync"/> before
-    /// tokenizing/chunking -- larger than <see cref="MaxChunkChars"/> since the chunker itself now
-    /// splits the document into many chunks, each far under that per-chunk limit.</summary>
-    private const int MaxUnparsedDocChars = 200_000;
-
-    /// <summary>Target chunk size for <see cref="SplitUnparsedTextAsync"/>'s <see cref="DocumentTokenChunker"/> --
-    /// small enough that a query about one paragraph of a long README isn't diluted by the rest of
-    /// the document sharing its embedding.</summary>
-    private const int UnparsedChunkMaxTokens = 512;
-
-    /// <summary>Overlap between consecutive windows in <see cref="SplitUnparsedTextAsync"/>, so a
-    /// sentence spanning a chunk boundary still appears whole in at least one chunk.</summary>
-    private const int UnparsedChunkOverlapTokens = 64;
-
-    /// <summary>Shared, process-wide tokenizer for <see cref="SplitUnparsedTextAsync"/> -- built once
-    /// since constructing a <see cref="Tokenizer"/> isn't free and the instance is stateless/thread-safe.</summary>
-    private static readonly Lazy<Tokenizer> UnparsedDocTokenizer = new(() => TiktokenTokenizer.CreateForModel("gpt-4o"));
-
-    /// <summary>Bounds how many files this process indexes at once during
-    /// <see cref="ReindexProjectAsync"/>.</summary>
-    /// <remarks>
-    /// Deliberately much lower than <see cref="Environment.ProcessorCount"/>, and lower than
-    /// JobDispatcher's own gate, because this fan-out *nests inside* it: a reindex job already holds
-    /// one of the dispatcher's concurrency slots, so core-count here multiplied against core-count
-    /// there to put hundreds of thread-pool-blocking work items in flight on a 16-core box. The work
-    /// is blocking file and SQLite I/O rather than CPU, and SQLite serialises writers anyway, so the
-    /// extra parallelism bought queueing rather than throughput.
-    /// </remarks>
     private static readonly int MaxReindexParallelism = Math.Clamp(Environment.ProcessorCount / 4, 1, 4);
 
-    private readonly ILogger<IndexingPipeline> _logger = logger ?? NullLogger<IndexingPipeline>.Instance;
-    private readonly IIndexingProgressReporter _progressReporter = progressReporter ?? NullIndexingProgressReporter.Instance;
-    private readonly IFileSummarizer _fileSummarizer = fileSummarizer ?? NullFileSummarizer.Instance;
+    private readonly IProjectRepository _projects;
+    private readonly IFileRepository _files;
+    private readonly ISymbolRepository _symbols;
+    private readonly IChunkRepository _chunks;
+    private readonly IFileScanner _scanner;
+    private readonly Func<string, IIgnoreMatcher> _ignoreFactory;
+    private readonly IEnumerable<ILanguageParser> _parsers;
+    private readonly IContentHasher _hasher;
+    private readonly IJobQueue _jobQueue;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<IndexingPipeline> _logger;
+    private readonly IIndexingProgressReporter _progressReporter;
+    private readonly UnparsedFileIndexer _unparsedIndexer;
+    private readonly ParsedFileIndexer _parsedIndexer;
+
+    public IndexingPipeline(
+        IProjectRepository projects,
+        IFileRepository files,
+        ISymbolRepository symbols,
+        IChunkRepository chunks,
+        IEmbeddingRepository embeddings,
+        IProviderResolver providerResolver,
+        IFileScanner scanner,
+        Func<string, IIgnoreMatcher> ignoreFactory,
+        IEnumerable<ILanguageParser> parsers,
+        IContentHasher hasher,
+        IJobQueue jobQueue,
+        IServiceScopeFactory scopeFactory,
+        ILogger<IndexingPipeline>? logger = null,
+        IIndexingProgressReporter? progressReporter = null,
+        IFileSummarizer? fileSummarizer = null)
+    {
+        _projects = projects;
+        _files = files;
+        _symbols = symbols;
+        _chunks = chunks;
+        _scanner = scanner;
+        _ignoreFactory = ignoreFactory;
+        _parsers = parsers;
+        _hasher = hasher;
+        _jobQueue = jobQueue;
+        _scopeFactory = scopeFactory;
+        _logger = logger ?? NullLogger<IndexingPipeline>.Instance;
+        _progressReporter = progressReporter ?? NullIndexingProgressReporter.Instance;
+
+        var embedScheduler = new ChunkEmbedScheduler(embeddings, providerResolver, jobQueue);
+        _unparsedIndexer = new UnparsedFileIndexer(symbols, chunks, hasher, jobQueue, embedScheduler);
+        _parsedIndexer = new ParsedFileIndexer(
+            files, symbols, chunks, hasher, jobQueue, embedScheduler,
+            fileSummarizer ?? NullFileSummarizer.Instance, _logger);
+    }
 
     public Task IndexFileAsync(Guid projectId, string relativePath, CancellationToken ct) =>
         IndexFileInternalAsync(projectId, relativePath, forceReprocess: false, ct);
@@ -112,53 +80,32 @@ public sealed class IndexingPipeline(
 
     public async Task ReindexProjectAsync(Guid projectId, bool full, CancellationToken ct)
     {
-        var project = await projects.GetByIdAsync(projectId, ct).ConfigureAwait(false)
+        var project = await _projects.GetByIdAsync(projectId, ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"Project {projectId} was not found.");
 
-        var ignore = ignoreFactory(project.RootPath);
-        var scannedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        // FilesTotal must be known before the first progress report goes out, so the scan is
-        // buffered into a list up front rather than driving IndexFileInternalAsync straight off
-        // the IAsyncEnumerable as it streams in.
+        var ignore = _ignoreFactory(project.RootPath);
         var scannedFiles = new List<ScannedFile>();
-        await foreach (var scanned in scanner.ScanAsync(project.RootPath, ignore, ct).WithCancellation(ct))
+        await foreach (var scanned in _scanner.ScanAsync(project.RootPath, ignore, ct).WithCancellation(ct))
         {
             scannedFiles.Add(scanned);
         }
 
-        // Pure string bookkeeping, no I/O -- cheap enough to do in one sequential pass up front so
-        // the parallel loop below doesn't need a lock around a shared HashSet.
-        foreach (var scanned in scannedFiles)
-        {
-            scannedPaths.Add(NormalizePath(scanned.RelativePath));
-        }
+        var scannedPaths = scannedFiles
+            .Select(f => NormalizePath(f.RelativePath))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var filesTotal = scannedFiles.Count;
         var filesProcessed = 0;
         var filesFailed = 0;
 
-        // Each file is indexed inside its own freshly-created DI scope -- fresh IIndexingPipeline,
-        // fresh repositories, fresh pooled ContextDbContext -- rather than sharing this method's
-        // own scoped repositories: EF Core's DbContext isn't safe to use from more than one thread
-        // at once, so concurrent files can't share one. Same per-unit-of-work-scope pattern as
-        // JobDispatcher.ProcessClaimedJobAsync. Safe to run genuinely concurrently against the same
-        // SQLite file because ContextDbContext.SqlitePragmaConnectionInterceptor already turns on
-        // WAL journaling (readers don't block writers) plus a 10s busy_timeout for the rare
-        // writer-vs-writer collision.
         await Parallel.ForEachAsync(
             scannedFiles,
             new ParallelOptions { MaxDegreeOfParallelism = MaxReindexParallelism, CancellationToken = ct },
             async (scanned, token) =>
             {
-                // A single file that throws during parsing/indexing (malformed syntax, an
-                // unreadable file, ...) must not abort the whole pass -- it would otherwise take
-                // down the deleted-file cleanup and the completion signal below for every OTHER
-                // file too. Log it, count it, and move on; the file is retried by an IndexFile job
-                // (its ContentHash only advances once indexing finished, so that retry starts from scratch).
                 try
                 {
-                    using var scope = scopeFactory.CreateScope();
+                    using var scope = _scopeFactory.CreateScope();
                     var scopedPipeline = scope.ServiceProvider.GetRequiredService<IIndexingPipeline>();
                     await scopedPipeline.IndexFileAsync(projectId, scanned.RelativePath, forceReprocess: full, token).ConfigureAwait(false);
                 }
@@ -175,21 +122,23 @@ public sealed class IndexingPipeline(
                     await QueueFileRetryAsync(projectId, scanned.RelativePath).ConfigureAwait(false);
                 }
 
-                // Files can finish out of order under concurrency, so this count -- and the
-                // progress events it drives -- only converges monotonically to filesTotal, it
-                // doesn't necessarily arrive in scan order. Harmless: nothing downstream depends on
-                // strict ordering, only on the final Completed:true event (sent after this loop, see
-                // below) actually being last.
                 Interlocked.Increment(ref filesProcessed);
                 await ReportProgressAsync(new ReindexProgressDto(projectId, filesProcessed, filesTotal, Completed: false, filesFailed), token)
                     .ConfigureAwait(false);
             }).ConfigureAwait(false);
 
-        // Anything still on record for this project but not found by this scan has been deleted
-        // (or moved out from under an ignore rule) since the last reindex. This must still run
-        // even if some files above failed to index -- those files simply weren't touched, they
-        // were never removed from scannedPaths, so their deletion status is unaffected.
-        var knownFiles = await files.ListByProjectAsync(projectId, includeDeleted: false, ct).ConfigureAwait(false);
+        await CleanupRemovedFilesAsync(projectId, scannedPaths, ct).ConfigureAwait(false);
+
+        await _jobQueue.EnqueueAsync(JobType.ResolveRelations, new ResolveRelationsPayload(projectId), projectId, ct: ct)
+            .ConfigureAwait(false);
+
+        await ReportProgressAsync(new ReindexProgressDto(projectId, filesTotal, filesTotal, Completed: true, filesFailed), ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task CleanupRemovedFilesAsync(Guid projectId, HashSet<string> scannedPaths, CancellationToken ct)
+    {
+        var knownFiles = await _files.ListByProjectAsync(projectId, includeDeleted: false, ct).ConfigureAwait(false);
         foreach (var known in knownFiles)
         {
             ct.ThrowIfCancellationRequested();
@@ -198,33 +147,13 @@ public sealed class IndexingPipeline(
                 await HandleFileRemovedAsync(projectId, known.RelativePath, ct).ConfigureAwait(false);
             }
         }
-
-        // Self-healing sweep for UnresolvedExternal graph placeholders (see
-        // Handlers.ResolveRelationsJobHandler's own remarks for the full story): every per-file
-        // IndexFileInternalAsync call above that needed one has already enqueued its UpdateGraph
-        // job by this point, since that enqueue happens synchronously inline, in the same loop
-        // iteration, before the loop can move on -- so this is the earliest point at which "every
-        // UpdateGraph job this reindex run will ever produce has at least been queued" is true.
-        // There's no stronger "the job queue has actually drained" signal available anywhere in
-        // this codebase to wait on instead (JobDispatcher's channel exposes no such thing), so a
-        // job enqueued here can still race a same-run UpdateGraph job that a worker hasn't gotten
-        // to yet -- the same race this handler exists to correct. That's acceptable: it's a sweep,
-        // not a one-shot guarantee, and the periodic reindex this same method serves
-        // (ReindexSchedulerService) means any node still unresolved after this pass gets another
-        // attempt on the project's next scheduled reindex.
-        await jobQueue.EnqueueAsync(JobType.ResolveRelations, new ResolveRelationsPayload(projectId), projectId, ct: ct)
-            .ConfigureAwait(false);
-
-        await ReportProgressAsync(new ReindexProgressDto(projectId, filesTotal, filesTotal, Completed: true, filesFailed), ct)
-            .ConfigureAwait(false);
     }
 
-    /// <summary>Best effort: the failure being retried is already logged, and the next pass picks the file up again anyway.</summary>
     private async Task QueueFileRetryAsync(Guid projectId, string relativePath)
     {
         try
         {
-            await jobQueue.EnqueueAsync(JobType.IndexFile, new IndexFilePayload(projectId, relativePath), projectId, ct: CancellationToken.None)
+            await _jobQueue.EnqueueAsync(JobType.IndexFile, new IndexFilePayload(projectId, relativePath), projectId, ct: CancellationToken.None)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -233,11 +162,6 @@ public sealed class IndexingPipeline(
         }
     }
 
-    /// <summary>
-    /// Progress reporting is an observability side-channel, not part of the reindex itself — a
-    /// broken/unreachable reporter (e.g. a dropped SignalR connection) must never abort the
-    /// reindex it's reporting on.
-    /// </summary>
     private async Task ReportProgressAsync(ReindexProgressDto progress, CancellationToken ct)
     {
         try
@@ -256,22 +180,19 @@ public sealed class IndexingPipeline(
 
     private async Task IndexFileInternalAsync(Guid projectId, string relativePath, bool forceReprocess, CancellationToken ct)
     {
-        var project = await projects.GetByIdAsync(projectId, ct).ConfigureAwait(false)
+        var project = await _projects.GetByIdAsync(projectId, ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"Project {projectId} was not found.");
 
         var absolutePath = Path.Combine(project.RootPath, relativePath);
-
         if (!System.IO.File.Exists(absolutePath))
         {
             await HandleFileRemovedAsync(projectId, relativePath, ct).ConfigureAwait(false);
             return;
         }
 
-        var contentHash = hasher.HashFile(absolutePath);
-        var existingFile = await files.GetByRelativePathAsync(projectId, relativePath, ct).ConfigureAwait(false);
+        var contentHash = _hasher.HashFile(absolutePath);
+        var existingFile = await _files.GetByRelativePathAsync(projectId, relativePath, ct).ConfigureAwait(false);
 
-        // Incremental-indexing skip: identical content, nothing to do (spec §13 — "incremental
-        // indexing must avoid reprocessing unchanged files").
         if (!forceReprocess && existingFile is { IsDeleted: false } && existingFile.ContentHash == contentHash)
         {
             return;
@@ -279,11 +200,8 @@ public sealed class IndexingPipeline(
 
         var sourceText = await System.IO.File.ReadAllTextAsync(absolutePath, ct).ConfigureAwait(false);
         var extension = Path.GetExtension(relativePath);
-        var parser = parsers.FirstOrDefault(p => p.SupportedExtensions.Contains(extension));
+        var parser = _parsers.FirstOrDefault(p => p.SupportedExtensions.Contains(extension));
 
-        // The hash is written empty now and set for real as the very last step: an empty hash marks an
-        // index that never finished, so a retry (an IndexFile job, or the next reindex) cannot mistake a
-        // half-indexed file for an up-to-date one, and redoes the embedding and graph work too.
         var fileEntity = new DomainFile
         {
             Id = existingFile?.Id ?? Guid.NewGuid(),
@@ -295,383 +213,35 @@ public sealed class IndexingPipeline(
             IsDeleted = false,
             UpdatedAt = DateTimeOffset.UtcNow
         };
-        fileEntity = await files.UpsertAsync(fileEntity, ct).ConfigureAwait(false);
+        fileEntity = await _files.UpsertAsync(fileEntity, ct).ConfigureAwait(false);
 
         var isFirstIndex = existingFile is null || existingFile.ContentHash.Length == 0;
-
         if (parser is null)
         {
-            await IndexUnparsedFileAsync(projectId, fileEntity, sourceText, isFirstIndex, ct).ConfigureAwait(false);
+            await _unparsedIndexer.IndexAsync(projectId, fileEntity, sourceText, isFirstIndex, ct).ConfigureAwait(false);
         }
         else
         {
-            await IndexParsedFileAsync(projectId, fileEntity, parser, sourceText, isFirstIndex, ct).ConfigureAwait(false);
+            await _parsedIndexer.IndexAsync(projectId, fileEntity, parser, sourceText, isFirstIndex, ct).ConfigureAwait(false);
         }
 
-        await files.SetContentHashAsync(fileEntity.Id, contentHash, ct).ConfigureAwait(false);
+        await _files.SetContentHashAsync(fileEntity.Id, contentHash, ct).ConfigureAwait(false);
     }
 
     private async Task HandleFileRemovedAsync(Guid projectId, string relativePath, CancellationToken ct)
     {
-        var existingFile = await files.GetByRelativePathAsync(projectId, relativePath, ct).ConfigureAwait(false);
+        var existingFile = await _files.GetByRelativePathAsync(projectId, relativePath, ct).ConfigureAwait(false);
         if (existingFile is null || existingFile.IsDeleted)
         {
             return;
         }
 
-        // Chunks first (Chunk.SymbolId is FK-restricted to Symbol), then symbols, then the graph.
-        await chunks.ReplaceForFileAsync(existingFile.Id, [], ct).ConfigureAwait(false);
-        await symbols.ReplaceForFileAsync(existingFile.Id, [], ct).ConfigureAwait(false);
-        await jobQueue.EnqueueAsync(JobType.UpdateGraph, new UpdateGraphPayload(projectId, existingFile.Id, Invalidate: true), projectId, ct: ct)
+        await _chunks.ReplaceForFileAsync(existingFile.Id, [], ct).ConfigureAwait(false);
+        await _symbols.ReplaceForFileAsync(existingFile.Id, [], ct).ConfigureAwait(false);
+        await _jobQueue.EnqueueAsync(JobType.UpdateGraph, new UpdateGraphPayload(projectId, existingFile.Id, Invalidate: true), projectId, ct: ct)
             .ConfigureAwait(false);
-        await files.MarkDeletedAsync(existingFile.Id, ct).ConfigureAwait(false);
+        await _files.MarkDeletedAsync(existingFile.Id, ct).ConfigureAwait(false);
     }
-
-    private async Task IndexUnparsedFileAsync(Guid projectId, DomainFile fileEntity, string sourceText, bool isFirstIndex, CancellationToken ct)
-    {
-        // No ILanguageParser for this extension (e.g. JSON/markdown/docs): make the file lexically/
-        // semantically searchable via DocumentTokenChunker (see SplitUnparsedTextAsync) instead of
-        // one whole-file chunk -- a large README/markdown doc used to become a single oversized
-        // embedding that diluted a query's match against the one paragraph it was actually about.
-        // A short file still comes back as exactly one chunk, same as before.
-        var text = Cap(sourceText, MaxUnparsedDocChars);
-        var chunkTexts = await SplitUnparsedTextAsync(fileEntity.RelativePath, text, ct).ConfigureAwait(false);
-
-        var chunkEntities = chunkTexts.Select(chunkText => new Chunk
-        {
-            Id = Guid.NewGuid(),
-            FileId = fileEntity.Id,
-            SymbolId = null,
-            Text = chunkText,
-            TokenCount = TokenEstimator.Estimate(chunkText),
-            ContentHash = hasher.HashText(chunkText)
-        }).ToList();
-
-        await symbols.ReplaceForFileAsync(fileEntity.Id, [], ct).ConfigureAwait(false);
-        await chunks.ReplaceForFileAsync(fileEntity.Id, chunkEntities, ct).ConfigureAwait(false);
-
-        await EnqueueEmbedIfMissingAsync(projectId, chunkEntities, ct).ConfigureAwait(false);
-
-        if (isFirstIndex)
-        {
-            await jobQueue.EnqueueAsync(JobType.UpdateGraph, new UpdateGraphPayload(projectId, fileEntity.Id, Invalidate: false), projectId, ct: ct)
-                .ConfigureAwait(false);
-        }
-    }
-
-    /// <summary>
-    /// Splits <paramref name="text"/> into overlapping token-bounded windows via
-    /// <see cref="DocumentTokenChunker"/> (Microsoft.Extensions.DataIngestion) instead of the
-    /// symbol-aware splitting <see cref="IndexParsedFileAsync"/> gets from an <see cref="ILanguageParser"/>
-    /// -- there's no AST for a doc/markdown/config file, so token-window chunking is the closest
-    /// equivalent to "one chunk per logical unit" available for it. Falls back to the whole text as
-    /// a single chunk if the chunker (a preview package) produces nothing usable.
-    /// </summary>
-    private static async Task<IReadOnlyList<string>> SplitUnparsedTextAsync(string identifier, string text, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return [text];
-        }
-
-        var document = new IngestionDocument(identifier);
-        var section = new IngestionDocumentSection(text);
-        section.Elements.Add(new IngestionDocumentParagraph(text));
-        document.Sections.Add(section);
-
-        var options = new IngestionChunkerOptions(UnparsedDocTokenizer.Value)
-        {
-            MaxTokensPerChunk = UnparsedChunkMaxTokens,
-            OverlapTokens = UnparsedChunkOverlapTokens,
-        };
-        var chunker = new DocumentTokenChunker(options);
-
-        var result = new List<string>();
-        await foreach (var chunk in chunker.ProcessAsync(document, ct).ConfigureAwait(false))
-        {
-            if (!string.IsNullOrWhiteSpace(chunk.Content))
-            {
-                result.Add(chunk.Content);
-            }
-        }
-
-        return result.Count > 0 ? result : [text];
-    }
-
-    private async Task IndexParsedFileAsync(
-        Guid projectId, DomainFile fileEntity, ILanguageParser parser, string sourceText, bool isFirstIndex, CancellationToken ct)
-    {
-        var previous = await LoadPreviousSymbolDraftsAsync(fileEntity.Id, ct).ConfigureAwait(false);
-
-        var ast = parser.Parse(sourceText);
-        // A parser can legitimately extract two declarations under one QualifiedName (most
-        // commonly method overloads, which this pipeline's QualifiedName scheme doesn't
-        // disambiguate by parameter list) — SymbolDiffer.Diff already documents and accepts
-        // "last one wins" for that case; deduplicate here too, on the SAME raw list SymbolDiffer
-        // is about to see, so every symbol id assigned below is unique and this pipeline's own
-        // Symbol/Chunk rows never try to attach two EF-tracked entities under one key.
-        var currentDrafts = DeduplicateByQualifiedName(parser.ExtractSymbols(ast), fileEntity.RelativePath, _logger);
-        var diff = SymbolDiffer.Diff(previous.Drafts, currentDrafts);
-
-        // Preserve symbol identity by QualifiedName across reindex: a matched Added/Changed/
-        // Unchanged symbol keeps its previous Id, so anything keyed on Symbol.Id (graph nodes —
-        // see UpdateGraphJobHandler, which sets GraphNode.Id = Symbol.Id — and MemorySymbol
-        // links) stays stable across edits that don't rename the symbol.
-        var idByQualifiedName = new Dictionary<string, Guid>(currentDrafts.Count, StringComparer.Ordinal);
-        foreach (var draft in currentDrafts)
-        {
-            idByQualifiedName[draft.QualifiedName] = previous.IdByQualifiedName.TryGetValue(draft.QualifiedName, out var previousId)
-                ? previousId
-                : Guid.NewGuid();
-        }
-
-        var newSymbolRows = new List<Symbol>(currentDrafts.Count);
-        var newChunkRows = new List<Chunk>(currentDrafts.Count);
-
-        foreach (var draft in currentDrafts)
-        {
-            var symbolId = idByQualifiedName[draft.QualifiedName];
-            var parentId = draft.ParentQualifiedName is not null
-                && idByQualifiedName.TryGetValue(draft.ParentQualifiedName, out var pid)
-                    ? pid
-                    : (Guid?)null;
-
-            newSymbolRows.Add(new Symbol
-            {
-                Id = symbolId,
-                FileId = fileEntity.Id,
-                ParentSymbolId = parentId,
-                Kind = draft.Kind,
-                Name = draft.Name,
-                QualifiedName = draft.QualifiedName,
-                StartLine = draft.StartLine,
-                EndLine = draft.EndLine,
-                SignatureHash = hasher.HashText(draft.SignatureText ?? string.Empty),
-                BodyHash = hasher.HashText(draft.BodyText ?? string.Empty),
-                DocComment = draft.DocComment
-            });
-
-            // A parser reports BodyText == "" for a bodyless declaration (an interface member,
-            // an abstract method, a property with no accessors block, ...) — see e.g.
-            // TreeSitterCSharpParser's own documented "headerless" fallback for expression-bodied
-            // members. Chunking on BodyText alone then produces an empty chunk: no lexical/vector
-            // match ever finds meaningful text for it, and the resulting SearchHit falls back to a
-            // bare-GUID label. Always leading with SignatureText fixes that (bodyless members are
-            // then represented by their signature, which for those cases IS the whole declaration)
-            // and is a genuine quality improvement even when a body exists — a chunk that reads
-            // "public int Add(int a, int b) { return a + b; }" embeds/matches better than "return
-            // a + b;" alone. Leading further with DocComment (see SymbolDiffer.CombinedText's
-            // remarks) is what actually makes a natural-language query match at all: identifiers
-            // like "ComputeOrderTotal" tokenize as one lexeme for FTS5, so a prose query's separate
-            // words ("compute", "total") never match the signature/body text alone -- only the doc
-            // comment spells the symbol's purpose out in the separate words a query is phrased in.
-            var chunkText = Cap(SymbolDiffer.CombinedText(draft.DocComment, draft.SignatureText, draft.BodyText), MaxChunkChars);
-            newChunkRows.Add(new Chunk
-            {
-                Id = Guid.NewGuid(),
-                FileId = fileEntity.Id,
-                SymbolId = symbolId,
-                Text = chunkText,
-                TokenCount = TokenEstimator.Estimate(chunkText),
-                ContentHash = hasher.HashText(chunkText)
-            });
-        }
-
-        // A whole-file summary is regenerated whenever content actually changed (this method only
-        // runs on a changed/forced file to begin with) and is chunked/embedded the exact same way
-        // as every symbol chunk above, just keyed by FileId instead of SymbolId (see
-        // IndexUnparsedFileAsync's whole-file chunk for the same SymbolId == null precedent).
-        var summary = await _fileSummarizer
-            .SummarizeAsync(projectId, fileEntity.RelativePath, currentDrafts, ct)
-            .ConfigureAwait(false);
-
-        Chunk? summaryChunk = null;
-        if (!string.IsNullOrWhiteSpace(summary))
-        {
-            fileEntity.Summary = summary;
-            fileEntity = await files.UpsertAsync(fileEntity, ct).ConfigureAwait(false);
-
-            var summaryText = Cap(summary, MaxChunkChars);
-            summaryChunk = new Chunk
-            {
-                Id = Guid.NewGuid(),
-                FileId = fileEntity.Id,
-                SymbolId = null,
-                Text = summaryText,
-                TokenCount = TokenEstimator.Estimate(summaryText),
-                ContentHash = hasher.HashText(summaryText)
-            };
-            newChunkRows.Add(summaryChunk);
-        }
-
-        // FK ordering: Chunk.SymbolId and Chunk.FileId are both restrict-on-delete against
-        // Symbol/File. Old chunks (pointing at old symbol rows) must be cleared before the old
-        // symbols can be deleted; new chunks (pointing at new symbol rows) can only be inserted
-        // once those new symbols exist. Hence: clear chunks -> replace symbols -> insert chunks.
-        await chunks.ReplaceForFileAsync(fileEntity.Id, [], ct).ConfigureAwait(false);
-        await symbols.ReplaceForFileAsync(fileEntity.Id, newSymbolRows, ct).ConfigureAwait(false);
-        await chunks.ReplaceForFileAsync(fileEntity.Id, newChunkRows, ct).ConfigureAwait(false);
-
-        var changedOrAddedSymbolIds = diff.Added.Concat(diff.Changed)
-            .Select(d => idByQualifiedName[d.QualifiedName])
-            .ToHashSet();
-        // A first (or unfinished) index checks every chunk: the symbol diff of a retry sees nothing changed,
-        // because the failed attempt had already replaced the symbols.
-        var chunksNeedingEmbedCheck = newChunkRows
-            .Where(c => isFirstIndex || (c.SymbolId.HasValue && changedOrAddedSymbolIds.Contains(c.SymbolId.Value)) || c == summaryChunk)
-            .ToList();
-        await EnqueueEmbedIfMissingAsync(projectId, chunksNeedingEmbedCheck, ct).ConfigureAwait(false);
-
-        var hasStructuralChange = diff.Added.Count > 0 || diff.Changed.Count > 0 || diff.Removed.Count > 0;
-        if (hasStructuralChange || isFirstIndex)
-        {
-            var relationDraftsJson = await ExtractRelationDraftsJsonAsync(projectId, fileEntity.Id, parser, sourceText, ct).ConfigureAwait(false);
-            await jobQueue.EnqueueAsync(
-                    JobType.UpdateGraph,
-                    new UpdateGraphPayload(projectId, fileEntity.Id, Invalidate: false, relationDraftsJson),
-                    projectId, ct: ct)
-                .ConfigureAwait(false);
-        }
-    }
-
-    /// <summary>
-    /// Extracts this file's <see cref="RelationDraft"/>s from a second, independent
-    /// <see cref="ParsedAst"/> over the same in-memory <paramref name="sourceText"/> already read
-    /// for symbol extraction above -- a fresh <c>Parse</c> call, but no second disk read, and no
-    /// second <c>UpdateGraph</c>-job-time fetch of the project/symbol-name lookup. A parser's
-    /// <see cref="ILanguageParser.ExtractSymbols"/>/<see cref="ILanguageParser.ExtractRelations"/>
-    /// each dispose their own <see cref="ParsedAst"/>'s underlying tree as the last thing they do
-    /// (see <c>TreeSitterParsedTree</c>), so the earlier <c>ast</c> used for symbols above must not
-    /// be reused here -- each extraction gets its own freshly-parsed tree instead.
-    /// </summary>
-    private async Task<string?> ExtractRelationDraftsJsonAsync(
-        Guid projectId, Guid fileId, ILanguageParser parser, string sourceText, CancellationToken ct)
-    {
-        try
-        {
-            var projectSymbolNames = await symbols.GetAllNamesAsync(projectId, ct).ConfigureAwait(false);
-            var relationAst = parser.Parse(sourceText);
-            var relationDrafts = parser.ExtractRelations(relationAst, projectSymbolNames);
-            return relationDrafts.Count > 0 ? JsonSerializer.Serialize(relationDrafts) : null;
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            // Best-effort enrichment: if this fails, UpdateGraphJobHandler falls back to its own
-            // re-parse-from-disk path (RelationDraftsJson stays null) rather than failing indexing.
-            _logger.LogWarning(ex, "Failed to extract relation drafts for file {FileId}; UpdateGraph job will re-parse from disk instead.", fileId);
-            return null;
-        }
-    }
-
-    private async Task<PreviousSymbolInfo> LoadPreviousSymbolDraftsAsync(Guid fileId, CancellationToken ct)
-    {
-        var previousSymbolRows = await symbols.ListByFileAsync(fileId, ct).ConfigureAwait(false);
-        if (previousSymbolRows.Count == 0)
-        {
-            return new PreviousSymbolInfo([], new Dictionary<string, Guid>(StringComparer.Ordinal));
-        }
-
-        var previousChunkRows = await chunks.ListByFileAsync(fileId, ct).ConfigureAwait(false);
-        var bodyTextBySymbolId = previousChunkRows
-            .Where(c => c.SymbolId.HasValue)
-            .ToDictionary(c => c.SymbolId!.Value, c => c.Text);
-        var qualifiedNameById = previousSymbolRows.ToDictionary(s => s.Id, s => s.QualifiedName);
-
-        var drafts = new List<SymbolDraft>(previousSymbolRows.Count);
-        var idByQualifiedName = new Dictionary<string, Guid>(previousSymbolRows.Count, StringComparer.Ordinal);
-
-        foreach (var symbol in previousSymbolRows)
-        {
-            var bodyText = bodyTextBySymbolId.TryGetValue(symbol.Id, out var text) ? text : string.Empty;
-            var parentQualifiedName = symbol.ParentSymbolId.HasValue
-                && qualifiedNameById.TryGetValue(symbol.ParentSymbolId.Value, out var parentQn)
-                    ? parentQn
-                    : null;
-
-            // SignatureText itself isn't persisted (only SignatureHash) — bodyText here is really
-            // a proxy for the OLD Chunk.Text, which per SymbolDiffer.CombinedText already folds
-            // signature into body wherever the parser needed to (bodyless declarations). Passing
-            // it as BodyText with an empty SignatureText reproduces that same combined value when
-            // SymbolDiffer.Diff recombines them for hashing — an empty SignatureText contributes
-            // nothing to CombinedText, so this stays a faithful placeholder rather than a lossy one.
-            drafts.Add(new SymbolDraft(
-                symbol.Name, symbol.QualifiedName, symbol.Kind, symbol.StartLine, symbol.EndLine,
-                SignatureText: string.Empty, BodyText: bodyText, DocComment: symbol.DocComment,
-                ParentQualifiedName: parentQualifiedName));
-
-            idByQualifiedName[symbol.QualifiedName] = symbol.Id;
-        }
-
-        return new PreviousSymbolInfo(drafts, idByQualifiedName);
-    }
-
-    private async Task EnqueueEmbedIfMissingAsync(Guid projectId, IReadOnlyList<Chunk> candidateChunks, CancellationToken ct)
-    {
-        if (candidateChunks.Count == 0)
-        {
-            return;
-        }
-
-        var embeddingGenerator = await providerResolver.GetEmbeddingGeneratorAsync(projectId, ct).ConfigureAwait(false);
-        var hashes = candidateChunks.Select(c => c.ContentHash).Distinct().ToList();
-        var missing = await embeddings.GetMissingContentHashesAsync(hashes, embeddingGenerator.GetProviderModelKey(), ct).ConfigureAwait(false);
-        if (missing.Count == 0)
-        {
-            return;
-        }
-
-        // One item per distinct content hash, listing every chunk it covers (the vector index is keyed
-        // by ChunkId, not ContentHash), and one job per provider request's worth of items.
-        var missingSet = missing.ToHashSet();
-        var items = candidateChunks
-            .Where(c => missingSet.Contains(c.ContentHash))
-            .GroupBy(c => c.ContentHash)
-            .Select(g => new EmbedChunkItem(g.Key, g.First().Text, [.. g.Select(c => c.Id)]));
-
-        foreach (var batch in embeddingGenerator.GetBatchLimits().Split(items, i => i.Text))
-        {
-            await jobQueue.EnqueueAsync(JobType.EmbedChunk, new EmbedChunkPayload(projectId, batch), projectId, ct: ct)
-                .ConfigureAwait(false);
-        }
-    }
-
-    private static IReadOnlyList<SymbolDraft> DeduplicateByQualifiedName(
-        IReadOnlyList<SymbolDraft> drafts, string relativePath, ILogger logger)
-    {
-        if (drafts.Count < 2)
-        {
-            return drafts;
-        }
-
-        var byQualifiedName = new Dictionary<string, SymbolDraft>(drafts.Count, StringComparer.Ordinal);
-        var duplicateCount = 0;
-        foreach (var draft in drafts)
-        {
-            if (byQualifiedName.ContainsKey(draft.QualifiedName))
-            {
-                duplicateCount++;
-            }
-
-            byQualifiedName[draft.QualifiedName] = draft; // last one wins, matching SymbolDiffer.Diff's own policy
-        }
-
-        if (duplicateCount > 0)
-        {
-            logger.LogWarning(
-                "{File}: {Count} symbol(s) shared a QualifiedName with another symbol in the same file " +
-                "(most commonly an overload — QualifiedName here doesn't encode the parameter list) and were " +
-                "collapsed to the last-parsed declaration; only one is indexed.",
-                relativePath, duplicateCount);
-        }
-
-        return [.. byQualifiedName.Values];
-    }
-
-    private static string Cap(string text, int maxChars) => text.Length > maxChars ? text[..maxChars] : text;
 
     private static string NormalizePath(string relativePath) => relativePath.Replace('\\', '/');
 
@@ -683,6 +253,4 @@ public sealed class IndexingPipeline(
         ".py" => "python",
         _ => null
     };
-
-    private sealed record PreviousSymbolInfo(IReadOnlyList<SymbolDraft> Drafts, Dictionary<string, Guid> IdByQualifiedName);
 }

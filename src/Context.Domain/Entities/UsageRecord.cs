@@ -4,7 +4,7 @@ namespace Context.Domain.Entities;
 /// One LLM call's token usage, recorded for cost accounting (BACKLOG-27) - or, when
 /// <see cref="SavedTokens"/> is set instead of the LLM-spend fields, one MCP search-tool call's
 /// estimated token savings versus reading the referenced files in full (see
-/// Context.Dashboard.Server.Mcp.ContextMcpTools). A row is one or the other: spend rows leave
+/// Context.Dashboard.Server.Mcp.McpSavingsTracker). A row is one or the other: spend rows leave
 /// <see cref="SavedTokens"/> null; savings rows leave <see cref="Provider"/>/<see cref="Model"/>/
 /// <see cref="PromptTokens"/>/<see cref="CompletionTokens"/>/<see cref="TotalTokens"/> null/empty.
 /// </summary>

@@ -2,22 +2,17 @@ import { CommonModule } from '@angular/common';
 import { Component, computed, effect, inject, signal } from '@angular/core';
 import { FormField, form, readonly, required } from '@angular/forms/signals';
 import { Router, RouterLink } from '@angular/router';
-import { MatButtonModule } from '@angular/material/button';
-import { MatCardModule } from '@angular/material/card';
-import { MatDialog, MatDialogModule } from '@angular/material/dialog';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatIconModule } from '@angular/material/icon';
-import { MatInputModule } from '@angular/material/input';
-import { MatListModule } from '@angular/material/list';
-import { MatProgressBarModule } from '@angular/material/progress-bar';
-import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
-import { MatSnackBar } from '@angular/material/snack-bar';
-import { MatTooltipModule } from '@angular/material/tooltip';
 import { ApiService } from '../../core/api.service';
 import { ProjectDto } from '../../core/models';
 import { ProjectTokenService } from '../../core/project-token.service';
+import { ConfirmDialogService } from '../../shared/confirm-dialog/confirm-dialog.service';
 import { FolderPickerDialogComponent } from '../../shared/folder-picker/folder-picker-dialog.component';
-import { ProjectTokenDialogComponent } from './project-token-dialog.component';
+import { EmptyStateComponent } from '../../shared/ui/empty-state.component';
+import { IconComponent } from '../../shared/ui/icon.component';
+import { ProgressBarComponent } from '../../shared/ui/progress-bar.component';
+import { SpinnerComponent } from '../../shared/ui/spinner.component';
+import { ToastService } from '../../shared/ui/toast.service';
+import { ProjectTokenDialogComponent, ProjectTokenDialogData } from './project-token-dialog.component';
 
 @Component({
   selector: 'app-projects-list',
@@ -25,25 +20,20 @@ import { ProjectTokenDialogComponent } from './project-token-dialog.component';
     CommonModule,
     RouterLink,
     FormField,
-    MatCardModule,
-    MatListModule,
-    MatButtonModule,
-    MatIconModule,
-    MatFormFieldModule,
-    MatInputModule,
-    MatProgressBarModule,
-    MatProgressSpinnerModule,
-    MatDialogModule,
-    MatTooltipModule,
+    FolderPickerDialogComponent,
+    ProjectTokenDialogComponent,
+    IconComponent,
+    SpinnerComponent,
+    ProgressBarComponent,
+    EmptyStateComponent,
   ],
   templateUrl: './projects-list.component.html',
-  styleUrl: './projects-list.component.scss',
 })
 export class ProjectsListComponent {
   private readonly api = inject(ApiService);
   private readonly router = inject(Router);
-  private readonly snackBar = inject(MatSnackBar);
-  private readonly dialog = inject(MatDialog);
+  private readonly toast = inject(ToastService);
+  private readonly confirmDialog = inject(ConfirmDialogService);
   private readonly projectTokenService = inject(ProjectTokenService);
 
   private readonly resource = this.api.projectsResource();
@@ -51,6 +41,9 @@ export class ProjectsListComponent {
   protected readonly loading = this.resource.isLoading;
   protected readonly creating = signal(false);
   protected readonly showCreateForm = signal(false);
+  protected readonly showFolderPicker = signal(false);
+  protected readonly tokenDialogData = signal<ProjectTokenDialogData | null>(null);
+  protected readonly createdProjectId = signal<string | null>(null);
   protected readonly deletingId = signal<string | null>(null);
 
   protected readonly createModel = signal({ name: '', rootPath: '' });
@@ -63,20 +56,18 @@ export class ProjectsListComponent {
   constructor() {
     effect(() => {
       if (this.resource.error()) {
-        this.snackBar.open('Could not reach Context.Host — is it running?', 'Dismiss');
+        this.toast.error('Could not reach Context.Dashboard.Server — is it running?');
       }
     });
   }
 
   protected browseForRootPath(): void {
-    this.dialog
-      .open(FolderPickerDialogComponent, { width: '520px' })
-      .afterClosed()
-      .subscribe((selectedPath?: string) => {
-        if (selectedPath) {
-          this.createModel.update((current) => ({ ...current, rootPath: selectedPath }));
-        }
-      });
+    this.showFolderPicker.set(true);
+  }
+
+  protected onFolderSelected(selectedPath: string): void {
+    this.showFolderPicker.set(false);
+    this.createModel.update((current) => ({ ...current, rootPath: selectedPath }));
   }
 
   protected submitCreate(): void {
@@ -93,48 +84,49 @@ export class ProjectsListComponent {
         this.createModel.set({ name: '', rootPath: '' });
 
         if (project.warning) {
-          this.snackBar.open(project.warning, 'Dismiss', { duration: 20000 });
+          this.toast.warning(project.warning, 20000);
         }
 
         if (project.token) {
-          // Stash it locally so this tab can use the project right away, and show the
-          // one-time deep link so it can be bookmarked or handed to another browser/device --
-          // the raw token can never be retrieved again after this.
           this.projectTokenService.setToken(project.id, project.token);
           const link = new URL(`/projects/${project.id}`, window.location.origin);
           link.searchParams.set('projectId', project.id);
           link.searchParams.set('token', project.token);
 
-          this.dialog
-            .open(ProjectTokenDialogComponent, {
-              width: '520px',
-              data: { projectName: project.name, link: link.toString() },
-              disableClose: true,
-            })
-            .afterClosed()
-            .subscribe(() => this.router.navigate(['/projects', project.id]));
+          this.createdProjectId.set(project.id);
+          this.tokenDialogData.set({ projectName: project.name, link: link.toString() });
         } else {
-          this.router.navigate(['/projects', project.id]);
+          void this.router.navigate(['/projects', project.id]);
         }
       },
       error: (err) => {
         this.creating.set(false);
         const message = err?.status === 409 ? 'A project already exists at that path.' : 'Failed to create project.';
-        this.snackBar.open(message, 'Dismiss');
+        this.toast.error(message);
       },
     });
   }
 
-  /** Row is a routerLink `<a>`, so the click needs to stop navigation as well as propagation. */
-  protected deleteProject(project: ProjectDto, event: Event): void {
+  protected onTokenDialogClosed(): void {
+    const id = this.createdProjectId();
+    this.tokenDialogData.set(null);
+    this.createdProjectId.set(null);
+    if (id) {
+      void this.router.navigate(['/projects', id]);
+    }
+  }
+
+  protected async deleteProject(project: ProjectDto, event: Event): Promise<void> {
     event.preventDefault();
     event.stopPropagation();
 
-    if (
-      !confirm(
-        `Delete project "${project.name}"? This removes it from Context Platform (files, index, memories, sessions) but does not touch its files on disk.`,
-      )
-    ) {
+    const confirmed = await this.confirmDialog.open({
+      title: 'Delete project',
+      message: `Delete project "${project.name}"? This removes it from Context Platform (files, index, memories, sessions) without modifying files on disk.`,
+      confirmLabel: 'Delete project',
+      confirmTone: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
 
@@ -143,11 +135,11 @@ export class ProjectsListComponent {
       next: () => {
         this.deletingId.set(null);
         this.resource.update((current) => (current ?? []).filter((p) => p.id !== project.id));
-        this.snackBar.open(`Deleted project "${project.name}".`, 'Dismiss', { duration: 3000 });
+        this.toast.success(`Deleted project "${project.name}".`, 3000);
       },
       error: () => {
         this.deletingId.set(null);
-        this.snackBar.open(`Failed to delete project "${project.name}".`, 'Dismiss');
+        this.toast.error(`Failed to delete project "${project.name}".`);
       },
     });
   }

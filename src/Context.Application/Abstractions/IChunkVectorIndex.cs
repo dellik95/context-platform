@@ -26,7 +26,7 @@ public interface IChunkVectorIndex
     /// Removes every vector-index record for <paramref name="projectId"/>, across every
     /// embedding-provider collection that exists in this database. Used when deleting a project:
     /// this table is a separate sqlite-vec-backed store, not an EF-mapped entity, so Project's
-    /// cascade-delete FK configuration never reaches it (see <c>Context.Host.Api.ProjectEndpoints</c>'s
+    /// cascade-delete FK configuration never reaches it (see <c>Context.Dashboard.Server.Api.ProjectEndpoints</c>'s
     /// <c>DELETE /api/projects/{id}</c>).
     /// </summary>
     Task DeleteByProjectAsync(Guid projectId, CancellationToken ct);

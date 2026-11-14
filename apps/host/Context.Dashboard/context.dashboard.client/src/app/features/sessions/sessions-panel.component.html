@@ -1,222 +1,158 @@
-<div class="page">
-  <header class="page-header">
-    <h1>Sessions</h1>
+<div class="flex flex-col gap-5">
+  <header class="flex items-center justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-semibold tracking-tight text-slate-900">Sessions</h1>
+      <p class="mt-0.5 text-sm text-slate-500">
+        Claude Code session checkpoints, architectural discoveries, decisions, and history chunks.
+      </p>
+    </div>
+
     @if (backgroundLoading()) {
-      <mat-progress-bar mode="indeterminate" class="inline-progress" />
+      <div class="w-28">
+        <app-progress-bar />
+      </div>
     }
   </header>
 
   @if (initialLoading()) {
-    <mat-progress-bar mode="indeterminate" />
+    <app-progress-bar />
   } @else if (sessions().length === 0) {
-    <mat-card class="empty-state">
-      <p>No sessions recorded yet for this project.</p>
-    </mat-card>
+    <app-empty-state
+      icon="history"
+      title="No sessions recorded yet"
+      description="Sessions appear automatically as Claude Code hooks report prompts, stops, compactions, and session ends."
+    />
   } @else {
-    <div class="sessions-layout">
-      <mat-card class="sessions-list-col">
-        <div class="sessions-scroll">
+    <div class="grid gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <aside class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xs">
+        <div class="max-h-[70vh] divide-y divide-slate-100 overflow-y-auto">
           @for (group of sessionGroups(); track group.label) {
-            <div class="session-group">
-              <div class="session-group-label">{{ group.label }}</div>
-              <mat-list>
+            <div>
+              <div class="sticky top-0 z-10 border-b border-slate-100 bg-slate-50/95 px-4 py-2 text-xs font-semibold tracking-wider text-slate-500 uppercase backdrop-blur">
+                {{ group.label }}
+              </div>
+              <div class="divide-y divide-slate-100">
                 @for (entry of group.sessions; track entry.session.id) {
                   <button
                     type="button"
-                    mat-list-item
-                    class="session-item"
-                    [class.session-item--selected]="selectedId() === entry.session.id"
+                    class="flex w-full items-start gap-3 px-4 py-3 text-left transition"
+                    [class]="
+                      selectedId() === entry.session.id
+                        ? 'bg-indigo-50/80 ring-1 ring-inset ring-indigo-200'
+                        : 'hover:bg-slate-50'
+                    "
                     (click)="selectSession(entry)"
                   >
-                    <mat-icon matListItemIcon>{{ entry.session.status === 'Active' ? 'play_circle' : 'check_circle' }}</mat-icon>
-                    <span matListItemTitle class="session-title">
-                      {{ entry.title ?? (entry.session.startedAt | date: 'shortTime') }}
-                    </span>
-                    @if (entry.title) {
-                      <span matListItemLine class="session-line session-line--time">
-                        {{ entry.session.startedAt | date: 'shortTime' }}
-                      </span>
-                    }
-                    <span matListItemLine class="session-line">
-                      @if (entry.session.endedAt) {
-                        Ended {{ entry.session.endedAt | date: 'short' }}
-                      } @else {
-                        Still running
-                      }
+                    <app-icon
+                      [name]="entry.session.status === 'Active' ? 'play' : 'check-circle'"
+                      [sizeClass]="
+                        'w-4 h-4 mt-0.5 shrink-0 ' +
+                        (entry.session.status === 'Active' ? 'text-indigo-600' : 'text-emerald-600')
+                      "
+                    />
+                    <div class="min-w-0 flex-1">
+                      <p class="truncate text-sm font-medium text-slate-900">
+                        {{ entry.title ?? (entry.session.startedAt | date: 'shortTime') }}
+                      </p>
+                      <p class="mt-0.5 text-xs text-slate-500">
+                        @if (entry.title) {
+                          <span>{{ entry.session.startedAt | date: 'shortTime' }} · </span>
+                        }
+                        @if (entry.session.endedAt) {
+                          Ended {{ entry.session.endedAt | date: 'short' }}
+                        } @else {
+                          Still running
+                        }
+                      </p>
                       @if (entry.session.claudeSessionId) {
-                        <span class="claude-id">{{ entry.session.claudeSessionId | slice: 0 : 12 }}…</span>
+                        <p class="mt-1 truncate font-mono text-[11px] text-slate-400">
+                          {{ entry.session.claudeSessionId | slice: 0 : 12 }}…
+                        </p>
                       }
-                    </span>
-                    <span matListItemMeta class="status-badge" [class.active]="entry.session.status === 'Active'">
+                    </div>
+                    <app-badge [tone]="entry.session.status === 'Active' ? 'primary' : 'neutral'">
                       {{ entry.session.status }}
-                    </span>
+                    </app-badge>
                   </button>
                 }
-              </mat-list>
+              </div>
             </div>
           }
         </div>
-      </mat-card>
+      </aside>
 
-      <mat-card class="sessions-detail-col">
+      <section class="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs">
         @if (initialDetailLoading()) {
-          <mat-progress-bar mode="indeterminate" />
+          <app-progress-bar />
         } @else if (!selectedId()) {
-          <div class="empty-state">
-            <p>Select a session on the left to see its detail.</p>
+          <div class="flex min-h-64 items-center justify-center text-sm text-slate-500">
+            Select a session on the left to inspect its summary and checkpoints.
           </div>
         } @else if (detail(); as d) {
-          <div class="detail-content">
-            <div class="detail-header">
-              <div class="detail-heading">
-                <h2>{{ d.title ?? (d.session.startedAt | date: 'medium') }}</h2>
+          <div class="space-y-6">
+            <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
+              <div class="min-w-0">
+                <h2 class="text-lg font-semibold text-slate-900">
+                  {{ d.title ?? (d.session.startedAt | date: 'medium') }}
+                </h2>
                 @if (d.title) {
-                  <span class="detail-subtitle">{{ d.session.startedAt | date: 'medium' }}</span>
+                  <p class="mt-0.5 text-xs text-slate-500">{{ d.session.startedAt | date: 'medium' }}</p>
                 }
               </div>
-              <span class="event-count">{{ d.eventCount }} event{{ d.eventCount === 1 ? '' : 's' }}</span>
+              <app-badge tone="neutral">{{ d.eventCount }} event{{ d.eventCount === 1 ? '' : 's' }}</app-badge>
             </div>
 
-            @if (d.completed) {
-              <section class="detail-section">
-                <h3>Completed</h3>
-                <p>{{ d.completed }}</p>
-              </section>
-            }
-            @if (d.discovered) {
-              <section class="detail-section">
-                <h3>Discovered</h3>
-                <p>{{ d.discovered }}</p>
-              </section>
-            }
-            @if (d.decisions) {
-              <section class="detail-section">
-                <h3>Decisions</h3>
-                <p>{{ d.decisions }}</p>
-              </section>
-            }
-            @if (d.openIssues) {
-              <section class="detail-section">
-                <h3>Open issues</h3>
-                <p>{{ d.openIssues }}</p>
-              </section>
-            }
-            @if (d.nextSteps) {
-              <section class="detail-section">
-                <h3>Next steps</h3>
-                <p>{{ d.nextSteps }}</p>
-              </section>
-            }
-
-            @if (changedFiles(); as files) {
-              <section class="detail-section">
-                <h3>Changed files</h3>
-                @if (files.kind === 'list') {
-                  @if (files.items.length === 0) {
-                    <p class="muted">No files recorded.</p>
-                  } @else {
-                    <ul class="file-list">
-                      @for (file of files.items; track file) {
-                        <li>{{ file }}</li>
-                      }
-                    </ul>
-                  }
-                } @else {
-                  <pre class="raw-json">{{ files.raw }}</pre>
-                }
-              </section>
-            }
+            <app-session-summary-fields
+              [completed]="d.completed"
+              [discovered]="d.discovered"
+              [decisions]="d.decisions"
+              [openIssues]="d.openIssues"
+              [nextSteps]="d.nextSteps"
+              [changedFilesJson]="d.changedFilesJson"
+            />
 
             @if (!hasSummaryContent(d)) {
-              <div class="no-summary">
-                <mat-icon>hourglass_empty</mat-icon>
+              <div class="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                <app-icon name="clock" sizeClass="w-4 h-4 text-slate-400" />
                 @if (d.session.status === 'Active') {
-                  <p>Session still in progress — a summary appears once it ends.</p>
+                  <span>Session still in progress — a summary appears periodically or once it ends.</span>
                 } @else {
-                  <p>No summary was generated for this session.</p>
+                  <span>No summary was generated for this session.</span>
                 }
               </div>
             }
 
             @if (summaryChunks().length > 0) {
-              <mat-expansion-panel class="history-panel">
-                <mat-expansion-panel-header>
-                  <mat-panel-title>
-                    <mat-icon>history</mat-icon>
-                    History
-                    <span class="panel-count">{{ summaryChunks().length }}</span>
-                  </mat-panel-title>
-                </mat-expansion-panel-header>
+              <app-collapsible-section
+                title="Checkpoint history"
+                [(expanded)]="historyExpanded"
+              >
+                <span section-badges>
+                  <app-badge tone="neutral">{{ summaryChunks().length }}</app-badge>
+                </span>
 
-                <mat-accordion class="chunk-accordion" multi>
+                <div class="space-y-2.5">
                   @for (chunk of summaryChunks(); track chunk.id) {
-                    <mat-expansion-panel>
-                      <mat-expansion-panel-header>
-                        <mat-panel-title>
-                          <span class="chunk-sequence">#{{ chunk.sequenceNumber }}</span>
-                          {{ chunk.title ?? 'Untitled chunk' }}
-                        </mat-panel-title>
-                        <mat-panel-description>
-                          {{ chunk.fromEventAt | date: 'short' }} – {{ chunk.toEventAt | date: 'short' }}
-                        </mat-panel-description>
-                      </mat-expansion-panel-header>
-
-                      @if (chunk.completed) {
-                        <section class="detail-section">
-                          <h3>Completed</h3>
-                          <p>{{ chunk.completed }}</p>
-                        </section>
-                      }
-                      @if (chunk.discovered) {
-                        <section class="detail-section">
-                          <h3>Discovered</h3>
-                          <p>{{ chunk.discovered }}</p>
-                        </section>
-                      }
-                      @if (chunk.decisions) {
-                        <section class="detail-section">
-                          <h3>Decisions</h3>
-                          <p>{{ chunk.decisions }}</p>
-                        </section>
-                      }
-                      @if (chunk.openIssues) {
-                        <section class="detail-section">
-                          <h3>Open issues</h3>
-                          <p>{{ chunk.openIssues }}</p>
-                        </section>
-                      }
-                      @if (chunk.nextSteps) {
-                        <section class="detail-section">
-                          <h3>Next steps</h3>
-                          <p>{{ chunk.nextSteps }}</p>
-                        </section>
-                      }
-                      @if (parseChangedFiles(chunk.changedFilesJson); as files) {
-                        <section class="detail-section">
-                          <h3>Changed files</h3>
-                          @if (files.kind === 'list') {
-                            @if (files.items.length === 0) {
-                              <p class="muted">No files recorded.</p>
-                            } @else {
-                              <ul class="file-list">
-                                @for (file of files.items; track file) {
-                                  <li>{{ file }}</li>
-                                }
-                              </ul>
-                            }
-                          } @else {
-                            <pre class="raw-json">{{ files.raw }}</pre>
-                          }
-                        </section>
-                      }
-                    </mat-expansion-panel>
+                    <app-collapsible-section
+                      [title]="'#' + chunk.sequenceNumber + ' ' + (chunk.title ?? 'Untitled chunk')"
+                      [subtitle]="(chunk.fromEventAt | date: 'short') + ' – ' + (chunk.toEventAt | date: 'short')"
+                    >
+                      <app-session-summary-fields
+                        [completed]="chunk.completed"
+                        [discovered]="chunk.discovered"
+                        [decisions]="chunk.decisions"
+                        [openIssues]="chunk.openIssues"
+                        [nextSteps]="chunk.nextSteps"
+                        [changedFilesJson]="chunk.changedFilesJson"
+                      />
+                    </app-collapsible-section>
                   }
-                </mat-accordion>
-              </mat-expansion-panel>
+                </div>
+              </app-collapsible-section>
             }
           </div>
         }
-      </mat-card>
+      </section>
     </div>
   }
 </div>

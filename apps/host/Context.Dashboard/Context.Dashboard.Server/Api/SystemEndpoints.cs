@@ -1,5 +1,6 @@
 using Context.Domain.Enums;
 using Context.Dashboard.Server.Security;
+using Context.Dashboard.Server.Startup;
 using Context.Infrastructure;
 using Context.Infrastructure.Abstractions;
 using Context.Providers;

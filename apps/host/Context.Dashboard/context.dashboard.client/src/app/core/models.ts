@@ -1,5 +1,5 @@
 // Mirrors the real backend DTOs/entities exactly — see:
-//   apps/host/Context.Host/Api/*.cs (REST DTOs)
+//   apps/host/Context.Dashboard/Context.Dashboard.Server/Api/*.cs (REST DTOs)
 //   src/Context.Domain/Entities/*.cs, src/Context.Domain/Enums/*.cs (raw entities returned as-is
 //     by /api/memories and /api/graph/impact)
 // Enums serialize as their C# member name (Program.cs registers JsonStringEnumConverter) — keep
@@ -358,7 +358,7 @@ export interface SessionDetailDto {
 }
 
 // GET /api/sessions/{id}/summary-chunks rows -- mirrors SessionSummaryChunkDto
-// (apps/host/Context.Host/Api/SessionEndpoints.cs), one per append-only summary chunk, ordered by
+// (apps/host/Context.Dashboard/Context.Dashboard.Server/Api/SessionEndpoints.cs), one per append-only summary chunk, ordered by
 // sequenceNumber ascending.
 export interface SessionSummaryChunkDto {
   id: string;
@@ -381,7 +381,7 @@ export interface SessionSummaryChunkDto {
 /** Pushed over the /hubs/indexing SignalR hub's "ProjectStatusChanged" event. */
 export type ProjectStatusChangedEvent = ProjectStatusDto;
 
-// Mirrors apps/host/Context.Host/Api/SystemEndpoints.cs's SystemStatusDto record.
+// Mirrors apps/host/Context.Dashboard/Context.Dashboard.Server/Api/SystemEndpoints.cs's SystemStatusDto record.
 export interface SystemStatusDto {
   databaseReachable: boolean;
   jobDispatcherAlive: boolean;
@@ -395,7 +395,7 @@ export interface SystemStatusDto {
   uptimeSeconds: number;
 }
 
-// Mirrors apps/host/Context.Host/Api/JobsEndpoints.cs's JobDto record. Deliberately omits
+// Mirrors apps/host/Context.Dashboard/Context.Dashboard.Server/Api/JobsEndpoints.cs's JobDto record. Deliberately omits
 // PayloadJson (can be arbitrarily large, not needed to see "what failed and why").
 export interface JobDto {
   id: string;
@@ -433,13 +433,13 @@ export interface CleanupJobsResponse {
   removed: number;
 }
 
-// Mirrors apps/host/Context.Host/Api/JobsEndpoints.cs's LogTailDto record.
+// Mirrors apps/host/Context.Dashboard/Context.Dashboard.Server/Api/JobsEndpoints.cs's LogTailDto record.
 export interface LogTailDto {
   lines: string[];
   filePath: string | null;
 }
 
-// Mirrors apps/host/Context.Host/Api/UsageEndpoints.cs's UsagePurposeDto record. `tokens` is real
+// Mirrors apps/host/Context.Dashboard/Context.Dashboard.Server/Api/UsageEndpoints.cs's UsagePurposeDto record. `tokens` is real
 // LLM-call spend; `estimatedSavedTokens` is the counterfactual MCP search-tool savings estimate
 // (max(0, fullFileTokens - returnedTokens), see UsageRecord.SavedTokens) -- the two are never the
 // same kind of number and must not be added together as if they were.
@@ -450,7 +450,7 @@ export interface UsagePurposeDto {
   estimatedSavedTokens: number;
 }
 
-// Mirrors apps/host/Context.Host/Api/UsageEndpoints.cs's UsageDayDto record. day is an ISO-8601
+// Mirrors apps/host/Context.Dashboard/Context.Dashboard.Server/Api/UsageEndpoints.cs's UsageDayDto record. day is an ISO-8601
 // date (yyyy-MM-dd, no time component) -- .NET's DateOnly serializes this way by default.
 // `estimatedSavedTokens` is a counterfactual estimate, not measured spend -- see UsagePurposeDto.
 export interface UsageDayDto {
@@ -460,7 +460,7 @@ export interface UsageDayDto {
   estimatedSavedTokens: number;
 }
 
-// Mirrors apps/host/Context.Host/Api/UsageEndpoints.cs's UsageSummaryDto record, returned by
+// Mirrors apps/host/Context.Dashboard/Context.Dashboard.Server/Api/UsageEndpoints.cs's UsageSummaryDto record, returned by
 // GET /api/usage?projectId={id}&days={n=30}. `totalTokens`/`totalCalls` are real spend;
 // `totalEstimatedSavedTokens` is the estimate described on UsagePurposeDto; `estimatedNetTokens`
 // is simply `totalEstimatedSavedTokens - totalTokens`, a convenience "profit" figure that mixes a
@@ -537,16 +537,16 @@ export interface ClaudeInstallResponse {
 
 export type ProjectActivityKind = 'SessionSummaryUpdated' | 'MemoryChanged';
 
-// Pushed over the /hubs/indexing SignalR hub's "ProjectActivity" event (Context.Host's
-// IndexingHub.ProjectActivityAsync) whenever a session gets a new summary or a memory is
+// Pushed over the /hubs/indexing SignalR hub's "ProjectActivity" event (Context.Dashboard.Server's
+// IndexingHubNotifier.ProjectActivityAsync) whenever a session gets a new summary or a memory is
 // extracted, so Sessions/Memories panels can refresh live instead of only loading once.
 export interface ProjectActivityEvent {
   projectId: string;
   kind: ProjectActivityKind;
 }
 
-// Pushed over the /hubs/indexing SignalR hub's "JobCountsChanged" event (Context.Host's
-// IndexingHub.JobCountsChangedAsync), broadcast to every connected client -- not scoped to a
+// Pushed over the /hubs/indexing SignalR hub's "JobCountsChanged" event (Context.Dashboard.Server's
+// IndexingHubNotifier.JobCountsChangedAsync), broadcast to every connected client -- not scoped to a
 // project group, since the counts themselves are host-wide (same as SystemStatusDto's own
 // jobsXxx fields). Mirrors Context.Application.Notifications.JobCounts.
 export interface JobCountsChangedEvent {

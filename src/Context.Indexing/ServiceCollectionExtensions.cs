@@ -18,10 +18,6 @@ public static class ServiceCollectionExtensions
     /// grammar (package <c>TreeSitter.DotNet</c>) rather than being zero-native-dependency, and each
     /// implements <see cref="IDisposable"/> to release its long-lived native
     /// <c>TreeSitter.Language</c> handle when the DI container shuts down.
-    /// <c>Context.Indexing.Parsers.RegexHeuristicParser</c> (the original MVP heuristic substitute)
-    /// remains in the codebase and fully unit-tested, but is no longer wired up here as the default
-    /// for any extension — construct it directly if a caller specifically wants the regex-heuristic
-    /// behavior instead.
     /// </summary>
     /// <remarks>
     /// <see cref="IIgnoreMatcher"/> is intentionally NOT registered as a plain singleton here:

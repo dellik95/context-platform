@@ -84,11 +84,11 @@
     <!-- The vocabulary data TiktokenTokenizer.CreateForModel loads at runtime: without it every file that has
          no language parser (markdown, JSON, config) fails to chunk with "tokenizer data file ... could not be loaded". -->
     <PackageVersion Include="Microsoft.ML.Tokenizers.Data.O200kBase" Version="2.0.0" />
-    <!-- Context.Host: run as a native OS service on either platform (both packages are no-ops
+    <!-- Context.Dashboard.Server: run as a native OS service on either platform (both packages are no-ops
          when the process isn't actually launched by that platform's service manager). -->
     <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.12" />
-    <!-- Context.IntegrationTests: in-process HTTP testing against Context.Host's real Program. -->
+    <!-- Context.IntegrationTests: in-process HTTP testing against Context.Dashboard.Server's real Program. -->
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.12" />
     <!-- Context.Indexing: real tree-sitter bindings + bundled native grammars for every RID
          (win/linux/osx, x64/x86/arm64) in one self-contained package — verified working directly

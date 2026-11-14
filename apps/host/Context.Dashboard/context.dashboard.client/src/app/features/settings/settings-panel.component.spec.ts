@@ -1,10 +1,10 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
-import { MatDialog } from '@angular/material/dialog';
-import { MatSnackBar } from '@angular/material/snack-bar';
 import { of } from 'rxjs';
 import { ApiService } from '../../core/api.service';
 import { ProjectSettingsDto } from '../../core/models';
+import { ConfirmDialogService } from '../../shared/confirm-dialog/confirm-dialog.service';
+import { ToastService } from '../../shared/ui/toast.service';
 import { ProjectContextService } from '../projects/project-context.service';
 import { SettingsPanelComponent } from './settings-panel.component';
 
@@ -71,9 +71,9 @@ describe('SettingsPanelComponent', () => {
       providers: [
         { provide: ApiService, useValue: apiServiceStub },
         { provide: ProjectContextService, useValue: { projectId: () => 'test-project', projectName: () => 'Test Project' } },
-        { provide: MatSnackBar, useValue: { open: () => undefined } },
+        { provide: ToastService, useValue: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), show: vi.fn() } },
         { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
-        { provide: MatDialog, useValue: { open: () => ({ afterClosed: () => ({ subscribe: () => undefined }) }) } },
+        { provide: ConfirmDialogService, useValue: { open: vi.fn().mockResolvedValue(true) } },
       ],
     }).compileComponents();
 
@@ -83,13 +83,6 @@ describe('SettingsPanelComponent', () => {
     fixture.detectChanges();
   }
 
-  /**
-   * Coverage: the cloud data-use disclosure must render when (and only when) a
-   * non-local provider (openai/anthropic) is selected in either provider dropdown, and stay hidden
-   * for ollama/foundry/noop. `ApiService` and `ProjectContextService` are stubbed so this exercises only the
-   * component's own rendering logic, not the real HTTP/SignalR wiring `ProjectContextService`
-   * normally brings with it.
-   */
   describe('cloud provider disclosure', () => {
     function disclosureElement(): Element | null {
       return (fixture.nativeElement as HTMLElement).querySelector('.provider-note--cloud-disclosure');
@@ -145,10 +138,10 @@ describe('SettingsPanelComponent', () => {
     }
 
     function fieldInput(label: string): HTMLInputElement {
-      const field = [...root().querySelectorAll('mat-form-field')].find(
-        (f) => f.querySelector('mat-label')?.textContent?.trim() === label,
+      const container = [...root().querySelectorAll('label')].find(
+        (l) => l.querySelector('span')?.textContent?.trim() === label,
       );
-      return field?.querySelector('input') as HTMLInputElement;
+      return container?.querySelector('input') as HTMLInputElement;
     }
 
     function type(label: string, value: string): void {
@@ -159,7 +152,7 @@ describe('SettingsPanelComponent', () => {
     }
 
     function toggleSwitch(label: string): HTMLButtonElement {
-      const toggle = [...root().querySelectorAll('mat-slide-toggle')].find(
+      const toggle = [...root().querySelectorAll('.settings-toggle')].find(
         (t) => t.textContent?.trim() === label,
       );
       return toggle?.querySelector('button[role="switch"]') as HTMLButtonElement;

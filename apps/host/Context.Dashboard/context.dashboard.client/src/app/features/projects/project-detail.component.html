@@ -1,41 +1,53 @@
-<div class="project-shell">
-  <div class="project-top">
-    <header class="project-header">
-      <a routerLink="/projects" class="back-link">
-        <mat-icon>arrow_back</mat-icon>
-      </a>
-      <h1>{{ ctx.projectName() || 'Loading…' }}</h1>
-    </header>
+<div class="flex flex-col">
+  <div class="sticky top-14 z-20 border-b border-slate-200 bg-white">
+    <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center gap-3 pt-4 pb-2">
+        <a
+          routerLink="/projects"
+          class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+          title="All projects"
+          aria-label="Back to projects"
+        >
+          <app-icon name="arrow-back" sizeClass="w-4 h-4" />
+        </a>
+        <div class="min-w-0 flex-1">
+          <h1 class="truncate text-lg font-semibold text-slate-900 sm:text-xl">
+            {{ ctx.projectName() || 'Loading…' }}
+          </h1>
+          @if (ctx.status()?.project?.rootPath; as rootPath) {
+            <p class="truncate font-mono text-xs text-slate-500">{{ rootPath }}</p>
+          }
+        </div>
+      </div>
 
-    <nav class="project-tabs" mat-tab-nav-bar [tabPanel]="panel">
-      <a mat-tab-link routerLink="dashboard" routerLinkActive #dashboard="routerLinkActive" [active]="dashboard.isActive">
-        Dashboard
-      </a>
-      <a mat-tab-link routerLink="search" routerLinkActive #search="routerLinkActive" [active]="search.isActive">
-        Search
-      </a>
-      <a mat-tab-link routerLink="memories" routerLinkActive #memories="routerLinkActive" [active]="memories.isActive">
-        Memories
-      </a>
-      <a mat-tab-link routerLink="sessions" routerLinkActive #sessions="routerLinkActive" [active]="sessions.isActive">
-        Sessions
-      </a>
-      <a mat-tab-link routerLink="graph" routerLinkActive #graph="routerLinkActive" [active]="graph.isActive">
-        Graph
-      </a>
-      <a mat-tab-link routerLink="settings" routerLinkActive #settings="routerLinkActive" [active]="settings.isActive">
-        Settings
-      </a>
-      <a mat-tab-link routerLink="usage" routerLinkActive #usage="routerLinkActive" [active]="usage.isActive">
-        Usage
-      </a>
-    </nav>
+      <nav class="-mb-px flex gap-1 overflow-x-auto" aria-label="Project sections">
+        @for (tab of tabs; track tab.route) {
+          <a
+            [routerLink]="tab.route"
+            routerLinkActive="border-indigo-600 text-indigo-700"
+            #rla="routerLinkActive"
+            [class]="
+              'inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium whitespace-nowrap transition ' +
+              (rla.isActive
+                ? 'border-indigo-600 text-indigo-700'
+                : 'border-transparent text-slate-600 hover:border-slate-300 hover:text-slate-900')
+            "
+          >
+            <app-icon [name]="tab.icon" sizeClass="w-4 h-4" />
+            <span>{{ tab.label }}</span>
+          </a>
+        }
+      </nav>
+    </div>
 
     @if (busy()) {
-      <mat-progress-bar mode="indeterminate" class="nav-progress" />
+      <app-progress-bar />
     }
   </div>
-  <mat-tab-nav-panel #panel>
-    <router-outlet />
-  </mat-tab-nav-panel>
+
+  <div class="mx-auto w-full max-w-6xl min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8">
+    @if (ctx.projectId()) {
+      <router-outlet />
+    }
+  </div>
 </div>

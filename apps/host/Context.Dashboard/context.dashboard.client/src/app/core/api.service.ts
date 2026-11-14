@@ -39,7 +39,7 @@ import {
 } from './models';
 
 /**
- * Thin typed wrapper over Context.Host's REST surface (apps/host/Context.Host/Api/*.cs).
+ * Thin typed wrapper over Context.Dashboard.Server's REST surface (apps/host/Context.Dashboard/Context.Dashboard.Server/Api/*.cs).
  * GET reads that a component keys off reactive state (a project id, a committed query, a poll
  * tick) go through `httpResource` so the fetch re-runs itself when that state changes. Mutations
  * (POST/PUT/DELETE) and one-shot/imperative reads stay as Observables — feature components own

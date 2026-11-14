@@ -5,10 +5,8 @@ using TS = TreeSitter;
 namespace Context.Indexing.Parsers.TreeSitter;
 
 /// <summary>
-/// Real tree-sitter-backed <see cref="ILanguageParser"/> for C# (grammar id <c>"c-sharp"</c>),
-/// registered alongside (not replacing) <c>RegexHeuristicParser</c> — see
-/// <c>ServiceCollectionExtensions.AddContextIndexing</c> for which one is actually wired up by
-/// default. Extracts classes/interfaces/structs/enums/methods/constructors/properties/fields and a
+/// Real tree-sitter-backed <see cref="ILanguageParser"/> for C# (grammar id <c>"c-sharp"</c>).
+/// Extracts classes/interfaces/structs/enums/methods/constructors/properties/fields and a
 /// best-effort Calls/Extends/Implements/Imports relation set, all unresolved-by-name per
 /// <see cref="RelationDraft"/>'s contract.
 /// </summary>
@@ -25,7 +23,7 @@ namespace Context.Indexing.Parsers.TreeSitter;
 /// such requirement.
 /// </para>
 /// <para>
-/// <b><c>previousTree</c>:</b> intentionally ignored, exactly like <c>RegexHeuristicParser</c> —
+/// <b><c>previousTree</c>:</b> intentionally ignored —
 /// every real caller in this codebase discards a <see cref="ParsedAst"/> immediately after its one
 /// Extract call (see <see cref="TreeSitterParsedTree"/>'s remarks), so a caller-supplied
 /// <paramref name="previousTree"/> would, under this disposal design, already have had its native
@@ -183,9 +181,8 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
                 else
                 {
                     // Headerless case (interface member with no body, a field declaration, or a
-                    // property whose accessors couldn't be matched textually): mirrors
-                    // RegexHeuristicParser's convention for a symbol with no real body — the
-                    // whole declaration is the signature and BodyText is empty.
+                    // property whose accessors couldn't be matched textually): the whole
+                    // declaration is the signature and BodyText is empty.
                     signatureText = defNode.Text.Trim();
                     bodyText = string.Empty;
                 }
@@ -248,9 +245,8 @@ public sealed class TreeSitterCSharpParser : ILanguageParser, IDisposable
             var (qualifiedName, _) = ComputeQualifiedName(defNode, nameEntry.Value.Text);
 
             // struct/interface base-list entries can only be interfaces; a class's entries are
-            // disambiguated per-name by the "IFoo" naming convention, exactly like
-            // RegexHeuristicParser.ParseCSharpInheritance (no symbol-resolution pass exists here
-            // to know for certain which one is the base class).
+            // disambiguated per-name by the "IFoo" naming convention (no symbol-resolution pass
+            // exists here to know for certain which one is the base class).
             var allImplements = defNode.Type is "struct_declaration" or "interface_declaration";
 
             foreach (var baseEntry in basesEntry.Value.NamedChildren)

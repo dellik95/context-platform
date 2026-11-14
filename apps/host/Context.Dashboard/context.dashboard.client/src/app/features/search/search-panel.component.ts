@@ -1,15 +1,13 @@
 import { CommonModule } from '@angular/common';
 import { Component, computed, effect, inject, signal } from '@angular/core';
 import { FormField, form, min } from '@angular/forms/signals';
-import { MatButtonModule } from '@angular/material/button';
-import { MatCardModule } from '@angular/material/card';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatIconModule } from '@angular/material/icon';
-import { MatInputModule } from '@angular/material/input';
-import { MatProgressBarModule } from '@angular/material/progress-bar';
-import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
-import { MatSnackBar } from '@angular/material/snack-bar';
 import { ApiService } from '../../core/api.service';
+import { BadgeComponent } from '../../shared/ui/badge.component';
+import { EmptyStateComponent } from '../../shared/ui/empty-state.component';
+import { IconComponent } from '../../shared/ui/icon.component';
+import { ProgressBarComponent } from '../../shared/ui/progress-bar.component';
+import { SpinnerComponent } from '../../shared/ui/spinner.component';
+import { ToastService } from '../../shared/ui/toast.service';
 import { ProjectContextService } from '../projects/project-context.service';
 
 @Component({
@@ -17,21 +15,18 @@ import { ProjectContextService } from '../projects/project-context.service';
   imports: [
     CommonModule,
     FormField,
-    MatCardModule,
-    MatButtonModule,
-    MatIconModule,
-    MatFormFieldModule,
-    MatInputModule,
-    MatProgressBarModule,
-    MatProgressSpinnerModule,
+    IconComponent,
+    SpinnerComponent,
+    ProgressBarComponent,
+    BadgeComponent,
+    EmptyStateComponent,
   ],
   templateUrl: './search-panel.component.html',
-  styleUrl: './search-panel.component.scss',
 })
 export class SearchPanelComponent {
   private readonly api = inject(ApiService);
   private readonly ctx = inject(ProjectContextService);
-  private readonly snackBar = inject(MatSnackBar);
+  private readonly toast = inject(ToastService);
 
   protected readonly searchModel = signal({ query: '', budget: null as number | null });
   protected readonly searchForm = form(this.searchModel, (path) => {
@@ -51,7 +46,7 @@ export class SearchPanelComponent {
   constructor() {
     effect(() => {
       if (this.resource.error()) {
-        this.snackBar.open('Search failed — is Context.Host running?', 'Dismiss');
+        this.toast.error('Search failed — is Context.Dashboard.Server running?');
       }
     });
   }
@@ -62,6 +57,10 @@ export class SearchPanelComponent {
     if (!trimmed || this.loading()) {
       return;
     }
-    this.committedQuery.set({ projectId: this.ctx.projectId(), query: trimmed, budget: budget && budget > 0 ? budget : undefined });
+    this.committedQuery.set({
+      projectId: this.ctx.projectId(),
+      query: trimmed,
+      budget: budget && budget > 0 ? budget : undefined,
+    });
   }
 }

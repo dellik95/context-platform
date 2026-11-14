@@ -29,6 +29,8 @@ public class Project
     public string? VcsRemote { get; set; }
     public string? ConfigJson { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
+    public string? BearerTokenHash { get; set; }
+    public DateTimeOffset? BearerTokenIssuedAt { get; set; }
 }
 
 public class File
@@ -152,6 +154,7 @@ public class SessionEvent
 public class SessionSummary
 {
     public Guid SessionId { get; set; }                 // PK
+    public string? Title { get; set; }
     public string? Completed { get; set; }
     public string? Discovered { get; set; }
     public string? Decisions { get; set; }
@@ -162,7 +165,8 @@ public class SessionSummary
     public DateTimeOffset GeneratedAt { get; set; }
 }
 
-public enum MemoryType { Decision, Discovery, BugFix, Feature, Refactor, Change, Exploration, Architecture, Issue }
+public enum MemoryType { Fact = 0, Decision = 1, Constraint = 2, Architecture = 3, Behavior = 4, Configuration = 5, Discovery = 6, Procedure = 7, Issue = 8 }
+public enum MemoryStatus { Active = 0, Contested = 1, Superseded = 2, Obsolete = 3 }
 public enum MemoryTier { Working, LongTerm }
 
 public class Memory
@@ -170,30 +174,51 @@ public class Memory
     public Guid Id { get; set; }
     public Guid ProjectId { get; set; }
     public MemoryType Type { get; set; }
+    public MemoryStatus Status { get; set; } = MemoryStatus.Active;
     public required string Title { get; set; }
     public required string Body { get; set; }
+    public string? Topic { get; set; }
+    public string? TopicKey { get; set; }
+    public string? ScopePath { get; set; }
+    public string? FactsJson { get; set; }
+    public string? ConceptsJson { get; set; }
+    public string? FilesReadJson { get; set; }
+    public string? FilesModifiedJson { get; set; }
     public double Confidence { get; set; } = 0.7;
     public MemoryTier Tier { get; set; } = MemoryTier.Working;
     public bool Pinned { get; set; }
     public int ReinforcementCount { get; set; }
+    public int SourceCount { get; set; } = 1;
     public Guid? SupersededById { get; set; }
+    public DateTimeOffset? SupersededAt { get; set; }
     public Guid? CreatedFromSessionId { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset LastReinforcedAt { get; set; }
+    public bool IsLive => Status is MemoryStatus.Active or MemoryStatus.Contested;
 }
 
-public enum MemoryRelationKind { Supersedes, RelatesTo, Contradicts }
-
-public class MemoryRelation
+public class MemoryEvidence
 {
     public Guid Id { get; set; }
+    public Guid ProjectId { get; set; }
     public Guid MemoryId { get; set; }
-    public Guid RelatedMemoryId { get; set; }
-    public MemoryRelationKind Kind { get; set; }
+    public EvidenceRelation Relation { get; set; }
+    public EvidenceSource Source { get; set; }
+    public Guid? SessionId { get; set; }
+    public Guid? SourceMemoryId { get; set; }
+    public DateTimeOffset ObservedAt { get; set; }
+    public string? Note { get; set; }
 }
 
-public class MemoryFile { public Guid MemoryId { get; set; } public Guid FileId { get; set; } }
-public class MemorySymbol { public Guid MemoryId { get; set; } public Guid SymbolId { get; set; } }
+public class MemoryConsolidationReport
+{
+    public Guid Id { get; set; }
+    public Guid ProjectId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public ConsolidationReportStatus Status { get; set; } = ConsolidationReportStatus.Pending;
+    public required string ReportJson { get; set; }
+    public DateTimeOffset? AppliedAt { get; set; }
+}
 
 public class MemoryEmbedding
 {
@@ -327,11 +352,9 @@ public interface IFileScanner
 public record ScannedFile(string RelativePath, string AbsolutePath, long SizeBytes);
 ```
 
-`Context.Indexing` ships `ILanguageParser` implementations for TypeScript/JavaScript,
-C#, and Python behind a **regex/heuristic MVP parser** (`RegexHeuristicParser`) that
-implements the same interface so the pipeline is fully wired end-to-end; a real
-tree-sitter-backed parser is a drop-in replacement registered via DI and does not
-change any downstream contract.
+`Context.Indexing` ships Tree-sitter-backed `ILanguageParser` implementations in
+`Parsers/TreeSitter/` (`TreeSitterCSharpParser`, `TreeSitterTypeScriptParser`, `TreeSitterTsxParser`,
+`TreeSitterJavaScriptParser`, and `TreeSitterPythonParser`) registered via DI (`AddContextIndexing`).
 
 ---
 
@@ -540,8 +563,7 @@ public interface IContextEngine
 }
 ```
 
-MCP tools (Context.Mcp, hosted inside `Context.Dashboard.Server`) and REST endpoints
-(`Context.Dashboard.Server`) are thin adapters over `IContextEngine` only.
+MCP tools (`CodeSearchMcpTools`, `MemoryMcpTools`, `GraphMcpTools`, `SessionMcpTools` sharing `McpNodeResolver` and `McpSavingsTracker` under `Context.Dashboard.Server/Mcp/`) and REST endpoints (`Context.Dashboard.Server/Api/`) are thin adapters over `IContextEngine` (or read repositories for pure query endpoints). Within `Context.Application`, `ContextEngine` delegates to focused coordinators under `Engine/` (`ContextPackDeliveryCoordinator`, `NodeExpansionCoordinator`, `MemoryCoordinator`, `SessionCoordinator`, and `MemorySearchHelper`).
 
 ---
 
@@ -553,26 +575,46 @@ Nothing here changes an existing signature.
 ```csharp
 namespace Context.Application.Settings;
 
-// Persisted verbatim (as JSON) into Project.ConfigJson — the whole field is this DTO's
-// serialization, nothing else uses ConfigJson today. Provider fields are informational/
-// override-on-next-restart only: Context.Providers wires concrete IEmbeddingProvider/
-// ILlmProvider instances once at Context.Dashboard.Server startup via DI (see §5), there is no
-// per-request/per-project provider resolution, so changing these fields does NOT hot-swap
-// the running provider — the Settings UI must say so next to the provider fields.
-// ReindexEnabled/ReindexIntervalMinutes DO take effect live (ReindexSchedulerService polls
-// this DTO), no restart needed.
+// Persisted verbatim (as JSON) into Project.ConfigJson (with optional local override mirror in
+// .claude/context-platform.local.json). Provider selection, Ollama/Foundry endpoints & models,
+// schedules, resilience, and memory-merging settings ALL take effect live without restarting:
+// ProjectProviderResolver resolves per-project IEmbeddingGenerator/IChatClient fresh per call,
+// while OpenAI/Anthropic API keys remain host-wide environment configuration.
 public sealed record ProjectSettingsDto(
     string EmbeddingProvider,          // "noop" | "openai" | "ollama" | "foundry"
     string LlmProvider,                // "noop" | "anthropic" | "ollama" | "foundry"
     string? OllamaBaseUrl,
     string? OllamaEmbeddingModel,
     string? OllamaChatModel,
-    string? FoundryBaseUrl,            // Foundry Local; null falls back to CONTEXT_FOUNDRY_*
-    string? FoundryEmbeddingModel,
-    string? FoundryChatModel,
     bool ReindexEnabled,
     int ReindexIntervalMinutes,        // ignored (treated as disabled) if <= 0
-    DateTimeOffset? LastReindexScheduledAt);
+    DateTimeOffset? LastReindexScheduledAt,
+    int SessionSummaryIntervalMinutes = 0,
+    int MinEventsForSessionSummary = 15,
+    int MaxMemoryNotesPerSection = 20,
+    int MinEventsForMemoryExtraction = 20,
+    bool ExplicitRememberEnabled = true,
+    int StaleSessionTimeoutMinutes = 240,
+    bool DeleteSessionEventsAfterSummary = false,
+    int HookInvocationRetentionDays = 30,
+    int MemoryReconsolidationIntervalMinutes = 360,
+    DateTimeOffset? LastMemoryReconsolidationScheduledAt = null,
+    string? FoundryBaseUrl = null,
+    string? FoundryEmbeddingModel = null,
+    string? FoundryChatModel = null,
+    int LlmTimeoutSeconds = 1200,
+    int LlmMaxRetries = 0,
+    int LlmRetryBaseDelaySeconds = 30,
+    int RateLimitCooldownMinutes = 5,
+    int RateLimitMaxCooldownMinutes = 60,
+    int EmbeddingBatchSize = 0,
+    bool OnlineMergeEnabled = true,
+    int OnlineMergeMaxSources = 5,
+    int MergedMemoryMaxBodyChars = 8000,
+    int MergedMemoryMaxFacts = 40,
+    int ReconsolidationMaxGroupSize = 12,
+    double ReconsolidationClusterMinSimilarity = 0.60,
+    int ReconsolidationSourceExcerptChars = 3000);
 
 public interface IProjectSettingsService
 {
@@ -630,9 +672,9 @@ public interface IClaudeIntegrationInstaller
     // New. Writes .claude/skills/context-memory/SKILL.md (frontmatter: name: context-memory,
     // description: one line) — a skill document teaching Claude Code to proactively call this
     // project's registered MCP tools (context_search, code_search, symbol_search, memory_search,
-    // graph_impact, session_search — see §10/ContextMcpTools) for code lookup and persistent
-    // memory instead of re-deriving context from scratch. Same backup-before-overwrite convention
-    // as InstallAsync (via the same private BackupIfExists helper).
+    // graph_impact, session_search — see §10 and Context.Dashboard.Server/Mcp/*McpTools.cs) for
+    // code lookup and persistent memory instead of re-deriving context from scratch. Same backup-
+    // before-overwrite convention as InstallAsync (via ProjectFileOwnership helper).
     Task InstallSkillAsync(Guid projectId, string projectRoot, CancellationToken ct);
 }
 ```
@@ -653,10 +695,9 @@ GET  /api/system/status                   -> SystemStatusDto (Context.Dashboard.
   // does today (reuse, don't duplicate the logic - extract a shared helper if /health's handler
   // doesn't already expose one). McpAlive: true (this endpoint runs in the same process the MCP
   // endpoint is mapped in - if this responds, MCP is reachable). Jobs* fields: GroupBy(j => j.Status)
-  // count over the Jobs table via IDbContextFactory<ContextDbContext> (same direct-DbContext pattern
-  // ContextMcpTools.SessionSearchAsync already uses for a query with no repository method).
-  // UptimeSeconds: register a singleton `readonly record struct HostStartTime(DateTimeOffset Value)`
-  // in Program.cs set once at startup, inject it, subtract from DateTimeOffset.UtcNow.
+  // count over the Jobs table via IDbContextFactory<ContextDbContext> (shared helper alongside
+  // SessionMcpTools/JobsEndpoints).
+  // UptimeSeconds: HostStartTime singleton registered by DashboardServiceCollectionExtensions.
 ```
 
 SignalR (`Context.Dashboard.Server.Hubs.IndexingHubNotifier`, extend — do not break the existing method):
@@ -686,4 +727,4 @@ Context.Application's own placeholder registrations for the same reason).
 - All async methods take a trailing `CancellationToken ct`.
 - No static mutable state. All cross-project wiring via `Microsoft.Extensions.DependencyInjection`
   `IServiceCollection` extension methods named `Add{ProjectShortName}` (e.g. `AddContextIndexing`),
-  defined in a `ServiceCollectionExtensions.cs` at the project root, called from `Context.Dashboard.Server/Program.cs`.
+  defined in a `ServiceCollectionExtensions.cs` at the project root, wired via `Context.Dashboard.Server/Startup/` (`DashboardServiceCollectionExtensions`, `DashboardApplicationExtensions`).

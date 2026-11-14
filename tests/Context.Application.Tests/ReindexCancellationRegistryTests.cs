@@ -6,7 +6,7 @@ namespace Context.Application.Tests;
 /// <summary>
 /// Pure unit coverage for <see cref="ReindexCancellationRegistry"/> -- the per-project
 /// <see cref="CancellationTokenSource"/> tracking behind "stop an in-progress reindex"
-/// (<c>POST /api/projects/{id}/index/cancel</c> in <c>Context.Host.Api.ProjectEndpoints</c>).
+/// (<c>POST /api/projects/{id}/index/cancel</c> in <c>Context.Dashboard.Server.Api.ProjectEndpoints</c>).
 /// </summary>
 public sealed class ReindexCancellationRegistryTests
 {

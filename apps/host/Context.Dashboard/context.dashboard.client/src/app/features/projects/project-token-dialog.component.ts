@@ -1,10 +1,7 @@
-import { Component, inject } from '@angular/core';
-import { MatButtonModule } from '@angular/material/button';
-import { MAT_DIALOG_DATA, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatIconModule } from '@angular/material/icon';
-import { MatInputModule } from '@angular/material/input';
-import { MatSnackBar } from '@angular/material/snack-bar';
+import { Component, inject, input, output } from '@angular/core';
+import { IconComponent } from '../../shared/ui/icon.component';
+import { ModalShellComponent } from '../../shared/ui/modal-shell.component';
+import { ToastService } from '../../shared/ui/toast.service';
 
 export interface ProjectTokenDialogData {
   projectName: string;
@@ -12,34 +9,70 @@ export interface ProjectTokenDialogData {
 }
 
 /**
- * Shown once, right after a project is created: its bearer token (baked into `link` as a query
- * param) can never be recovered again once this closes -- ProjectDto.Token is only ever non-null
- * in the CreateAsync response. This tab already has the token stashed (see
- * projects-list.component.ts), so this dialog exists purely so the link can be bookmarked or
- * handed to another browser/device.
+ * Shown once right after a project is created: its bearer token (baked into `link`) can never be
+ * recovered once dismissed.
  */
 @Component({
   selector: 'app-project-token-dialog',
-  imports: [MatDialogModule, MatButtonModule, MatIconModule, MatFormFieldModule, MatInputModule],
-  templateUrl: './project-token-dialog.component.html',
-  styleUrl: './project-token-dialog.component.scss',
+  imports: [ModalShellComponent, IconComponent],
+  template: `
+    <app-modal-shell
+      title="Project access link"
+      [dismissible]="false"
+      [closeOnBackdrop]="false"
+      widthClass="max-w-xl"
+    >
+      <div class="space-y-3">
+        <p class="text-sm text-slate-600">
+          Project <strong class="font-semibold text-slate-900">{{ data().projectName }}</strong> is ready. Save or
+          bookmark this one-time access link — the bearer token cannot be retrieved again after closing this window.
+        </p>
+
+        <div class="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <label class="mb-1 block text-xs font-medium text-slate-500">One-time deep link</label>
+          <div class="flex items-center gap-2">
+            <input
+              type="text"
+              readonly
+              [value]="data().link"
+              class="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-mono text-xs text-slate-800 select-all focus:border-indigo-500 focus:outline-none"
+            />
+            <button
+              type="button"
+              class="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+              (click)="copyLink()"
+            >
+              <app-icon name="copy" sizeClass="w-3.5 h-3.5" />
+              Copy
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <ng-container modal-footer>
+        <button
+          type="button"
+          class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-indigo-700"
+          (click)="closed.emit()"
+        >
+          Done
+        </button>
+      </ng-container>
+    </app-modal-shell>
+  `,
 })
 export class ProjectTokenDialogComponent {
-  protected readonly data = inject<ProjectTokenDialogData>(MAT_DIALOG_DATA);
+  readonly data = input.required<ProjectTokenDialogData>();
+  readonly closed = output<void>();
 
-  private readonly dialogRef = inject(MatDialogRef<ProjectTokenDialogComponent>);
-  private readonly snackBar = inject(MatSnackBar);
+  private readonly toast = inject(ToastService);
 
   protected async copyLink(): Promise<void> {
     try {
-      await navigator.clipboard.writeText(this.data.link);
-      this.snackBar.open('Link copied.', 'Dismiss', { duration: 3000 });
+      await navigator.clipboard.writeText(this.data().link);
+      this.toast.success('Link copied.', 3000);
     } catch {
-      this.snackBar.open('Could not copy automatically -- select and copy the link manually.', 'Dismiss');
+      this.toast.warning('Could not copy automatically — select and copy the link manually.');
     }
-  }
-
-  protected done(): void {
-    this.dialogRef.close();
   }
 }

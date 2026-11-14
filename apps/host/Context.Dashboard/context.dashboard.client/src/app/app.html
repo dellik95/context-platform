@@ -1,26 +1,55 @@
-<mat-toolbar color="primary" class="shell-toolbar">
-  <a routerLink="/projects" class="brand">
-    <mat-icon>hub</mat-icon>
-    <span>Context Platform</span>
-  </a>
-  <span class="spacer"></span>
-  @if (health(); as h) {
-    <span
-      class="health-pill"
-      [class.healthy]="h.healthy"
-      [matTooltip]="'DB: ' + h.databaseReachable + ' · embeddings: ' + h.embeddingProvider + ' · reranker: ' + h.rerankerProvider + ' · llm: ' + h.llmProvider"
-    >
-      <mat-icon>{{ h.healthy ? 'check_circle' : 'error' }}</mat-icon>
-      {{ h.healthy ? 'Healthy' : 'Degraded' }}
-    </span>
-  } @else if (healthError()) {
-    <span class="health-pill">
-      <mat-icon>cloud_off</mat-icon>
-      Host unreachable
-    </span>
-  }
-</mat-toolbar>
+<div class="flex min-h-screen flex-col bg-slate-50 text-slate-900">
+  <header class="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
+    <div class="mx-auto flex h-14 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+      <a
+        routerLink="/projects"
+        class="brand flex items-center gap-2.5 text-slate-900 no-underline transition hover:opacity-85"
+      >
+        <span
+          class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-xs"
+        >
+          <app-icon name="hub" sizeClass="w-4 h-4" />
+        </span>
+        <span class="text-sm font-semibold tracking-tight sm:text-base">Context Platform</span>
+      </a>
 
-<main class="shell-content">
-  <router-outlet />
-</main>
+      @if (health(); as h) {
+        <span
+          class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset"
+          [class]="
+            h.healthy
+              ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+              : 'bg-amber-50 text-amber-800 ring-amber-200'
+          "
+          [title]="
+            'DB: ' +
+            h.databaseReachable +
+            ' · embeddings: ' +
+            h.embeddingProvider +
+            ' · reranker: ' +
+            h.rerankerProvider +
+            ' · llm: ' +
+            h.llmProvider
+          "
+        >
+          <app-icon [name]="h.healthy ? 'check-circle' : 'error'" sizeClass="w-3.5 h-3.5" />
+          {{ h.healthy ? 'Healthy' : 'Degraded' }}
+        </span>
+      } @else if (healthError()) {
+        <span
+          class="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-3 py-1 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-200"
+        >
+          <app-icon name="error" sizeClass="w-3.5 h-3.5" />
+          Host unreachable
+        </span>
+      }
+    </div>
+  </header>
+
+  <main class="flex-1">
+    <router-outlet />
+  </main>
+
+  <app-confirm-dialog-host />
+  <app-toast-container />
+</div>

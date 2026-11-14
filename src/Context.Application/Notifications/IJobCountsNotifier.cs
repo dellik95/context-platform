@@ -1,7 +1,7 @@
 namespace Context.Application.Notifications;
 
 /// <summary>Live snapshot of the job queue's status breakdown -- the same shape as
-/// <c>SystemStatusDto</c>'s four jobsXxx fields (<c>Context.Host.Api.SystemEndpoints</c>), pushed
+/// <c>SystemStatusDto</c>'s four jobsXxx fields (<c>Context.Dashboard.Server.Api.SystemEndpoints</c>), pushed
 /// instead of polled.</summary>
 public sealed record JobCounts(int Pending, int Running, int Failed, int Done);
 
@@ -13,7 +13,7 @@ public sealed record JobCounts(int Pending, int Running, int Failed, int Done);
 /// maintenance job (no <c>Job.ProjectId</c>) has no project tile to update, so callers simply
 /// don't notify for it. Mirrors
 /// <see cref="IProjectActivityNotifier"/>/<c>Context.Application.Indexing.IIndexingProgressReporter</c>'s
-/// seam: the default registration is a no-op, Context.Host overrides it with a SignalR-backed one.
+/// seam: the default registration is a no-op, Context.Dashboard.Server overrides it with a SignalR-backed one.
 /// </summary>
 public interface IJobCountsNotifier
 {

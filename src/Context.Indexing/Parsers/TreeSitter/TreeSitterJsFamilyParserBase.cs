@@ -259,9 +259,9 @@ public abstract class TreeSitterJsFamilyParserBase : ILanguageParser, IDisposabl
             else
             {
                 // Headerless case: an interface method signature (no body at all), a field
-                // declaration, or a concise arrow body that couldn't be matched textually - the
-                // whole declaration is the signature and BodyText is empty, mirroring
-                // RegexHeuristicParser's and TreeSitterCSharpParser's convention.
+                // declaration, or a concise arrow body that couldn't be matched textually — the
+                // whole declaration is the signature and BodyText is empty, matching
+                // TreeSitterCSharpParser's convention.
                 signatureText = defNode.Text.Trim();
                 bodyText = string.Empty;
             }

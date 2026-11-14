@@ -5,10 +5,8 @@ using TS = TreeSitter;
 namespace Context.Indexing.Parsers.TreeSitter;
 
 /// <summary>
-/// Real tree-sitter-backed <see cref="ILanguageParser"/> for Python (grammar id <c>"python"</c>),
-/// registered alongside (not replacing) <c>RegexHeuristicParser</c> — see
-/// <c>ServiceCollectionExtensions.AddContextIndexing</c> for which one is actually wired up by
-/// default. Extracts classes and functions/methods (a <c>function_definition</c> nested directly
+/// Real tree-sitter-backed <see cref="ILanguageParser"/> for Python (grammar id <c>"python"</c>).
+/// Extracts classes and functions/methods (a <c>function_definition</c> nested directly
 /// in a <c>class_definition</c>'s body gets <see cref="SymbolKind.Method"/>, one at module level or
 /// nested in another function gets <see cref="SymbolKind.Function"/>) plus a best-effort
 /// Imports/Extends/Calls relation set, all unresolved-by-name per <see cref="RelationDraft"/>'s
@@ -196,7 +194,7 @@ public sealed class TreeSitterPythonParser : ILanguageParser, IDisposable
                 else
                 {
                     // Headerless/unexpected case: whole declaration is the signature, no body text
-                    // — mirrors RegexHeuristicParser's and TreeSitterCSharpParser's convention.
+                    // — matches TreeSitterCSharpParser's convention.
                     signatureText = outerNode.Text.Trim();
                     bodyText = string.Empty;
                 }

@@ -5,7 +5,7 @@ namespace Context.Application.Indexing;
 /// <summary>
 /// Tracks one <see cref="CancellationTokenSource"/> per project with a reindex currently running,
 /// so a client can ask to stop a specific project's in-progress <c>IIndexingPipeline.ReindexProjectAsync</c>
-/// scan (see <c>Context.Host.Api.ProjectEndpoints</c>'s <c>POST /api/projects/{id}/index/cancel</c>)
+/// scan (see <c>Context.Dashboard.Server.Api.ProjectEndpoints</c>'s <c>POST /api/projects/{id}/index/cancel</c>)
 /// without <c>CancellationToken.None</c> making that impossible, as it did before this type existed.
 /// <para/>
 /// Deliberately scoped to the foreground scan only: a full reindex also enqueues background jobs

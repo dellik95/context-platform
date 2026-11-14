@@ -64,13 +64,12 @@ internal static class TreeSitterQueryHelpers
     }
 
     /// <summary>
-    /// Best-effort leading doc-comment for a declaration node, mirroring
-    /// <c>RegexHeuristicParser</c>'s convention: only <c>///</c>-style line comments or a
-    /// <c>/* ... */</c> block comment count (a plain <c>//</c> line comment does not); the comment
-    /// must be the immediately preceding named sibling (blank lines in between are fine — they
+    /// Best-effort leading doc-comment for a declaration node: only <c>///</c>-style line comments
+    /// or a <c>/* ... */</c> block comment count (a plain <c>//</c> line comment does not); the
+    /// comment must be the immediately preceding named sibling (blank lines in between are fine — they
     /// produce no nodes — but another statement or declaration in between is not). For a run of
     /// contiguous <c>///</c> lines, every line must be exactly one source row above the next (no
-    /// blank line inside the run itself), matching <c>RegexHeuristicParser.ExtractCStyleDocComment</c>.
+    /// blank line inside the run itself).
     /// </summary>
     /// <param name="declNode">The declaration node (e.g. a <c>class_declaration</c> or <c>method_declaration</c>).</param>
     /// <param name="lineCommentPrefix">The doc-comment line marker for this language, e.g. <c>"///"</c>.</param>

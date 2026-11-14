@@ -1,5 +1,6 @@
 bin/
 obj/
+obj*/
 out/
 .vs/
 .vscode/
@@ -9,7 +10,8 @@ out/
 node_modules/
 dist/
 .angular/
-apps/host/Context.Host/wwwroot/
+apps/host/Context.Dashboard/Context.Dashboard.Server/wwwroot/*
+!apps/host/Context.Dashboard/Context.Dashboard.Server/wwwroot/.gitkeep
 
 *.db
 *.db-shm
@@ -24,6 +26,8 @@ apps/host/Context.Host/wwwroot/
 # Context Platform (added by context-platform installer)
 .claude/context-platform.local.json
 .claude/hooks.log
+.claude/settings.local.json
+.claude/worktrees/
 refs/
 
 # Written by the installer with a live bearer token in the Authorization header.

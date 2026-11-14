@@ -24,11 +24,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Context.Dashboard.Server.csproj embeds the Angular dashboard into wwwroot/ as part of its
-      # own `dotnet build` (see apps/host/Context.Dashboard/Context.Dashboard.Server/Context.Dashboard.Server.csproj,
-      # target "BuildDashboard"), shelling out to `npm ci` / `npx ng build` in
-      # apps/host/Context.Dashboard/context.dashboard.client. Node must be available and
-      # dependencies installed before the .NET build runs, or that MSBuild target fails.
+      # ContextPlatform.slnx includes context.dashboard.client.esproj, whose Visual Studio JS SDK
+      # restore/build targets expect Node and dashboard dependencies to be present on disk.
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -89,8 +86,8 @@ jobs:
       - name: Build
         run: npm run build
 
-      # No ESLint (or other lint) configuration exists in apps/dashboard yet, so there is
-      # nothing to wire up here. Add a "lint" script + lint step once a linter is adopted.
+      # No ESLint configuration exists in context.dashboard.client yet; add a "lint" script + step
+      # once a linter is adopted.
       - name: Test
         run: npm test -- --watch=false
 
