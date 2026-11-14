@@ -1,11 +1,11 @@
-import { Component, input, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, input, output, signal } from '@angular/core';
 import { ReconsolidationGroup } from '../../core/models';
 import { BadgeComponent } from '../../shared/ui/badge.component';
 import { IconComponent } from '../../shared/ui/icon.component';
 
 @Component({
   selector: 'app-consolidation-group-card',
-  standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [BadgeComponent, IconComponent],
   template: `
     <div class="overflow-hidden rounded-xl border border-slate-200 bg-white">

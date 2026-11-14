@@ -12,8 +12,49 @@ import { ProgressBarComponent } from '../../shared/ui/progress-bar.component';
 import { SpinnerComponent } from '../../shared/ui/spinner.component';
 import { ToastService } from '../../shared/ui/toast.service';
 import { ProjectContextService } from '../projects/project-context.service';
+import { JobQueueKpisComponent } from './job-queue-kpis.component';
 
 const JOB_PANEL_RELOAD_MIN_MS = 3000;
+
+interface ThrottledReloader {
+  schedule(): void;
+  runNow(): void;
+}
+
+function createThrottledReloader(
+  minIntervalMs: number,
+  destroyRef: DestroyRef,
+  callback: () => void,
+): ThrottledReloader {
+  let lastRunMs = 0;
+  let pendingTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const clear = () => {
+    clearTimeout(pendingTimer);
+    pendingTimer = undefined;
+  };
+
+  destroyRef.onDestroy(clear);
+
+  const runNow = () => {
+    clear();
+    lastRunMs = Date.now();
+    callback();
+  };
+
+  const schedule = () => {
+    const elapsed = Date.now() - lastRunMs;
+    if (elapsed >= minIntervalMs) {
+      runNow();
+      return;
+    }
+    if (!pendingTimer) {
+      pendingTimer = setTimeout(runNow, minIntervalMs - elapsed);
+    }
+  };
+
+  return { schedule, runNow };
+}
 
 @Component({
   selector: 'app-dashboard-jobs-card',
@@ -25,351 +66,9 @@ const JOB_PANEL_RELOAD_MIN_MS = 3000;
     IconComponent,
     SpinnerComponent,
     ProgressBarComponent,
+    JobQueueKpisComponent,
   ],
-  template: `
-    <div class="space-y-4">
-      @if (status(); as hostStatus) {
-        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div class="flex items-start justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
-            <div>
-              <p class="text-xs font-medium text-slate-500">Pending jobs</p>
-              <p class="mt-1 text-2xl font-semibold text-slate-900 tabular-nums">{{ hostStatus.jobsPending }}</p>
-            </div>
-            @if (hostStatus.jobsPending > 0) {
-              <button
-                type="button"
-                class="rounded-lg p-1.5 text-rose-600 transition hover:bg-rose-50 disabled:opacity-45"
-                (click)="cleanupPending()"
-                [disabled]="cleaningUpPending()"
-                title="Delete pending non-user-data jobs"
-              >
-                @if (cleaningUpPending()) {
-                  <app-spinner sizeClass="w-4 h-4" />
-                } @else {
-                  <app-icon name="delete-forever" sizeClass="w-4 h-4" />
-                }
-              </button>
-            }
-          </div>
-
-          <div class="flex items-start justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
-            <div>
-              <p class="text-xs font-medium text-slate-500">Running jobs</p>
-              <p class="mt-1 text-2xl font-semibold text-indigo-700 tabular-nums">{{ hostStatus.jobsRunning }}</p>
-            </div>
-            @if (hostStatus.jobsRunning > 0) {
-              <button
-                type="button"
-                class="rounded-lg p-1.5 text-amber-600 transition hover:bg-amber-50 disabled:opacity-45"
-                (click)="forceAllRunning()"
-                [disabled]="forcingAll()"
-                title="Cancel and restart every running job outside the per-project lane limit"
-              >
-                @if (forcingAll()) {
-                  <app-spinner sizeClass="w-4 h-4" />
-                } @else {
-                  <app-icon name="bolt" sizeClass="w-4 h-4" />
-                }
-              </button>
-            }
-          </div>
-
-          <div
-            class="flex items-start justify-between rounded-2xl border p-4 shadow-2xs"
-            [class]="hostStatus.jobsFailed > 0 ? 'border-rose-200 bg-rose-50/60' : 'border-slate-200 bg-white'"
-          >
-            <div>
-              <p class="text-xs font-medium" [class]="hostStatus.jobsFailed > 0 ? 'text-rose-700' : 'text-slate-500'">
-                Failed jobs
-              </p>
-              <p
-                class="mt-1 text-2xl font-semibold tabular-nums"
-                [class]="hostStatus.jobsFailed > 0 ? 'text-rose-700' : 'text-slate-900'"
-              >
-                {{ hostStatus.jobsFailed }}
-              </p>
-            </div>
-          </div>
-
-          <div class="flex items-start justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
-            <div>
-              <p class="text-xs font-medium text-slate-500">Completed jobs</p>
-              <p class="mt-1 text-2xl font-semibold text-emerald-700 tabular-nums">{{ hostStatus.jobsDone }}</p>
-            </div>
-            @if (hostStatus.jobsDone > 0) {
-              <button
-                type="button"
-                class="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 disabled:opacity-45"
-                (click)="cleanupCompleted()"
-                [disabled]="cleaningUpDone()"
-                title="Remove finished (Done) jobs from queue"
-              >
-                @if (cleaningUpDone()) {
-                  <app-spinner sizeClass="w-4 h-4" />
-                } @else {
-                  <app-icon name="delete" sizeClass="w-4 h-4" />
-                }
-              </button>
-            }
-          </div>
-        </div>
-      }
-
-      <app-collapsible-section title="Failed jobs" [(expanded)]="failedExpanded">
-        <span section-badges>
-          @if (failedJobs().length > 0) {
-            <app-badge tone="danger">{{ failedJobs().length }}</app-badge>
-          } @else {
-            <app-badge tone="neutral">0</app-badge>
-          }
-        </span>
-
-        <div class="mb-3 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-45"
-            (click)="loadFailedJobs()"
-            [disabled]="jobsLoading()"
-          >
-            <app-icon name="refresh" sizeClass="w-3.5 h-3.5" />
-            <span>Refresh</span>
-          </button>
-
-          @if (failedJobs().length > 0) {
-            <button
-              type="button"
-              class="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 transition hover:bg-indigo-100 disabled:opacity-45"
-              (click)="retryAllFailed()"
-              [disabled]="retryingAll()"
-            >
-              @if (retryingAll()) {
-                <app-spinner sizeClass="w-3.5 h-3.5" />
-              } @else {
-                <app-icon name="refresh" sizeClass="w-3.5 h-3.5" />
-              }
-              <span>Retry all</span>
-            </button>
-          }
-
-          @if (jobsLoading() && !initialJobsLoading()) {
-            <div class="w-28">
-              <app-progress-bar />
-            </div>
-          }
-        </div>
-
-        @if (initialJobsLoading()) {
-          <app-progress-bar />
-        } @else if (jobsError()) {
-          <p class="py-5 text-center text-xs text-rose-600">
-            Could not load failed jobs — is Context.Dashboard.Server running?
-          </p>
-        } @else if (failedJobs().length === 0) {
-          <p class="py-5 text-center text-xs text-slate-500">No failed jobs.</p>
-        } @else {
-          <div class="overflow-x-auto rounded-xl border border-slate-200">
-            <table class="w-full text-left text-xs">
-              <thead class="bg-slate-50 font-medium text-slate-500 uppercase">
-                <tr>
-                  <th class="px-3.5 py-2.5">Type</th>
-                  <th class="px-3.5 py-2.5">Attempts</th>
-                  <th class="px-3.5 py-2.5">Last error</th>
-                  <th class="px-3.5 py-2.5">Created</th>
-                  <th class="px-3.5 py-2.5 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-slate-100">
-                @for (job of failedJobs(); track job.id) {
-                  <tr class="hover:bg-slate-50/70">
-                    <td class="px-3.5 py-2.5 font-mono text-slate-800">{{ job.type }}</td>
-                    <td class="px-3.5 py-2.5 text-slate-600">{{ job.attempts }}</td>
-                    <td class="max-w-md px-3.5 py-2.5 text-rose-700 break-words">{{ job.lastError || '—' }}</td>
-                    <td class="px-3.5 py-2.5 text-slate-500 whitespace-nowrap">{{ job.createdAt | date: 'short' }}</td>
-                    <td class="px-3.5 py-2.5 text-right">
-                      <button
-                        type="button"
-                        class="inline-flex items-center gap-1 rounded-lg bg-indigo-50 px-2.5 py-1 font-medium text-indigo-700 transition hover:bg-indigo-100 disabled:opacity-45"
-                        (click)="retryJob(job)"
-                        [disabled]="retryingJobId() === job.id"
-                      >
-                        @if (retryingJobId() === job.id) {
-                          <app-spinner sizeClass="w-3 h-3" />
-                        }
-                        <span>Retry</span>
-                      </button>
-                    </td>
-                  </tr>
-                }
-              </tbody>
-            </table>
-          </div>
-        }
-      </app-collapsible-section>
-
-      <app-collapsible-section title="Pending jobs by type" [(expanded)]="pendingExpanded">
-        <span section-badges>
-          @if (pendingByType().length > 0) {
-            <app-badge tone="neutral">{{ pendingByType().length }}</app-badge>
-          }
-        </span>
-
-        <div class="mb-3 flex items-center gap-2">
-          <button
-            type="button"
-            class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-45"
-            (click)="loadPendingByType()"
-            [disabled]="pendingByTypeLoading()"
-          >
-            <app-icon name="refresh" sizeClass="w-3.5 h-3.5" />
-            <span>Refresh</span>
-          </button>
-          @if (pendingByTypeLoading() && !initialPendingByTypeLoading()) {
-            <div class="w-28">
-              <app-progress-bar />
-            </div>
-          }
-        </div>
-
-        @if (initialPendingByTypeLoading()) {
-          <app-progress-bar />
-        } @else if (pendingByTypeError()) {
-          <p class="py-5 text-center text-xs text-rose-600">
-            Could not load pending jobs — is Context.Dashboard.Server running?
-          </p>
-        } @else if (pendingByType().length === 0) {
-          <p class="py-5 text-center text-xs text-slate-500">No pending jobs.</p>
-        } @else {
-          <div class="overflow-x-auto rounded-xl border border-slate-200">
-            <table class="w-full text-left text-xs">
-              <thead class="bg-slate-50 font-medium text-slate-500 uppercase">
-                <tr>
-                  <th class="px-3.5 py-2.5">Type</th>
-                  <th class="px-3.5 py-2.5 text-right">Pending</th>
-                  <th class="px-3.5 py-2.5 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-slate-100">
-                @for (row of pendingByType(); track row.type) {
-                  <tr class="hover:bg-slate-50/70">
-                    <td class="px-3.5 py-2.5 font-mono text-slate-800">{{ row.type }}</td>
-                    <td class="px-3.5 py-2.5 text-right font-medium text-slate-700">{{ row.count }}</td>
-                    <td class="px-3.5 py-2.5 text-right">
-                      @if (!isUserDataJobType(row.type)) {
-                        <button
-                          type="button"
-                          class="inline-flex items-center gap-1 rounded-lg bg-rose-50 px-2.5 py-1 font-medium text-rose-700 transition hover:bg-rose-100 disabled:opacity-45"
-                          (click)="cleanupPendingOfType(row.type, row.count)"
-                          [disabled]="cleaningUpPendingType() !== null"
-                          title="Delete every Pending job of this type"
-                        >
-                          @if (cleaningUpPendingType() === row.type) {
-                            <app-spinner sizeClass="w-3 h-3" />
-                          }
-                          <span>Delete</span>
-                        </button>
-                      }
-                    </td>
-                  </tr>
-                }
-              </tbody>
-            </table>
-          </div>
-        }
-      </app-collapsible-section>
-
-      <app-collapsible-section title="Running jobs" [(expanded)]="runningExpanded">
-        <span section-badges>
-          @if (runningJobs().length > 0) {
-            <app-badge tone="primary">{{ runningJobs().length }}</app-badge>
-          }
-        </span>
-
-        <div class="mb-3 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-45"
-            (click)="loadRunningJobs()"
-            [disabled]="runningJobsLoading()"
-          >
-            <app-icon name="refresh" sizeClass="w-3.5 h-3.5" />
-            <span>Refresh</span>
-          </button>
-
-          @if (runningJobs().length > 0) {
-            <button
-              type="button"
-              class="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 transition hover:bg-amber-100 disabled:opacity-45"
-              (click)="forceAllRunning()"
-              [disabled]="forcingAll()"
-            >
-              @if (forcingAll()) {
-                <app-spinner sizeClass="w-3.5 h-3.5" />
-              } @else {
-                <app-icon name="bolt" sizeClass="w-3.5 h-3.5" />
-              }
-              <span>Force all</span>
-            </button>
-          }
-
-          @if (runningJobsLoading() && !initialRunningJobsLoading()) {
-            <div class="w-28">
-              <app-progress-bar />
-            </div>
-          }
-        </div>
-
-        @if (initialRunningJobsLoading()) {
-          <app-progress-bar />
-        } @else if (runningJobsError()) {
-          <p class="py-5 text-center text-xs text-rose-600">
-            Could not load running jobs — is Context.Dashboard.Server running?
-          </p>
-        } @else if (runningJobs().length === 0) {
-          <p class="py-5 text-center text-xs text-slate-500">No running jobs.</p>
-        } @else {
-          <div class="overflow-x-auto rounded-xl border border-slate-200">
-            <table class="w-full text-left text-xs">
-              <thead class="bg-slate-50 font-medium text-slate-500 uppercase">
-                <tr>
-                  <th class="px-3.5 py-2.5">Type</th>
-                  <th class="px-3.5 py-2.5">Attempts</th>
-                  <th class="px-3.5 py-2.5">Started</th>
-                  <th class="px-3.5 py-2.5">Previous error</th>
-                  <th class="px-3.5 py-2.5 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-slate-100">
-                @for (job of runningJobs(); track job.id) {
-                  <tr class="hover:bg-slate-50/70">
-                    <td class="px-3.5 py-2.5 font-mono text-slate-800">{{ job.type }}</td>
-                    <td class="px-3.5 py-2.5 text-slate-600">{{ job.attempts }}</td>
-                    <td class="px-3.5 py-2.5 text-slate-500 whitespace-nowrap">
-                      {{ job.startedAt ? (job.startedAt | date: 'mediumTime') : '—' }}
-                    </td>
-                    <td class="max-w-md px-3.5 py-2.5 text-rose-700 break-words">{{ job.lastError || '—' }}</td>
-                    <td class="px-3.5 py-2.5 text-right">
-                      <button
-                        type="button"
-                        class="inline-flex items-center gap-1 rounded-lg bg-amber-50 px-2.5 py-1 font-medium text-amber-800 transition hover:bg-amber-100 disabled:opacity-45"
-                        (click)="forceJob(job)"
-                        [disabled]="forcingJobId() === job.id"
-                        title="Cancel this attempt and restart immediately"
-                      >
-                        @if (forcingJobId() === job.id) {
-                          <app-spinner sizeClass="w-3 h-3" />
-                        }
-                        <span>Force</span>
-                      </button>
-                    </td>
-                  </tr>
-                }
-              </tbody>
-            </table>
-          </div>
-        }
-      </app-collapsible-section>
-    </div>
-  `,
+  templateUrl: './dashboard-jobs-card.component.html',
 })
 export class DashboardJobsCardComponent {
   private readonly api = inject(ApiService);
@@ -402,8 +101,6 @@ export class DashboardJobsCardComponent {
   protected readonly runningJobsError = computed(() => Boolean(this.runningJobsResource.error()));
   protected readonly forcingJobId = signal<string | null>(null);
   protected readonly forcingAll = signal(false);
-  private lastRunningReloadMs = 0;
-  private runningReloadTimer?: ReturnType<typeof setTimeout>;
   protected readonly cleaningUpPending = signal(false);
 
   private readonly pendingByTypeRequested = signal(false);
@@ -419,15 +116,24 @@ export class DashboardJobsCardComponent {
   protected readonly initialPendingByTypeLoading = computed(() => this.pendingByTypeResource.status() === 'loading');
   protected readonly pendingByTypeError = computed(() => Boolean(this.pendingByTypeResource.error()));
   protected readonly cleaningUpPendingType = signal<JobType | null>(null);
-  private lastPendingReloadMs = 0;
-  private pendingReloadTimer?: ReturnType<typeof setTimeout>;
+
+  private readonly runningReloader = createThrottledReloader(JOB_PANEL_RELOAD_MIN_MS, this.destroyRef, () => {
+    if (this.runningJobsRequested()) {
+      this.runningJobsResource.reload();
+    } else {
+      this.runningJobsRequested.set(true);
+    }
+  });
+
+  private readonly pendingReloader = createThrottledReloader(JOB_PANEL_RELOAD_MIN_MS, this.destroyRef, () => {
+    if (this.pendingByTypeRequested()) {
+      this.pendingByTypeResource.reload();
+    } else {
+      this.pendingByTypeRequested.set(true);
+    }
+  });
 
   constructor() {
-    this.destroyRef.onDestroy(() => {
-      clearTimeout(this.runningReloadTimer);
-      clearTimeout(this.pendingReloadTimer);
-    });
-
     effect(() => {
       if (this.pendingExpanded() && !this.pendingByTypeRequested()) {
         this.loadPendingByType();
@@ -446,40 +152,12 @@ export class DashboardJobsCardComponent {
         this.failedJobsResource.reload();
       }
       if (current?.jobsRunning !== counts.running && this.runningJobsRequested()) {
-        this.scheduleRunningReload();
+        this.runningReloader.schedule();
       }
       if (current?.jobsPending !== counts.pending && this.pendingByTypeRequested()) {
-        this.schedulePendingReload();
+        this.pendingReloader.schedule();
       }
     });
-  }
-
-  private scheduleRunningReload(): void {
-    const elapsed = Date.now() - this.lastRunningReloadMs;
-    if (elapsed >= JOB_PANEL_RELOAD_MIN_MS) {
-      this.loadRunningJobs();
-      return;
-    }
-    if (!this.runningReloadTimer) {
-      this.runningReloadTimer = setTimeout(() => {
-        this.runningReloadTimer = undefined;
-        this.loadRunningJobs();
-      }, JOB_PANEL_RELOAD_MIN_MS - elapsed);
-    }
-  }
-
-  private schedulePendingReload(): void {
-    const elapsed = Date.now() - this.lastPendingReloadMs;
-    if (elapsed >= JOB_PANEL_RELOAD_MIN_MS) {
-      this.loadPendingByType();
-      return;
-    }
-    if (!this.pendingReloadTimer) {
-      this.pendingReloadTimer = setTimeout(() => {
-        this.pendingReloadTimer = undefined;
-        this.loadPendingByType();
-      }, JOB_PANEL_RELOAD_MIN_MS - elapsed);
-    }
   }
 
   protected loadFailedJobs(): void {
@@ -487,25 +165,11 @@ export class DashboardJobsCardComponent {
   }
 
   protected loadPendingByType(): void {
-    clearTimeout(this.pendingReloadTimer);
-    this.pendingReloadTimer = undefined;
-    this.lastPendingReloadMs = Date.now();
-    if (this.pendingByTypeRequested()) {
-      this.pendingByTypeResource.reload();
-    } else {
-      this.pendingByTypeRequested.set(true);
-    }
+    this.pendingReloader.runNow();
   }
 
   protected loadRunningJobs(): void {
-    clearTimeout(this.runningReloadTimer);
-    this.runningReloadTimer = undefined;
-    this.lastRunningReloadMs = Date.now();
-    if (this.runningJobsRequested()) {
-      this.runningJobsResource.reload();
-    } else {
-      this.runningJobsRequested.set(true);
-    }
+    this.runningReloader.runNow();
   }
 
   protected isUserDataJobType(type: JobType): boolean {

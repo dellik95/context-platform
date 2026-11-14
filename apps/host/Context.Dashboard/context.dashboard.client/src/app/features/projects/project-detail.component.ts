@@ -1,4 +1,4 @@
-import { Component, computed, effect, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { map } from 'rxjs';
@@ -24,6 +24,7 @@ const PROJECT_TABS: readonly NavTab[] = [
 
 @Component({
   selector: 'app-project-detail',
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [RouterOutlet, RouterLink, RouterLinkActive, IconComponent, ProgressBarComponent],
   providers: [ProjectContextService],
   templateUrl: './project-detail.component.html',

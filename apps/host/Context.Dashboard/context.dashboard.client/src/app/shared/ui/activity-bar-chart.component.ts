@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, computed, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, signal } from '@angular/core';
 import { UsageDayDto } from '../../core/models';
 
 export type SeriesFilter = 'both' | 'spent' | 'saved';
@@ -130,7 +130,7 @@ function buildActivityChart(days: readonly UsageDayDto[], series: SeriesFilter):
 
 @Component({
   selector: 'app-activity-bar-chart',
-  standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [CommonModule],
   template: `
     @if (chart(); as c) {
@@ -141,6 +141,7 @@ function buildActivityChart(days: readonly UsageDayDto[], series: SeriesFilter):
               type="button"
               class="rounded-lg px-2.5 py-1 font-medium transition"
               [class]="series() === 'both' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'"
+              [attr.aria-pressed]="series() === 'both'"
               (click)="series.set('both')"
             >
               Both
@@ -149,6 +150,7 @@ function buildActivityChart(days: readonly UsageDayDto[], series: SeriesFilter):
               type="button"
               class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-medium transition"
               [class]="series() === 'spent' ? 'bg-white text-indigo-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'"
+              [attr.aria-pressed]="series() === 'spent'"
               (click)="series.set('spent')"
             >
               <span class="h-2 w-2 rounded-full bg-indigo-500"></span>
@@ -158,6 +160,7 @@ function buildActivityChart(days: readonly UsageDayDto[], series: SeriesFilter):
               type="button"
               class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-medium transition"
               [class]="series() === 'saved' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'"
+              [attr.aria-pressed]="series() === 'saved'"
               (click)="series.set('saved')"
             >
               <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
@@ -221,9 +224,15 @@ function buildActivityChart(days: readonly UsageDayDto[], series: SeriesFilter):
 
               @for (bar of c.bars; track bar.day) {
                 <g
-                  class="cursor-pointer"
+                  class="cursor-pointer outline-none"
+                  tabindex="0"
+                  role="button"
+                  [attr.aria-label]="bar.label + ': Spent ' + bar.tokens + ', Saved est. ' + bar.saved + ', Calls ' + bar.calls"
                   (mouseenter)="hoveredDay.set(bar.day)"
                   (mouseleave)="hoveredDay.set(null)"
+                  (focus)="hoveredDay.set(bar.day)"
+                  (blur)="hoveredDay.set(null)"
+                  (click)="hoveredDay.set(hoveredDay() === bar.day ? null : bar.day)"
                 >
                   <rect
                     [attr.x]="bar.groupX"

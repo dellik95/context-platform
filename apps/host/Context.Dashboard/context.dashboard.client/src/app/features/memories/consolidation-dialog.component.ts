@@ -1,6 +1,6 @@
 import { CommonModule } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
-import { Component, DestroyRef, Injector, afterNextRender, computed, effect, inject, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, Injector, afterNextRender, computed, effect, inject, output, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ApiService } from '../../core/api.service';
 import {
@@ -59,7 +59,7 @@ function statusBadgeTone(status: ConsolidationReportStatus): BadgeTone {
  */
 @Component({
   selector: 'app-consolidation-dialog',
-  standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     CommonModule,
     ModalShellComponent,
@@ -124,6 +124,13 @@ export class ConsolidationDialogComponent {
   });
 
   constructor() {
+    effect(() => {
+      this.ctx.projectId();
+      this.selectedReportId.set(null);
+      this.excluded.set(new Set());
+      this.awaitedSignature.set(null);
+    });
+
     this.signalr.jobCountsChanged$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(() => {
       if (this.awaitedSignature() !== null) {
         this.reportsResource.reload();

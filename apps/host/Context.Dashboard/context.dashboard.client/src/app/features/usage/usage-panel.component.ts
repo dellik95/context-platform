@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { ApiService } from '../../core/api.service';
 import { ActivityBarChartComponent } from '../../shared/ui/activity-bar-chart.component';
 import { DonutChartComponent, DonutSegment } from '../../shared/ui/donut-chart.component';
@@ -22,6 +22,7 @@ const PURPOSE_COLORS = [
 
 @Component({
   selector: 'app-usage-panel',
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     CommonModule,
     IconComponent,

@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ApiService } from '../../core/api.service';
 import { HookInvocationDto } from '../../core/models';
@@ -12,6 +12,7 @@ import { ProjectContextService } from '../projects/project-context.service';
 
 @Component({
   selector: 'app-dashboard-hooks-card',
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [CommonModule, CollapsibleSectionComponent, BadgeComponent, IconComponent, ProgressBarComponent],
   template: `
     <app-collapsible-section title="Claude Hook Invocations" [(expanded)]="expanded">

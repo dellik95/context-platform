@@ -13,6 +13,7 @@
           type="button"
           class="rounded-lg px-3 py-1.5 text-xs font-medium transition"
           [class]="days() === range ? 'bg-indigo-600 text-white shadow-2xs' : 'text-slate-600 hover:bg-slate-100'"
+          [attr.aria-pressed]="days() === range"
           (click)="days.set(range)"
         >
           {{ range }}d

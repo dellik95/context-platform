@@ -45,5 +45,11 @@ describe('ActivityBarChartComponent', () => {
 
     expect(host.querySelectorAll('rect.fill-indigo-500').length).toBe(0);
     expect(host.querySelectorAll('rect.fill-emerald-500').length).toBe(2);
+    expect(savedOnly.getAttribute('aria-pressed')).toBe('true');
+
+    const firstGroup = host.querySelector('svg g[role="button"]')!;
+    firstGroup.dispatchEvent(new MouseEvent('click'));
+    fixture.detectChanges();
+    expect(host.textContent).toContain('3,400');
   });
 });

@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ApiService } from '../../core/api.service';
 import { SessionDetailDto, SessionListItemDto } from '../../core/models';
@@ -66,6 +66,7 @@ function groupSessionsByDay(sessions: SessionListItemDto[]): SessionGroup[] {
 
 @Component({
   selector: 'app-sessions-panel',
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     CommonModule,
     IconComponent,

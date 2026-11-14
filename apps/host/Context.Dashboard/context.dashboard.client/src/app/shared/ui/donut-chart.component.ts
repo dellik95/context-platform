@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, computed, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, signal } from '@angular/core';
 
 export interface DonutSegment {
   label: string;
@@ -24,7 +24,7 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
 @Component({
   selector: 'app-donut-chart',
-  standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [CommonModule],
   template: `
     @if (total() <= 0) {
@@ -101,6 +101,8 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
                 (mouseleave)="hoveredIndex.set(null)"
                 (focus)="hoveredIndex.set(arc.index)"
                 (blur)="hoveredIndex.set(null)"
+                (click)="hoveredIndex.set(hoveredIndex() === arc.index ? null : arc.index)"
+                [attr.aria-pressed]="hoveredIndex() === arc.index"
               >
                 <span class="flex min-w-0 items-center gap-2">
                   <span class="h-2.5 w-2.5 shrink-0 rounded-full" [style.background-color]="arc.color"></span>
