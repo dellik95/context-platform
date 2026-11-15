@@ -1,6 +1,6 @@
 # Context Platform
 
-**Language / Мова:** English | [Українська (посібник)](docs/uk/USER_GUIDE.md)
+**Language / Мова:** English | [Українська (посібник)](docs/uk/USER_GUIDE.md) · **Live Product Showcase:** [dellik95.github.io/context-platform](https://dellik95.github.io/context-platform/)
 
 **Local-first long-term memory, hybrid code search, and call-graph impact analysis for AI coding agents (Claude Code / MCP).**
 

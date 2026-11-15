@@ -1,0 +1,2569 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Context Platform (Claudy) — Codebase Memory, Hybrid Search &amp; Call-Graph Intelligence for AI Agents</title>
+  <meta name="description" content="Local-first long-term memory, hybrid code search (SQLite FTS5 + sqlite-vec), Tree-sitter AST call-graph blast radius, 17 MCP tools, and live Angular 22 dashboard built on .NET 11 Clean Architecture." />
+  <meta name="keywords" content="Context Platform, Claudy, MCP Server, Claude Code Hooks, Hybrid Code Search, SQLite FTS5, sqlite-vec, Tree-sitter AST, Blast Radius, .NET 11, Angular 22, Tailwind CSS v4, SignalR, Clean Architecture, Oleksandr Lutskov" />
+  <meta name="author" content="Oleksandr Lutskov" />
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+  <meta name="theme-color" content="#040814" />
+  <link rel="canonical" href="https://dellik95.github.io/context-platform/" />
+  <link rel="alternate" hreflang="en" href="https://dellik95.github.io/context-platform/" />
+  <link rel="alternate" hreflang="uk" href="https://dellik95.github.io/context-platform/?lang=uk" />
+  <link rel="alternate" hreflang="x-default" href="https://dellik95.github.io/context-platform/" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Oleksandr Lutskov — Engineering Portfolio" />
+  <meta property="og:title" content="Context Platform (Claudy) — Codebase Memory &amp; Hybrid Search for AI Agents" />
+  <meta property="og:description" content="Local-first codebase intelligence powered by .NET 11, SQLite WAL (FTS5 + sqlite-vec), Tree-sitter AST call graphs, 17 MCP tools, and an Angular 22 + SignalR observability dashboard." />
+  <meta property="og:url" content="https://dellik95.github.io/context-platform/" />
+  <meta property="og:image" content="https://dellik95.github.io/context-platform/assets/screenshots/dashboard.png" />
+  <meta property="og:image:alt" content="Context Platform Dashboard — Live Job Queues, Hooks, and Project Overview" />
+  <meta property="og:locale" content="en_US" />
+  <meta property="og:locale:alternate" content="uk_UA" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Context Platform (Claudy) — Codebase Memory &amp; Hybrid Search for AI Agents" />
+  <meta name="twitter:description" content="Persistent session memory, hybrid FTS5 + sqlite-vec search, Tree-sitter AST blast radius, and 17 MCP tools on .NET 11 &amp; Angular 22." />
+  <meta name="twitter:image" content="https://dellik95.github.io/context-platform/assets/screenshots/dashboard.png" />
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebPage",
+      "@id": "https://dellik95.github.io/context-platform/#webpage",
+      "url": "https://dellik95.github.io/context-platform/",
+      "name": "Context Platform (Claudy) — Codebase Memory, Hybrid Search & Call-Graph Intelligence for AI Agents",
+      "description": "Local-first long-term memory, hybrid code search (SQLite FTS5 + sqlite-vec), Tree-sitter AST call-graph blast radius, 17 MCP tools, and live Angular 22 dashboard built on .NET 11 Clean Architecture.",
+      "dateModified": "2026-11-15",
+      "mainEntity": { "@id": "https://dellik95.github.io/context-platform/#app" }
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://dellik95.github.io/context-platform/#app",
+      "name": "Context Platform (Claudy)",
+      "alternateName": "Claudy",
+      "description": "Token-budgeted codebase intelligence, persistent session memory, Tree-sitter AST blast-radius call graphs, 17 MCP tools, and live Angular 22 + SignalR dashboard built on .NET 11 Clean Architecture.",
+      "applicationCategory": "DeveloperApplication",
+      "applicationSubCategory": "AI Coding Agent Memory, MCP Server & Hybrid Code Search",
+      "operatingSystem": "Windows, Linux, macOS, Docker",
+      "url": "https://dellik95.github.io/context-platform/",
+      "codeRepository": "https://github.com/dellik95/context-platform",
+      "programmingLanguage": ["C#", ".NET 11", "TypeScript", "Angular 22", "SQLite FTS5"],
+      "featureList": [
+        "Hybrid code search combining SQLite FTS5 BM25, sqlite-vec cosine vectors, and 1-hop graph proximity",
+        "Native Tree-sitter AST symbol extraction and blast-radius call-graph impact for C#, TS, TSX, JS, and Python",
+        "17 targeted MCP tools via Streamable HTTP (/mcp) and 6 Claude Code lifecycle hooks",
+        "TokenBudget knapsack context packer with unused budget carry-forward and per-session deduplication",
+        "Multi-tier session memory extraction, online deduplication, batch consolidation, and code verification",
+        "Angular 22 + Tailwind CSS v4 SPA with SignalR real-time updates and runtime AI provider hot-swap"
+      ],
+      "screenshot": [
+        "https://dellik95.github.io/context-platform/assets/screenshots/dashboard.png",
+        "https://dellik95.github.io/context-platform/assets/screenshots/graph.png",
+        "https://dellik95.github.io/context-platform/assets/screenshots/search.png",
+        "https://dellik95.github.io/context-platform/assets/screenshots/consolidation.png",
+        "https://dellik95.github.io/context-platform/assets/screenshots/usage.png"
+      ],
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "author": {
+        "@type": "Person",
+        "name": "Oleksandr Lutskov",
+        "url": "https://dellik95.github.io/portfolio/",
+        "sameAs": [
+          "https://github.com/dellik95",
+          "https://www.linkedin.com/in/oleksandr-lutskov-b78a57146/",
+          "https://www.youtube.com/@CrafterInCode"
+        ]
+      }
+    }
+  ]
+}
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
+
+  <style>
+    :root {
+      --bg: #040814;
+      --bg-elevated: #0a1226;
+      --bg-soft: #070d1d;
+      --surface: rgba(13, 21, 44, 0.80);
+      --surface-solid: #0d152c;
+      --surface-2: rgba(22, 34, 68, 0.68);
+      --border: rgba(148, 163, 184, 0.16);
+      --border-strong: rgba(6, 182, 212, 0.42);
+      --ink: #f8fafc;
+      --ink-2: #cbd5e1;
+      --muted: #94a3b8;
+      --cyan: #06b6d4;
+      --cyan-bright: #22d3ee;
+      --emerald: #10b981;
+      --emerald-bright: #34d399;
+      --indigo: #6366f1;
+      --indigo-bright: #818cf8;
+      --amber: #f59e0b;
+      --rose: #f43f5e;
+      --shadow-xl: 0 32px 80px -16px rgba(0, 0, 0, 0.72);
+      --shadow-overlap: 0 28px 65px -12px rgba(2, 6, 18, 0.88), 0 0 0 1px rgba(34, 211, 238, 0.24);
+      --nav-bg: rgba(4, 8, 20, 0.78);
+      --grid-dot: rgba(148, 163, 184, 0.13);
+      --code-bg: #030712;
+    }
+
+    html[data-theme="light"] {
+      --bg: #f4f8fb;
+      --bg-elevated: #ffffff;
+      --bg-soft: #f8fafc;
+      --surface: rgba(255, 255, 255, 0.92);
+      --surface-solid: #ffffff;
+      --surface-2: rgba(241, 245, 249, 0.95);
+      --border: rgba(15, 23, 42, 0.10);
+      --border-strong: rgba(8, 145, 178, 0.34);
+      --ink: #0f172a;
+      --ink-2: #334155;
+      --muted: #64748b;
+      --cyan: #0891b2;
+      --cyan-bright: #0e7490;
+      --emerald: #059669;
+      --emerald-bright: #047857;
+      --indigo: #4f46e5;
+      --indigo-bright: #4338ca;
+      --amber: #d97706;
+      --rose: #e11d48;
+      --shadow-xl: 0 24px 60px -15px rgba(15, 23, 42, 0.14);
+      --shadow-overlap: 0 24px 55px -12px rgba(15, 23, 42, 0.16), 0 0 0 1px rgba(8, 145, 178, 0.22);
+      --nav-bg: rgba(255, 255, 255, 0.88);
+      --grid-dot: rgba(15, 23, 42, 0.08);
+      --code-bg: #0f172a;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.62;
+      overflow-x: hidden;
+      transition: background 0.32s ease, color 0.32s ease;
+    }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    .display { font-family: 'Space Grotesk', 'Inter', sans-serif; }
+    a { color: inherit; text-decoration: none; }
+
+    /* SCROLL PROGRESS BAR */
+    #scroll-progress {
+      position: fixed;
+      top: 0; left: 0; height: 3px; width: 0%;
+      background: linear-gradient(90deg, var(--cyan), var(--emerald), var(--indigo), var(--amber));
+      z-index: 9999;
+      transition: width 0.08s linear;
+    }
+
+    /* AMBIENT PARALLAX BACKDROP */
+    .parallax-bg {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      overflow: hidden;
+    }
+    .dot-grid {
+      position: absolute;
+      inset: -120px;
+      background-image: radial-gradient(var(--grid-dot) 1.35px, transparent 1.35px);
+      background-size: 30px 30px;
+      mask-image: linear-gradient(to bottom, rgba(0,0,0,0.85), rgba(0,0,0,0.16));
+      -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,0.85), rgba(0,0,0,0.16));
+    }
+    .orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(115px);
+      opacity: 0.40;
+      will-change: transform;
+    }
+    .orb-1 {
+      width: 640px; height: 640px;
+      background: radial-gradient(circle, rgba(6, 182, 212, 0.42), transparent 70%);
+      top: -180px; left: -140px;
+    }
+    .orb-2 {
+      width: 560px; height: 560px;
+      background: radial-gradient(circle, rgba(16, 185, 129, 0.28), transparent 70%);
+      top: 80px; right: -140px;
+    }
+    .orb-3 {
+      width: 600px; height: 600px;
+      background: radial-gradient(circle, rgba(99, 102, 241, 0.30), transparent 70%);
+      top: 48%; left: 32%;
+    }
+    html[data-theme="light"] .orb { opacity: 0.18; }
+
+    /* TOP STICKY GLASS NAVBAR */
+    .cp-nav {
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      background: var(--nav-bg);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border-bottom: 1px solid var(--border);
+    }
+    .cp-nav-inner {
+      max-width: 1320px;
+      margin: 0 auto;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .cp-brand {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      font-weight: 800;
+      font-size: 17.5px;
+      letter-spacing: -0.02em;
+    }
+    .cp-logo {
+      width: 36px; height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #06b6d4, #10b981, #4f46e5);
+      display: grid;
+      place-items: center;
+      color: #fff;
+      box-shadow: 0 8px 24px rgba(6, 182, 212, 0.38);
+      flex-shrink: 0;
+    }
+    .cp-ver-pill {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10.5px;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: rgba(6, 182, 212, 0.14);
+      color: var(--cyan-bright);
+      border: 1px solid rgba(6, 182, 212, 0.36);
+    }
+    .cp-nav-links {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .cp-nav-links a { transition: color 0.18s ease; }
+    .cp-nav-links a:hover { color: var(--ink); }
+    .cp-nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .nav-seg {
+      display: inline-flex;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 2px;
+    }
+    .nav-seg button {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 11.5px;
+      font-weight: 700;
+      padding: 5px 9px;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .nav-seg button.active {
+      background: linear-gradient(135deg, var(--cyan), var(--indigo));
+      color: #fff;
+    }
+    .nav-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 13px;
+      border-radius: 9px;
+      font-size: 12.5px;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--ink);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .nav-btn:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+    .nav-btn.primary {
+      background: linear-gradient(135deg, var(--cyan), var(--indigo));
+      border-color: transparent;
+      color: #fff;
+      box-shadow: 0 8px 22px rgba(6, 182, 212, 0.34);
+    }
+
+    main { position: relative; z-index: 2; }
+    .container { max-width: 1280px; margin: 0 auto; padding: 0 24px; }
+
+    /* HERO BANNER */
+    .hero-banner {
+      position: relative;
+      padding: 66px 0 132px;
+      border-bottom: 1px solid var(--border);
+      background:
+        radial-gradient(ellipse 80% 58% at 50% 0%, rgba(6, 182, 212, 0.16), transparent 70%),
+        radial-gradient(ellipse 55% 45% at 85% 22%, rgba(16, 185, 129, 0.12), transparent 65%),
+        radial-gradient(ellipse 50% 45% at 15% 25%, rgba(99, 102, 241, 0.12), transparent 65%);
+      overflow: hidden;
+    }
+    html[data-theme="light"] .hero-banner {
+      background:
+        radial-gradient(ellipse 80% 58% at 50% 0%, rgba(8, 145, 178, 0.11), transparent 70%),
+        radial-gradient(ellipse 55% 45% at 85% 22%, rgba(5, 150, 105, 0.08), transparent 65%);
+    }
+    .hero-copy {
+      text-align: center;
+      max-width: 960px;
+      margin: 0 auto 48px;
+      position: relative;
+      z-index: 5;
+      animation: heroFadeUp 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    @keyframes heroFadeUp {
+      from { opacity: 0; transform: translateY(22px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .live-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 16px;
+      border-radius: 999px;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      color: var(--ink-2);
+      margin-bottom: 22px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24);
+    }
+    .pulse-dot {
+      width: 9px; height: 9px;
+      flex-shrink: 0;
+      border-radius: 50%;
+      background: var(--emerald);
+      box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.72);
+      animation: pulseRing 2s infinite;
+    }
+    @keyframes pulseRing {
+      0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.72); }
+      70% { box-shadow: 0 0 0 11px rgba(16, 185, 129, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+    .hero-title {
+      font-family: 'Space Grotesk', 'Inter', sans-serif;
+      font-size: clamp(36px, 5.2vw, 68px);
+      font-weight: 800;
+      line-height: 1.05;
+      letter-spacing: -0.035em;
+      margin-bottom: 20px;
+      background: linear-gradient(130deg, var(--ink) 16%, var(--cyan-bright) 54%, var(--emerald-bright) 80%, var(--indigo-bright) 98%);
+      background-size: 200% auto;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      animation: gradientSlide 9s ease infinite;
+    }
+    html[data-theme="light"] .hero-title {
+      background: linear-gradient(130deg, #0f172a 18%, #0891b2 58%, #059669 90%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    @keyframes gradientSlide {
+      0%, 100% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+    }
+    .hero-sub {
+      font-size: clamp(16px, 1.75vw, 19.5px);
+      color: var(--ink-2);
+      max-width: 810px;
+      margin: 0 auto 24px;
+      line-height: 1.62;
+    }
+    .hero-chips {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 30px;
+    }
+    .hero-chip {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11.5px;
+      font-weight: 600;
+      padding: 5px 11px;
+      border-radius: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--ink-2);
+    }
+    .hero-chip strong { color: var(--cyan-bright); }
+    .hero-cta-row {
+      display: flex;
+      justify-content: center;
+      gap: 13px;
+      flex-wrap: wrap;
+    }
+    .btn-hero {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      padding: 13px 24px;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.25s;
+    }
+    .btn-hero:hover { transform: translateY(-3px); }
+    .btn-hero.glow {
+      background: linear-gradient(135deg, #0891b2, #10b981, #4f46e5);
+      background-size: 200% auto;
+      color: #fff;
+      box-shadow: 0 14px 38px rgba(6, 182, 212, 0.38);
+      animation: gradientSlide 6s ease infinite;
+    }
+    .btn-hero.glass {
+      background: var(--surface);
+      border-color: var(--border-strong);
+      color: var(--ink);
+      backdrop-filter: blur(12px);
+    }
+
+    /* 3D HERO STAGE + FLOATING SATELLITE BANNERS */
+    .hero-stage {
+      position: relative;
+      max-width: 1120px;
+      margin: 0 auto;
+      perspective: 1600px;
+      padding: 18px 0 38px;
+    }
+    .stage-main-frame {
+      position: relative;
+      z-index: 4;
+      border-radius: 18px;
+      overflow: hidden;
+      border: 1px solid rgba(34, 211, 238, 0.36);
+      background: #080f20;
+      box-shadow: 0 42px 100px -20px rgba(0, 0, 0, 0.85), 0 0 80px -20px rgba(6, 182, 212, 0.32);
+      transform-style: preserve-3d;
+      transition: transform 0.16s ease-out;
+    }
+    .stage-chrome {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      background: #0b1428;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11.5px;
+      color: #94a3b8;
+    }
+    .chrome-dots { display: flex; gap: 7px; }
+    .chrome-dots span { width: 10px; height: 10px; border-radius: 50%; }
+    .stage-main-frame img {
+      width: 100%;
+      display: block;
+      cursor: zoom-in;
+    }
+
+    .float-card {
+      position: absolute;
+      z-index: 8;
+      border-radius: 14px;
+      background: rgba(10, 18, 38, 0.92);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(34, 211, 238, 0.42);
+      box-shadow: 0 28px 65px rgba(0, 0, 0, 0.72);
+      overflow: hidden;
+      will-change: transform;
+    }
+    html[data-theme="light"] .float-card {
+      background: rgba(255, 255, 255, 0.96);
+      border-color: rgba(8, 145, 178, 0.32);
+      box-shadow: 0 24px 55px rgba(15, 23, 42, 0.20);
+    }
+    .float-blend {
+      top: 42px;
+      left: -34px;
+      width: 280px;
+      padding: 14px 16px;
+      animation: floatGentle 6s ease-in-out infinite;
+    }
+    .float-graph-mini {
+      top: 64px;
+      right: -36px;
+      width: 300px;
+      animation: floatGentle 7.2s ease-in-out infinite reverse;
+    }
+    .float-budget-peek {
+      bottom: -24px;
+      left: 36px;
+      width: 380px;
+      padding: 13px 16px;
+      animation: floatGentle 6.4s ease-in-out infinite;
+    }
+    @keyframes floatGentle {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-9px); }
+    }
+    .float-cap {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: var(--cyan-bright);
+    }
+    .float-img-cap {
+      padding: 8px 12px;
+      font-size: 11px;
+      font-weight: 700;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      color: var(--ink);
+    }
+    .float-card img { width: 100%; display: block; cursor: zoom-in; }
+    .mini-eq {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      line-height: 1.55;
+      color: var(--ink-2);
+    }
+    .mini-eq b { color: var(--emerald-bright); }
+    .mini-bar-pack {
+      display: flex;
+      height: 8px;
+      border-radius: 999px;
+      overflow: hidden;
+      gap: 2px;
+      margin: 8px 0 6px;
+    }
+
+    /* OVERLAPPING STATS RIBBON BANNER */
+    .overlap-stats {
+      position: relative;
+      z-index: 25;
+      margin-top: -64px;
+      margin-bottom: 34px;
+    }
+    .stats-ribbon {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border-radius: 18px;
+      overflow: hidden;
+      border: 1px solid var(--border-strong);
+      box-shadow: var(--shadow-overlap);
+    }
+    .stat-tile {
+      background: var(--surface-solid);
+      padding: 22px 16px;
+      text-align: center;
+      transition: background 0.25s;
+    }
+    .stat-tile:hover { background: var(--bg-elevated); }
+    .stat-val {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: clamp(22px, 2.4vw, 28px);
+      font-weight: 800;
+      color: var(--cyan-bright);
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+      margin-bottom: 6px;
+    }
+    .stat-lbl {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+
+    /* ANIMATED CAPABILITY MARQUEE BANNER */
+    .ticker-wrap {
+      overflow: hidden;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(90deg, rgba(6, 182, 212, 0.06), rgba(16, 185, 129, 0.06), rgba(99, 102, 241, 0.06));
+      padding: 13px 0;
+      margin-bottom: 64px;
+      mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+      -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+    }
+    .ticker-track {
+      display: flex;
+      width: max-content;
+      gap: 14px;
+      animation: tickerScroll 42s linear infinite;
+    }
+    .ticker-wrap:hover .ticker-track { animation-play-state: paused; }
+    @keyframes tickerScroll {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
+    .ticker-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--ink-2);
+      white-space: nowrap;
+    }
+    .ticker-pill i {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--emerald);
+      display: inline-block;
+    }
+
+    /* SECTION HEADERS */
+    .sec-head {
+      text-align: center;
+      max-width: 820px;
+      margin: 0 auto 50px;
+    }
+    .sec-kicker {
+      display: inline-block;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11.5px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--cyan-bright);
+      padding: 5px 14px;
+      border-radius: 999px;
+      background: rgba(6, 182, 212, 0.12);
+      border: 1px solid rgba(6, 182, 212, 0.34);
+      margin-bottom: 14px;
+    }
+    .sec-title {
+      font-family: 'Space Grotesk', 'Inter', sans-serif;
+      font-size: clamp(28px, 3.6vw, 44px);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+      margin-bottom: 14px;
+    }
+    .sec-desc {
+      font-size: 16px;
+      color: var(--muted);
+    }
+
+    /* INTERACTIVE LAB BANNER (SEARCH + GRAPH + MEMORY & MCP) */
+    .lab-section {
+      padding: 40px 0 88px;
+    }
+    .lab-card {
+      background: var(--surface-solid);
+      border: 1px solid var(--border-strong);
+      border-radius: 22px;
+      padding: 26px 28px;
+      box-shadow: var(--shadow-xl);
+    }
+    .lab-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 14px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 22px;
+    }
+    .lab-tabs {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 4px;
+      border-radius: 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+    }
+    .lab-tab {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12.5px;
+      font-weight: 700;
+      padding: 9px 14px;
+      border-radius: 9px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .lab-tab.active {
+      background: linear-gradient(135deg, var(--cyan), var(--indigo));
+      color: #fff;
+      box-shadow: 0 6px 18px rgba(6, 182, 212, 0.32);
+    }
+    .lab-presets {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+    .preset-btn {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11.5px;
+      font-weight: 600;
+      padding: 7px 12px;
+      border-radius: 9px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--ink-2);
+      cursor: pointer;
+      transition: all 0.18s;
+    }
+    .preset-btn:hover { border-color: var(--cyan); color: var(--ink); }
+    .preset-btn.active {
+      background: rgba(6, 182, 212, 0.16);
+      border-color: var(--cyan);
+      color: var(--cyan-bright);
+    }
+    .lab-grid-2 {
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 20px;
+      align-items: start;
+    }
+    .lab-panel {
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px;
+    }
+    .lab-panel h4 {
+      font-size: 13px;
+      font-family: 'JetBrains Mono', monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--cyan-bright);
+      margin-bottom: 12px;
+    }
+    .budget-track {
+      display: flex;
+      height: 18px;
+      border-radius: 999px;
+      overflow: hidden;
+      gap: 2px;
+      margin: 12px 0;
+      background: var(--surface-2);
+    }
+    .budget-seg {
+      height: 100%;
+      transition: width 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .hit-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      margin-bottom: 8px;
+      font-size: 12.5px;
+    }
+    .hit-row:last-child { margin-bottom: 0; }
+    .hit-score {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11.5px;
+      font-weight: 700;
+      color: var(--emerald-bright);
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(16, 185, 129, 0.14);
+      white-space: nowrap;
+    }
+    .mcp-filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .mcp-pill-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(195px, 1fr));
+      gap: 8px;
+    }
+    .mcp-tool-chip {
+      padding: 9px 11px;
+      border-radius: 10px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      font-size: 11.8px;
+    }
+    .mcp-tool-chip code {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      color: var(--cyan-bright);
+      display: block;
+      margin-bottom: 3px;
+    }
+
+    /* VISUAL TOUR OVERLAPPING BANDS */
+    .tour-band {
+      padding: 80px 0;
+      border-top: 1px solid var(--border);
+      position: relative;
+    }
+    .tour-band-alt {
+      background: linear-gradient(180deg, rgba(6, 182, 212, 0.05), rgba(16, 185, 129, 0.025) 75%, transparent);
+    }
+    .tour-row {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1.36fr 1fr;
+      align-items: center;
+    }
+    .tour-row.reverse {
+      grid-template-columns: 1fr 1.36fr;
+    }
+    .tour-watermark {
+      position: absolute;
+      font-family: 'Space Grotesk', sans-serif;
+      font-weight: 900;
+      font-size: clamp(64px, 10vw, 138px);
+      letter-spacing: -0.05em;
+      color: var(--cyan);
+      opacity: 0.05;
+      top: -54px;
+      left: 0;
+      pointer-events: none;
+      user-select: none;
+      z-index: 0;
+    }
+    .tour-row.reverse .tour-watermark { left: auto; right: 0; }
+    .tour-visual {
+      position: relative;
+      z-index: 2;
+      border-radius: 18px;
+      padding: 10px;
+      background: linear-gradient(135deg, rgba(6, 182, 212, 0.24), rgba(99, 102, 241, 0.14));
+      border: 1px solid var(--border-strong);
+      box-shadow: var(--shadow-xl);
+      transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .tour-visual:hover { transform: scale(1.014); }
+    .tour-visual-inner {
+      border-radius: 12px;
+      overflow: hidden;
+      background: #070c1a;
+      position: relative;
+    }
+    .tour-visual img {
+      width: 100%;
+      display: block;
+      cursor: zoom-in;
+    }
+    .zoom-hint {
+      position: absolute;
+      bottom: 14px;
+      left: 14px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 13px;
+      border-radius: 999px;
+      background: rgba(4, 8, 20, 0.88);
+      color: #f8fafc;
+      font-size: 11.5px;
+      font-weight: 700;
+      border: 1px solid rgba(34, 211, 238, 0.42);
+      cursor: zoom-in;
+      backdrop-filter: blur(10px);
+      transition: transform 0.2s ease, background 0.2s ease;
+      z-index: 4;
+    }
+    .zoom-hint:hover { transform: translateY(-2px) scale(1.03); background: rgba(8, 145, 178, 0.94); }
+    .zoom-hint svg { width: 14px; height: 14px; }
+    .tour-row.reverse .zoom-hint { left: auto; right: 14px; }
+    .tour-card {
+      position: relative;
+      z-index: 6;
+      margin-left: -72px;
+      background: var(--surface);
+      backdrop-filter: blur(22px);
+      -webkit-backdrop-filter: blur(22px);
+      border: 1px solid var(--border-strong);
+      border-radius: 20px;
+      padding: 30px 28px;
+      box-shadow: var(--shadow-overlap);
+    }
+    .tour-row.reverse .tour-visual { order: 2; }
+    .tour-row.reverse .tour-card { order: 1; margin-left: 0; margin-right: -72px; }
+    .tour-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--emerald-bright);
+      background: rgba(16, 185, 129, 0.13);
+      border: 1px solid rgba(16, 185, 129, 0.34);
+      padding: 4px 11px;
+      border-radius: 999px;
+      margin-bottom: 12px;
+    }
+    .tour-card h3 {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 24px;
+      font-weight: 800;
+      line-height: 1.22;
+      margin-bottom: 10px;
+      letter-spacing: -0.02em;
+    }
+    .tour-card p { font-size: 14.5px; color: var(--ink-2); margin-bottom: 16px; }
+    .tour-list {
+      list-style: none;
+      display: grid;
+      gap: 9px;
+      margin-bottom: 18px;
+    }
+    .tour-list li {
+      display: flex;
+      gap: 10px;
+      font-size: 13.5px;
+      color: var(--ink-2);
+      align-items: flex-start;
+    }
+    .tour-list li::before {
+      content: '';
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      margin-top: 3px;
+      border-radius: 50%;
+      background: rgba(6, 182, 212, 0.2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%2322d3ee' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.8 8.2l2.6 2.6 5.8-5.8'/%3E%3C/svg%3E") center/13px 13px no-repeat;
+    }
+    .tech-mini-pills { display: flex; flex-wrap: wrap; gap: 7px; }
+    .tech-mini-pills span {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 9px;
+      border-radius: 7px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--ink-2);
+    }
+
+    /* ALL 9 DASHBOARD MODULES EXPLORER */
+    .explorer-section {
+      padding: 84px 0;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(99, 102, 241, 0.05), transparent 65%);
+    }
+    .explorer-shell {
+      display: grid;
+      grid-template-columns: 270px 1fr;
+      gap: 20px;
+      background: var(--surface-solid);
+      border: 1px solid var(--border-strong);
+      border-radius: 20px;
+      padding: 20px;
+      box-shadow: var(--shadow-xl);
+    }
+    .exp-tabs { display: flex; flex-direction: column; gap: 7px; }
+    .exp-tab {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 11px 14px;
+      border-radius: 11px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--ink-2);
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: left;
+    }
+    .exp-tab.active {
+      background: linear-gradient(135deg, rgba(6, 182, 212, 0.22), rgba(16, 185, 129, 0.14));
+      border-color: var(--cyan);
+      color: var(--ink);
+    }
+    .exp-screen {
+      background: var(--bg-soft);
+      border-radius: 16px;
+      border: 1px solid var(--border-strong);
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+    }
+    .exp-mod-title {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 21px;
+      font-weight: 800;
+      margin: 6px 0;
+    }
+    .exp-mod-desc { font-size: 13.8px; color: var(--ink-2); }
+    .exp-bullets {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      list-style: none;
+    }
+    .exp-bullets li {
+      font-size: 12.2px;
+      line-height: 1.45;
+      color: var(--ink-2);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+    .exp-shot-frame {
+      position: relative;
+      border-radius: 14px;
+      overflow: hidden;
+      border: 1px solid var(--border-strong);
+      background: #060914;
+    }
+    .exp-shot-frame img {
+      width: 100%;
+      max-height: 490px;
+      object-fit: contain;
+      display: block;
+      cursor: zoom-in;
+    }
+
+    /* 12 CAPABILITIES BENTO GRID */
+    .features-section { padding: 86px 0; }
+    .bento-12 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+    }
+    .f-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 25px 23px;
+      transition: transform 0.28s ease, border-color 0.28s ease, box-shadow 0.28s ease;
+    }
+    .f-card:hover {
+      transform: translateY(-5px);
+      border-color: var(--border-strong);
+      box-shadow: var(--shadow-xl);
+    }
+    .f-icon {
+      width: 46px; height: 46px;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 15px;
+      background: var(--ic-bg, rgba(6, 182, 212, 0.14));
+      border: 1px solid var(--ic-bd, rgba(6, 182, 212, 0.36));
+      color: var(--ic-fg, var(--cyan-bright));
+      transition: transform 0.25s ease;
+    }
+    .f-card:hover .f-icon { transform: scale(1.07) rotate(-2deg); }
+    .f-icon svg { width: 22px; height: 22px; }
+    .f-card h4 { font-size: 16.5px; font-weight: 700; margin-bottom: 8px; }
+    .f-card p { font-size: 13.5px; color: var(--muted); line-height: 1.56; }
+
+    /* ARCHITECTURE STACK & BENCHMARKS */
+    .arch-section {
+      padding: 84px 0;
+      border-top: 1px solid var(--border);
+    }
+    .arch-grid {
+      display: grid;
+      grid-template-columns: 1.12fr 0.88fr;
+      gap: 32px;
+      align-items: start;
+    }
+    .arch-stack { display: flex; flex-direction: column; }
+    .arch-layer {
+      position: relative;
+      background: var(--surface-solid);
+      border: 1px solid var(--border-strong);
+      border-radius: 16px;
+      padding: 19px 22px;
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.26);
+      transition: transform 0.25s ease;
+    }
+    .arch-layer + .arch-layer { margin-top: -8px; }
+    .arch-layer:hover { transform: translateX(8px); z-index: 10; }
+    .arch-layer-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .arch-layer-title { font-weight: 800; font-size: 15px; }
+    .arch-layer-tag {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      padding: 3px 9px;
+      border-radius: 6px;
+      background: rgba(6, 182, 212, 0.14);
+      color: var(--cyan-bright);
+    }
+    .arch-layer p { font-size: 13px; color: var(--muted); }
+
+    .bench-box {
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 20px;
+      padding: 26px;
+      box-shadow: var(--shadow-xl);
+    }
+    .bench-bar-row { margin-bottom: 16px; }
+    .bench-bar-top {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12.8px;
+      font-weight: 700;
+      margin-bottom: 6px;
+      gap: 10px;
+    }
+    .bench-track {
+      height: 11px;
+      border-radius: 999px;
+      background: var(--surface-2);
+      overflow: hidden;
+    }
+    .bench-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--cyan), var(--emerald));
+      transform: scaleX(0);
+      transform-origin: left center;
+      transition: transform 1.1s cubic-bezier(0.22, 1, 0.36, 1);
+      position: relative;
+      overflow: hidden;
+    }
+    .bench-box.visible .bench-fill { transform: scaleX(1); }
+    .bench-box.visible .bench-fill::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+      animation: benchSheen 1.4s ease 0.8s forwards;
+    }
+    @keyframes benchSheen {
+      from { transform: translateX(-100%); }
+      to { transform: translateX(100%); }
+    }
+    .honest-note {
+      margin-top: 18px;
+      padding: 14px 16px;
+      border-radius: 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      font-size: 12.6px;
+      color: var(--ink-2);
+      line-height: 1.55;
+    }
+
+    /* QUICK START BANNER */
+    .cta-banner {
+      margin: 24px 0 80px;
+      border-radius: 24px;
+      padding: 46px 38px;
+      background: linear-gradient(135deg, rgba(6, 182, 212, 0.18), rgba(16, 185, 129, 0.13), rgba(79, 70, 229, 0.16));
+      border: 1px solid var(--border-strong);
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 28px;
+      align-items: center;
+      box-shadow: var(--shadow-xl);
+    }
+    .qs-tabs {
+      display: inline-flex;
+      gap: 6px;
+      padding: 4px;
+      border-radius: 10px;
+      background: rgba(3, 7, 18, 0.45);
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+    .qs-tab {
+      border: none;
+      background: transparent;
+      color: #cbd5e1;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11.5px;
+      font-weight: 700;
+      padding: 6px 11px;
+      border-radius: 7px;
+      cursor: pointer;
+    }
+    .qs-tab.active { background: var(--cyan); color: #04101d; }
+    .code-box {
+      background: var(--code-bg);
+      color: #e2e8f0;
+      border-radius: 14px;
+      padding: 16px 18px;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      line-height: 1.65;
+      overflow-x: auto;
+      white-space: pre;
+    }
+    .copy-cmd-btn {
+      margin-top: 10px;
+      width: 100%;
+      padding: 10px;
+      border-radius: 9px;
+      border: 1px solid rgba(34, 211, 238, 0.45);
+      background: rgba(6, 182, 212, 0.22);
+      color: #fff;
+      font-weight: 700;
+      font-size: 12.5px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .copy-cmd-btn:hover { background: var(--cyan); color: #04101d; }
+
+    /* SCROLL REVEAL */
+    .reveal {
+      opacity: 0;
+      transform: translateY(30px);
+      transition: opacity 0.65s cubic-bezier(0.22, 1, 0.36, 1), transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .reveal.visible { opacity: 1; transform: translateY(0); }
+
+    /* LIGHTBOX MODAL */
+    #cp-lightbox {
+      position: fixed;
+      inset: 0;
+      z-index: 99999;
+      background: rgba(3, 6, 17, 0.92);
+      backdrop-filter: blur(12px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 28px;
+    }
+    #cp-lightbox.open { display: flex; }
+    .lb-wrap {
+      max-width: 1220px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .lb-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: #fff;
+      gap: 12px;
+    }
+    .lb-wrap img {
+      width: 100%;
+      max-height: 82vh;
+      object-fit: contain;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+    }
+
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 36px 24px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13.5px;
+    }
+    footer a { color: var(--cyan-bright); font-weight: 600; }
+    footer a:hover { text-decoration: underline; }
+
+    @media (max-width: 1060px) {
+      .float-card { display: none; }
+      .stats-ribbon { grid-template-columns: repeat(2, 1fr); }
+      .tour-row, .tour-row.reverse { grid-template-columns: 1fr; gap: 20px; }
+      .tour-card, .tour-row.reverse .tour-card { margin-left: 0; margin-right: 0; order: 2; }
+      .tour-row.reverse .tour-visual { order: 1; }
+      .explorer-shell, .arch-grid, .cta-banner, .lab-grid-2 { grid-template-columns: 1fr; }
+      .bento-12 { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 720px) {
+      .cp-nav-links, .cp-ver-pill { display: none; }
+      .container { padding: 0 16px; }
+      .hero-banner { padding: 42px 0 68px; }
+      .overlap-stats { margin-top: -36px; }
+      .bento-12, .stats-ribbon, .exp-bullets { grid-template-columns: 1fr; }
+      .exp-tabs { display: grid; grid-template-columns: repeat(2, 1fr); }
+      .cta-banner { padding: 28px 18px; }
+      .btn-hero { width: 100%; justify-content: center; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .reveal, .bench-fill { opacity: 1 !important; transform: none !important; transition: none !important; }
+      .float-card, .pulse-dot, .hero-title, .btn-hero.glow, .ticker-track { animation: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div id="scroll-progress"></div>
+
+  <div class="parallax-bg" aria-hidden="true">
+    <div class="dot-grid" data-parallax="-0.06"></div>
+    <div class="orb orb-1" data-parallax="0.14"></div>
+    <div class="orb orb-2" data-parallax="-0.10"></div>
+    <div class="orb orb-3" data-parallax="0.08"></div>
+  </div>
+
+  <!-- Navigation -->
+  <header class="cp-nav">
+    <div class="cp-nav-inner">
+      <a href="#top" class="cp-brand">
+        <span class="cp-logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/>
+            <path d="M10.7 6.8 6.3 16M13.3 6.8 17.7 16M7.2 18h9.6"/>
+          </svg>
+        </span>
+        <span>Context<span style="color:var(--cyan-bright);">Platform</span></span>
+        <span class="cp-ver-pill">.NET 11 • ANGULAR 22 • MCP</span>
+      </a>
+
+      <nav class="cp-nav-links">
+        <a href="#lab" data-i18n="nav_lab">Interactive Lab</a>
+        <a href="#explorer" data-i18n="nav_explorer">9-Screen Tour</a>
+        <a href="#features" data-i18n="nav_features">12 Capabilities</a>
+        <a href="#architecture" data-i18n="nav_arch">Architecture &amp; Benchmarks</a>
+        <a href="#quickstart" data-i18n="nav_quickstart">Quick Start</a>
+      </nav>
+
+      <div class="cp-nav-actions">
+        <div class="nav-seg" title="Theme">
+          <button type="button" data-theme-btn="light" aria-label="Light theme">☀</button>
+          <button type="button" data-theme-btn="dark" class="active" aria-label="Dark theme">🌙</button>
+        </div>
+        <div class="nav-seg" title="Language">
+          <button type="button" data-lang-btn="en" class="active">EN</button>
+          <button type="button" data-lang-btn="uk">UA</button>
+        </div>
+        <a href="https://dellik95.github.io/portfolio/" target="_blank" rel="noopener" class="nav-btn" data-i18n="nav_portfolio">Portfolio ↗</a>
+        <a href="https://github.com/dellik95/context-platform" target="_blank" rel="noopener" class="nav-btn primary">GitHub ↗</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- Hero Banner -->
+    <section class="hero-banner">
+      <div class="container">
+        <div class="hero-copy">
+          <div class="live-pill">
+            <span class="pulse-dot"></span>
+            <span data-i18n="hero_pill">Local-First AI Codebase Intelligence • SQLite WAL + FTS5 + sqlite-vec + Tree-sitter</span>
+          </div>
+          <h1 class="hero-title" data-i18n="hero_title">Persistent Memory, Hybrid Search &amp; Call-Graph Blast Radius for AI Coding Agents.</h1>
+          <p class="hero-sub" data-i18n="hero_sub">
+            Context Platform indexes your repository locally on .NET 11, exposes 17 targeted MCP tools and 6 Claude Code lifecycle hooks, packs exact context into a strict TokenBudget, and streams live observability to an Angular 22 + Tailwind CSS v4 dashboard.
+          </p>
+          <div class="hero-chips">
+            <span class="hero-chip"><strong>17</strong> MCP Tools (<code>/mcp</code>)</span>
+            <span class="hero-chip"><strong>6</strong> Claude Hooks (<code>/hooks/*</code>)</span>
+            <span class="hero-chip"><strong>5</strong> AST Grammars (No LLM)</span>
+            <span class="hero-chip"><strong>1.000</strong> hit-rate@5</span>
+            <span class="hero-chip"><strong>936 + 32</strong> Passing Tests</span>
+          </div>
+          <div class="hero-cta-row">
+            <a href="#explorer" class="btn-hero glow" data-i18n="cta_tour">Explore Live UI Tour →</a>
+            <a href="#lab" class="btn-hero glass" data-i18n="cta_lab">Try Hybrid Search &amp; Graph Lab</a>
+            <a href="#quickstart" class="btn-hero glass" data-i18n="cta_start">Docker / .NET 11 Setup</a>
+            <a href="https://github.com/dellik95/context-platform" target="_blank" rel="noopener" class="btn-hero glass">GitHub ↗</a>
+          </div>
+        </div>
+
+        <!-- 3D Hero Showcase -->
+        <div class="hero-stage" id="hero-stage">
+          <div class="float-card float-blend" data-parallax="0.04">
+            <div class="float-cap">
+              <span>HYBRID RANK BLEND</span>
+              <span style="color:var(--emerald-bright);">MRR 1.000</span>
+            </div>
+            <div class="mini-eq">
+              score = <b>0.235</b>×FTS5 + <b>0.529</b>×Vec + <b>0.235</b>×Graph
+            </div>
+            <div class="mini-bar-pack">
+              <span style="width:23.5%;background:#06b6d4;"></span>
+              <span style="width:52.9%;background:#10b981;"></span>
+              <span style="width:23.5%;background:#818cf8;"></span>
+            </div>
+            <div style="font-size:11px;color:var(--muted);">CamelCase split + test noise downrank</div>
+          </div>
+
+          <div class="float-card float-graph-mini" data-parallax="-0.03">
+            <div class="float-img-cap">
+              <span>Tree-sitter Blast Radius</span>
+              <span class="mono" style="color:var(--emerald-bright);">graph_impact</span>
+            </div>
+            <img src="assets/screenshots/graph.png" alt="Context Platform interactive vis-network graph" class="zoomable-shot" data-caption="Context Platform — Tree-sitter AST Dependency &amp; Blast-Radius Graph" />
+          </div>
+
+          <div class="float-card float-budget-peek" data-parallax="0.035">
+            <div class="float-cap">
+              <span>TOKENBUDGET KNAPSACK</span>
+              <span style="color:var(--amber);">2,000 TOK CAP</span>
+            </div>
+            <div style="font-size:11.5px;color:var(--ink-2);">
+              Arch 10% + Memories 25% + Issues 10% → unused carry-forward into <b>Primary Code Hits (45%+)</b> &amp; 10-min dedup cooldown
+            </div>
+          </div>
+
+          <div class="stage-main-frame" id="stage-tilt">
+            <div class="stage-chrome">
+              <div class="chrome-dots">
+                <span style="background:#ef4444;"></span>
+                <span style="background:#f59e0b;"></span>
+                <span style="background:#10b981;"></span>
+              </div>
+              <span>http://127.0.0.1:47923 — Context Platform Dashboard (.NET 11 + Angular 22 + SignalR)</span>
+              <span>ONPUSH · WAL</span>
+            </div>
+            <img src="assets/screenshots/dashboard.png" alt="Context Platform Main Dashboard Screenshot" class="zoomable-shot" data-caption="Context Platform — Project Overview, Job Queue KPIs &amp; Hook Invocations" />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Overlapping Stats Ribbon -->
+    <section class="overlap-stats">
+      <div class="container">
+        <div class="stats-ribbon">
+          <div class="stat-tile">
+            <div class="stat-val">1.000</div>
+            <div class="stat-lbl" data-i18n="st_1">Golden NL hit-rate@5 (21/21)</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-val">17 MCP</div>
+            <div class="stat-lbl" data-i18n="st_2">Streamable HTTP Tools (/mcp)</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-val">5 AST</div>
+            <div class="stat-lbl" data-i18n="st_3">C#, TS, TSX, JS &amp; Python Grammars</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-val">6 Hooks</div>
+            <div class="stat-lbl" data-i18n="st_4">Claude Code Lifecycle Integration</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-val">936 + 32</div>
+            <div class="stat-lbl" data-i18n="st_5">.NET 11 &amp; Vitest Verified Specs</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Capability Ticker Banner -->
+    <div class="ticker-wrap" aria-label="Technical highlights">
+      <div class="ticker-track">
+        <span class="ticker-pill"><i></i>SQLite WAL + FTS5 Trigram + sqlite-vec</span>
+        <span class="ticker-pill"><i></i>CamelCase &amp; snake_case Query Splitting</span>
+        <span class="ticker-pill"><i></i>Tree-sitter AST Without LLM Calls</span>
+        <span class="ticker-pill"><i></i>SymbolDiffer SignatureHash / BodyHash Preservation</span>
+        <span class="ticker-pill"><i></i>TokenBudget Unused Carry-Forward Knapsack</span>
+        <span class="ticker-pill"><i></i>McpSavingsTracker 10-min Read Deduplication</span>
+        <span class="ticker-pill"><i></i>MemoryCodeChecker Index Verification</span>
+        <span class="ticker-pill"><i></i>SignalR Real-Time IndexingHub Telemetry</span>
+        <span class="ticker-pill"><i></i>Per-Project SHA-256 Bearer Token Isolation</span>
+        <span class="ticker-pill"><i></i>SecretRedactor Payload Scrubbing</span>
+        <span class="ticker-pill"><i></i>NoOp / Ollama / Foundry / OpenAI / Anthropic</span>
+        <!-- duplicate track for seamless loop -->
+        <span class="ticker-pill"><i></i>SQLite WAL + FTS5 Trigram + sqlite-vec</span>
+        <span class="ticker-pill"><i></i>CamelCase &amp; snake_case Query Splitting</span>
+        <span class="ticker-pill"><i></i>Tree-sitter AST Without LLM Calls</span>
+        <span class="ticker-pill"><i></i>SymbolDiffer SignatureHash / BodyHash Preservation</span>
+        <span class="ticker-pill"><i></i>TokenBudget Unused Carry-Forward Knapsack</span>
+        <span class="ticker-pill"><i></i>McpSavingsTracker 10-min Read Deduplication</span>
+        <span class="ticker-pill"><i></i>MemoryCodeChecker Index Verification</span>
+        <span class="ticker-pill"><i></i>SignalR Real-Time IndexingHub Telemetry</span>
+        <span class="ticker-pill"><i></i>Per-Project SHA-256 Bearer Token Isolation</span>
+        <span class="ticker-pill"><i></i>SecretRedactor Payload Scrubbing</span>
+        <span class="ticker-pill"><i></i>NoOp / Ollama / Foundry / OpenAI / Anthropic</span>
+      </div>
+    </div>
+
+    <!-- Interactive Simulator Lab -->
+    <section class="lab-section reveal" id="lab">
+      <div class="container">
+        <div class="sec-head">
+          <span class="sec-kicker" data-i18n="lab_kicker">INTERACTIVE PIPELINE SIMULATOR</span>
+          <h2 class="sec-title" data-i18n="lab_title">Inside the Retrieval, AST Graph &amp; Memory Engine</h2>
+          <p class="sec-desc" data-i18n="lab_desc">Switch modes below to inspect how Context Platform splits identifiers, packs strict token budgets, computes AST blast radius, and exposes all 17 MCP tools.</p>
+        </div>
+
+        <div class="lab-card">
+          <div class="lab-topbar">
+            <div class="lab-tabs" role="tablist">
+              <button type="button" class="lab-tab active" data-lab-tab="search" data-i18n="lab_tab_search">1. Hybrid Search &amp; TokenBudget</button>
+              <button type="button" class="lab-tab" data-lab-tab="graph" data-i18n="lab_tab_graph">2. AST Blast Radius (graph_impact)</button>
+              <button type="button" class="lab-tab" data-lab-tab="memory" data-i18n="lab_tab_memory">3. Memory Lifecycle &amp; 17 MCP Tools</button>
+            </div>
+            <span class="mono" style="font-size:11.5px;color:var(--emerald-bright);" id="lab-status-pill">MODE: HYBRID SEARCH + KNAPSACK PACKER</span>
+          </div>
+          <div id="lab-body"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Visual Tour Overlapping Showcase -->
+    <section class="tour-band tour-band-alt reveal" id="visual-tour">
+      <div class="container">
+        <div class="tour-row">
+          <span class="tour-watermark">HYBRID SEARCH</span>
+          <div class="tour-visual">
+            <div class="tour-visual-inner">
+              <img src="assets/screenshots/search.png" alt="Context Platform Hybrid Search UI" class="zoomable-shot" data-caption="Hybrid Search — FTS5 BM25 + sqlite-vec Cosine + 1-Hop Graph Expansion" />
+              <button type="button" class="zoom-hint" data-zoom-trigger>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35M11 8v6M8 11h6"/></svg>
+                <span data-i18n="zoom_hint">Click to Zoom</span>
+              </button>
+            </div>
+          </div>
+          <div class="tour-card">
+            <span class="tour-badge">01 · HYBRID CODE &amp; DOC SEARCH</span>
+            <h3 data-i18n="t1_title">Lexical Precision Meets Vector &amp; Graph Context</h3>
+            <p data-i18n="t1_desc">Exact symbol lookups and natural-language architecture queries blend together so top implementation hits outrank test noise cleanly.</p>
+            <ul class="tour-list">
+              <li data-i18n="t1_b1">CamelCase / PascalCase / snake_case query splitting plus bounded LIKE fallback for 1–2 char tokens (id, db).</li>
+              <li data-i18n="t1_b2">Unscoped queries softly downrank tests/ files so production source code appears first unless explicitly scoped.</li>
+              <li data-i18n="t1_b3">LexicalOverlapReranker propagates reordered scores cleanly into ContextPackBuilder.</li>
+            </ul>
+            <div class="tech-mini-pills">
+              <span>SQLite FTS5</span><span>sqlite-vec</span><span>LexicalOverlapReranker</span><span>TokenBudget</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="tour-band reveal">
+      <div class="container">
+        <div class="tour-row reverse">
+          <span class="tour-watermark">MEMORY CORE</span>
+          <div class="tour-visual">
+            <div class="tour-visual-inner">
+              <img src="assets/screenshots/consolidation.png" alt="Context Platform Memory Consolidation Dialog" class="zoomable-shot" data-caption="Memory Consolidation — Cluster Merging, Code Verification &amp; Conflict Resolution" />
+              <button type="button" class="zoom-hint" data-zoom-trigger>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35M11 8v6M8 11h6"/></svg>
+                <span data-i18n="zoom_hint">Click to Zoom</span>
+              </button>
+            </div>
+          </div>
+          <div class="tour-card">
+            <span class="tour-badge">02 · SELF-HEALING SESSION MEMORY</span>
+            <h3 data-i18n="t2_title">Consolidation &amp; Code Verification Guard</h3>
+            <p data-i18n="t2_desc">Raw session hooks become structured facts, duplicate decisions merge automatically, and stale notes are flagged against the real code index.</p>
+            <ul class="tour-list">
+              <li data-i18n="t2_b1">Captures Completed, Decisions, OpenIssues, and NextSteps automatically across /compact boundaries.</li>
+              <li data-i18n="t2_b2">MemoryRelationJudge deduplicates via vector cosine, Jaccard overlap, and shared strong code entities — even offline.</li>
+              <li data-i18n="t2_b3">MemoryCodeChecker verifies referenced symbols against the repository index (Verified, Refuted, Unknown).</li>
+            </ul>
+            <div class="tech-mini-pills">
+              <span>MemoryRelationJudge</span><span>Reconsolidation</span><span>MemoryCodeChecker</span><span>PostCompact Hook</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- All 9 Screens Module Explorer -->
+    <section class="explorer-section reveal" id="explorer">
+      <div class="container">
+        <div class="sec-head">
+          <span class="sec-kicker" data-i18n="exp_kicker">9 REAL DASHBOARD SCREENS</span>
+          <h2 class="sec-title" data-i18n="exp_title">Angular 22 + Tailwind CSS v4 Control Plane</h2>
+          <p class="sec-desc" data-i18n="exp_desc">Zero Angular Material runtime overhead — built with standalone OnPush components, Angular Signals, SignalR live streams, and custom SVG charts.</p>
+        </div>
+
+        <div class="explorer-shell">
+          <div class="exp-tabs" id="exp-tabs">
+            <button type="button" class="exp-tab active" data-mod="dashboard"><span>01. Dashboard &amp; Jobs</span><span>→</span></button>
+            <button type="button" class="exp-tab" data-mod="graph"><span>02. AST Impact Graph</span><span>→</span></button>
+            <button type="button" class="exp-tab" data-mod="search"><span>03. Hybrid Search</span><span>→</span></button>
+            <button type="button" class="exp-tab" data-mod="memories"><span>04. Memories Store</span><span>→</span></button>
+            <button type="button" class="exp-tab" data-mod="consolidation"><span>05. Consolidation Lab</span><span>→</span></button>
+            <button type="button" class="exp-tab" data-mod="sessions"><span>06. Session Checkpoints</span><span>→</span></button>
+            <button type="button" class="exp-tab" data-mod="usage"><span>07. Usage &amp; Savings</span><span>→</span></button>
+            <button type="button" class="exp-tab" data-mod="projects"><span>08. Multi-Project Hub</span><span>→</span></button>
+            <button type="button" class="exp-tab" data-mod="settings"><span>09. Settings &amp; AI</span><span>→</span></button>
+          </div>
+          <div class="exp-screen" id="exp-screen"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 12 Capabilities Bento Grid -->
+    <section class="features-section reveal" id="features">
+      <div class="container">
+        <div class="sec-head">
+          <span class="sec-kicker" data-i18n="feat_kicker">PLATFORM CAPABILITIES</span>
+          <h2 class="sec-title" data-i18n="feat_title">12 Engineering Pillars Built for Daily AI Coding</h2>
+          <p class="sec-desc" data-i18n="feat_desc">Every subsystem runs offline out of the box and scales cleanly with local or cloud AI models.</p>
+        </div>
+        <div class="bento-12" id="bento-12-grid"></div>
+      </div>
+    </section>
+
+    <!-- Clean Architecture & Benchmarks -->
+    <section class="arch-section reveal" id="architecture">
+      <div class="container">
+        <div class="sec-head">
+          <span class="sec-kicker" data-i18n="arch_kicker">CLEAN ARCHITECTURE &amp; MEASURED QUALITY</span>
+          <h2 class="sec-title" data-i18n="arch_title">.NET 11 Modular Layers &amp; End-to-End Benchmarks</h2>
+          <p class="sec-desc" data-i18n="arch_desc">Strict separation between domain entities, AST/graph/memory engines, SQLite storage, and the ASP.NET Core host — backed by 936 backend tests and real integration benchmarks.</p>
+        </div>
+
+        <div class="arch-grid">
+          <div class="arch-stack">
+            <div class="arch-layer">
+              <div class="arch-layer-head">
+                <span class="arch-layer-title">01. Host &amp; Angular 22 SPA</span>
+                <span class="arch-layer-tag">Context.Dashboard.Server + Client</span>
+              </div>
+              <p>ASP.NET Core 11 REST APIs, Streamable HTTP <code>/mcp</code>, 6 Claude hook endpoints, SignalR <code>/hubs/indexing</code>, plus Tailwind v4 + <code>OnPush</code> Angular 22 dashboard.</p>
+            </div>
+            <div class="arch-layer">
+              <div class="arch-layer-head">
+                <span class="arch-layer-title">02. Application Orchestration</span>
+                <span class="arch-layer-tag">Context.Application</span>
+              </div>
+              <p><code>ContextEngine</code> facade delegates to focused coordinators (<code>ContextPackDelivery</code>, <code>NodeExpansion</code>, <code>Memory</code>, <code>Session</code>) and <code>JobDispatcher</code> per-project lanes.</p>
+            </div>
+            <div class="arch-layer">
+              <div class="arch-layer-head">
+                <span class="arch-layer-title">03. Intelligence Engines</span>
+                <span class="arch-layer-tag">Indexing · Graph · Retrieval · Memory</span>
+              </div>
+              <p>Tree-sitter AST parsers, <code>SymbolDiffer</code> hash preservation, thread-safe <code>InMemoryGraphCache</code>, <code>HybridSearchEngine</code>, <code>ContextPackBuilder</code>, and consolidation pipeline.</p>
+            </div>
+            <div class="arch-layer">
+              <div class="arch-layer-head">
+                <span class="arch-layer-title">04. Persistence &amp; AI Adapters</span>
+                <span class="arch-layer-tag">Infrastructure · Providers · Claude</span>
+              </div>
+              <p>EF Core 11 + single SQLite WAL file (<code>FTS5</code> + per-provider <code>sqlite-vec</code> tables), <code>Microsoft.Extensions.AI</code> providers, <code>SecretRedactor</code>, and safe Claude hook installer.</p>
+            </div>
+            <div class="arch-layer">
+              <div class="arch-layer-head">
+                <span class="arch-layer-title">05. Domain &amp; Shared Kernel</span>
+                <span class="arch-layer-tag">Context.Domain + Context.Shared</span>
+              </div>
+              <p>Plain entities, <code>Result&lt;T&gt;</code> error handling, streaming SHA-256 hashing, <code>TokenEstimator</code>, and SHA-256 per-project bearer token isolation.</p>
+            </div>
+          </div>
+
+          <div class="bench-box reveal" id="bench-box">
+            <h3 style="font-family:'Space Grotesk',sans-serif;font-size:20px;margin-bottom:18px;" data-i18n="bench_head">Verified Retrieval &amp; Suite Metrics</h3>
+
+            <div class="bench-bar-row">
+              <div class="bench-bar-top">
+                <span>Golden Natural-Language Suite (21 queries · hit-rate@5)</span>
+                <span class="mono" style="color:var(--emerald-bright);">1.000 (21/21)</span>
+              </div>
+              <div class="bench-track"><div class="bench-fill" style="width:100%;"></div></div>
+            </div>
+
+            <div class="bench-bar-row">
+              <div class="bench-bar-top">
+                <span>Golden Natural-Language Mean Reciprocal Rank (MRR)</span>
+                <span class="mono" style="color:var(--emerald-bright);">1.000</span>
+              </div>
+              <div class="bench-track"><div class="bench-fill" style="width:100%;"></div></div>
+            </div>
+
+            <div class="bench-bar-row">
+              <div class="bench-bar-top">
+                <span>Modern C# Feature Suite (record, camelCase · hit-rate@5)</span>
+                <span class="mono" style="color:var(--cyan-bright);">1.000 (5/5)</span>
+              </div>
+              <div class="bench-track"><div class="bench-fill" style="width:100%;"></div></div>
+            </div>
+
+            <div class="bench-bar-row">
+              <div class="bench-bar-top">
+                <span>Modern C# Feature Suite Mean Reciprocal Rank (MRR)</span>
+                <span class="mono" style="color:var(--cyan-bright);">0.867</span>
+              </div>
+              <div class="bench-track"><div class="bench-fill" style="width:86.7%;"></div></div>
+            </div>
+
+            <div class="honest-note" data-i18n="bench_honest">
+              <strong>Honest engineering assessment:</strong> AST graphs, FTS5 search, camelCase tokenization, and deduplication work 100% offline in <code>noop</code> mode (validated by <code>RetrievalQualityHarnessTests</code> against real SQLite WAL). Semantic synonyms require configuring Ollama, Foundry Local, or OpenAI embeddings, and <code>SavedTokens</code> is a directional estimate (~4 chars/token minus repeated reads).
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Quick Start Banner -->
+    <section class="container reveal" id="quickstart">
+      <div class="cta-banner">
+        <div>
+          <span class="sec-kicker" style="margin-bottom:10px;" data-i18n="qs_kicker">SELF-HOST IN 60 SECONDS</span>
+          <h2 style="font-family:'Space Grotesk',sans-serif;font-size:clamp(26px,3vw,36px);line-height:1.15;margin-bottom:12px;" data-i18n="qs_title">Run Locally on .NET 11 or Docker Compose</h2>
+          <p style="color:var(--ink-2);font-size:15px;margin-bottom:20px;" data-i18n="qs_desc">
+            Start in private offline mode backed by a single SQLite WAL database, connect Claude Code hooks &amp; MCP in one click from Settings, and open the Angular 22 dashboard at <code>127.0.0.1:47923</code>.
+          </p>
+          <div class="hero-chips" style="justify-content:flex-start;margin-bottom:0;">
+            <span class="hero-chip"><strong>No</strong> Cloud Lock-in</span>
+            <span class="hero-chip"><strong>Read-Only</strong> /workspace Mount</span>
+            <span class="hero-chip"><strong>SHA-256</strong> Scoped Tokens</span>
+          </div>
+        </div>
+
+        <div>
+          <div class="qs-tabs">
+            <button type="button" class="qs-tab active" data-qs="docker">Docker Compose</button>
+            <button type="button" class="qs-tab" data-qs="local">.NET 11 + Angular 22</button>
+            <button type="button" class="qs-tab" data-qs="claude">Claude Hook Install</button>
+          </div>
+          <pre class="code-box" id="qs-code"></pre>
+          <button type="button" class="copy-cmd-btn" id="copy-qs-btn" data-i18n="copy_cmd">Copy Setup Commands</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>
+      <strong style="color:var(--ink);">Context Platform (Claudy)</strong> ·
+      <span data-i18n="footer_built">Designed &amp; built by</span> <a href="https://dellik95.github.io/portfolio/" target="_blank" rel="noopener">Oleksandr Lutskov</a> ·
+      <a href="https://github.com/dellik95/context-platform" target="_blank" rel="noopener">GitHub Repository ↗</a> ·
+      <a href="https://github.com/dellik95/context-platform/blob/master/docs/en/ARCHITECTURE.md" target="_blank" rel="noopener">Architecture Docs</a> ·
+      <a href="https://github.com/dellik95/context-platform/blob/master/docs/en/FEATURES.md" target="_blank" rel="noopener">Quality Analysis</a>
+    </p>
+  </footer>
+
+  <!-- Zoom Lightbox Modal -->
+  <div id="cp-lightbox" role="dialog" aria-modal="true" aria-labelledby="lb-caption">
+    <div class="lb-wrap">
+      <div class="lb-top">
+        <strong id="lb-caption" style="font-size:14px;">Screenshot Preview</strong>
+        <button type="button" id="lb-close" class="nav-btn">✕ Close (Esc)</button>
+      </div>
+      <img id="lb-img" src="" alt="Expanded Context Platform screenshot" />
+    </div>
+  </div>
+
+  <script>
+    let currentLang = 'en';
+    let activeLab = 'search';
+    let activeSearchPreset = 0;
+    let activeGraphMode = 'method';
+    let activeMemStage = 0;
+    let activeMcpGroup = 'all';
+    let activeModuleKey = 'dashboard';
+    let activeQsTab = 'docker';
+
+    const I18N = {
+      en: {
+        nav_lab: 'Interactive Lab',
+        nav_explorer: '9-Screen Tour',
+        nav_features: '12 Capabilities',
+        nav_arch: 'Architecture & Benchmarks',
+        nav_quickstart: 'Quick Start',
+        nav_portfolio: 'Portfolio ↗',
+        hero_pill: 'Local-First AI Codebase Intelligence • SQLite WAL + FTS5 + sqlite-vec + Tree-sitter',
+        hero_title: 'Persistent Memory, Hybrid Search & Call-Graph Blast Radius for AI Coding Agents.',
+        hero_sub: 'Context Platform indexes your repository locally on .NET 11, exposes 17 targeted MCP tools and 6 Claude Code lifecycle hooks, packs exact context into a strict TokenBudget, and streams live observability to an Angular 22 + Tailwind CSS v4 dashboard.',
+        cta_tour: 'Explore Live UI Tour →',
+        cta_lab: 'Try Hybrid Search & Graph Lab',
+        cta_start: 'Docker / .NET 11 Setup',
+        st_1: 'Golden NL hit-rate@5 (21/21)',
+        st_2: 'Streamable HTTP Tools (/mcp)',
+        st_3: 'C#, TS, TSX, JS & Python Grammars',
+        st_4: 'Claude Code Lifecycle Integration',
+        st_5: '.NET 11 & Vitest Verified Specs',
+        lab_kicker: 'INTERACTIVE PIPELINE SIMULATOR',
+        lab_title: 'Inside the Retrieval, AST Graph & Memory Engine',
+        lab_desc: 'Switch modes below to inspect how Context Platform splits identifiers, packs strict token budgets, computes AST blast radius, and exposes all 17 MCP tools.',
+        lab_tab_search: '1. Hybrid Search & TokenBudget',
+        lab_tab_graph: '2. AST Blast Radius (graph_impact)',
+        lab_tab_memory: '3. Memory Lifecycle & 17 MCP Tools',
+        zoom_hint: 'Click to Zoom',
+        t1_title: 'Lexical Precision Meets Vector & Graph Context',
+        t1_desc: 'Exact symbol lookups and natural-language architecture queries blend together so top implementation hits outrank test noise cleanly.',
+        t1_b1: 'CamelCase / PascalCase / snake_case query splitting plus bounded LIKE fallback for 1–2 char tokens (id, db).',
+        t1_b2: 'Unscoped queries softly downrank tests/ files so production source code appears first unless explicitly scoped.',
+        t1_b3: 'LexicalOverlapReranker propagates reordered scores cleanly into ContextPackBuilder.',
+        t2_title: 'Consolidation & Code Verification Guard',
+        t2_desc: 'Raw session hooks become structured facts, duplicate decisions merge automatically, and stale notes are flagged against the real code index.',
+        t2_b1: 'Captures Completed, Decisions, OpenIssues, and NextSteps automatically across /compact boundaries.',
+        t2_b2: 'MemoryRelationJudge deduplicates via vector cosine, Jaccard overlap, and shared strong code entities — even offline.',
+        t2_b3: 'MemoryCodeChecker verifies referenced symbols against the repository index (Verified, Refuted, Unknown).',
+        exp_kicker: '9 REAL DASHBOARD SCREENS',
+        exp_title: 'Angular 22 + Tailwind CSS v4 Control Plane',
+        exp_desc: 'Zero Angular Material runtime overhead — built with standalone OnPush components, Angular Signals, SignalR live streams, and custom SVG charts.',
+        feat_kicker: 'PLATFORM CAPABILITIES',
+        feat_title: '12 Engineering Pillars Built for Daily AI Coding',
+        feat_desc: 'Every subsystem runs offline out of the box and scales cleanly with local or cloud AI models.',
+        arch_kicker: 'CLEAN ARCHITECTURE & MEASURED QUALITY',
+        arch_title: '.NET 11 Modular Layers & End-to-End Benchmarks',
+        arch_desc: 'Strict separation between domain entities, AST/graph/memory engines, SQLite storage, and the ASP.NET Core host — backed by 936 backend tests and real integration benchmarks.',
+        bench_head: 'Verified Retrieval & Suite Metrics',
+        bench_honest: 'Honest engineering assessment: AST graphs, FTS5 search, camelCase tokenization, and deduplication work 100% offline in noop mode (validated by RetrievalQualityHarnessTests against real SQLite WAL). Semantic synonyms require configuring Ollama, Foundry Local, or OpenAI embeddings, and SavedTokens is a directional estimate (~4 chars/token minus repeated reads).',
+        qs_kicker: 'SELF-HOST IN 60 SECONDS',
+        qs_title: 'Run Locally on .NET 11 or Docker Compose',
+        qs_desc: 'Start in private offline mode backed by a single SQLite WAL database, connect Claude Code hooks & MCP in one click from Settings, and open the Angular 22 dashboard at 127.0.0.1:47923.',
+        copy_cmd: 'Copy Setup Commands',
+        copied_cmd: 'Copied to Clipboard ✓',
+        footer_built: 'Designed & built by'
+      },
+      uk: {
+        nav_lab: 'Інтерактивна лабораторія',
+        nav_explorer: '9 екранів UI',
+        nav_features: '12 можливостей',
+        nav_arch: 'Архітектура та тести',
+        nav_quickstart: 'Швидкий старт',
+        nav_portfolio: 'Портфоліо ↗',
+        hero_pill: 'Локальний інтелект кодової бази • SQLite WAL + FTS5 + sqlite-vec + Tree-sitter',
+        hero_title: 'Довгострокова пам’ять, гібридний пошук і граф впливу коду для AI-агентів.',
+        hero_sub: 'Context Platform локально індексує репозиторій на .NET 11, надає 17 MCP-інструментів і 6 Claude Code хуків, пакує релевантний контекст у суворий TokenBudget і транслює телеметрію в реальному часі до Angular 22 + Tailwind CSS v4 дашборду.',
+        cta_tour: 'Оглянути живий UI →',
+        cta_lab: 'Спробувати симулятор пошуку й графа',
+        cta_start: 'Запуск у Docker / .NET 11',
+        st_1: 'Golden NL hit-rate@5 (21/21)',
+        st_2: 'Streamable HTTP інструменти (/mcp)',
+        st_3: 'C#, TS, TSX, JS та Python AST',
+        st_4: 'Інтеграція з хуками Claude Code',
+        st_5: 'Перевірені тести (.NET 11 + Vitest)',
+        lab_kicker: 'ІНТЕРАКТИВНИЙ СИМУЛЯТОР ПАЙПЛАЙНУ',
+        lab_title: 'Як працює пошук, AST-граф і життєвий цикл пам’яті',
+        lab_desc: 'Перемикайте режими нижче, щоб дослідити токенізацію ідентифікаторів, пакування TokenBudget, аналіз blast radius та каталог усіх 17 MCP-інструментів.',
+        lab_tab_search: '1. Гібридний пошук і TokenBudget',
+        lab_tab_graph: '2. AST Blast Radius (graph_impact)',
+        lab_tab_memory: '3. Пам’ять і 17 MCP-інструментів',
+        zoom_hint: 'Натисніть для збільшення',
+        t1_title: 'Лексична точність + векторний та графовий контекст',
+        t1_desc: 'Точні збіги символів і запити природною мовою об’єднуються так, що робочий код випереджає тестовий шум.',
+        t1_b1: 'Розбиття CamelCase / PascalCase / snake_case та безпечний LIKE-фолбек для коротких токенів (id, db).',
+        t1_b2: 'Запити без явного scope м’яко знижують ранг файлів tests/, щоб спершу з’являлася реалізація.',
+        t1_b3: 'LexicalOverlapReranker перевпорядковує топ-кандидатів і коректно передає ранги в ContextPackBuilder.',
+        t2_title: 'Консолідація пам’яті та перевірка за кодом',
+        t2_desc: 'Події сесій перетворюються на структуровані факти, дублікати зливаються автоматично, а застарілі нотатки звіряються з індексом коду.',
+        t2_b1: 'Автоматично фіксує Completed, Decisions, OpenIssues та NextSteps на межах /compact.',
+        t2_b2: 'MemoryRelationJudge усуває дублі за косинусною схожістю, Jaccard-перетином і спільними сутностями навіть офлайн.',
+        t2_b3: 'MemoryCodeChecker звіряє згадані символи з актуальним індексом (Verified, Refuted, Unknown).',
+        exp_kicker: '9 РЕАЛЬНИХ ЕКРАНІВ ДАШБОРДУ',
+        exp_title: 'Інтерфейс керування на Angular 22 + Tailwind CSS v4',
+        exp_desc: 'Без важких залежностей Angular Material — standalone-компоненти з OnPush, Signals, SignalR-оновленнями та власними SVG-графіками.',
+        feat_kicker: 'МОЖЛИВОСТІ ПЛАТФОРМИ',
+        feat_title: '12 інженерних стовпів для щоденної роботи з AI-агентами',
+        feat_desc: 'Усі підсистеми працюють локально одразу з коробки та масштабуються до локальних або хмарних моделей.',
+        arch_kicker: 'ЧИСТА АРХІТЕКТУРА ТА ВИМІРЯНА ЯКІСТЬ',
+        arch_title: 'Модульні шари .NET 11 і результати бенчмарків',
+        arch_desc: 'Чіткий поділ між доменом, рушіями AST/графа/пам’яті, SQLite-сховищем і ASP.NET Core хостом — підтверджено 936 бекенд-тестами.',
+        bench_head: 'Підтверджені метрики пошуку та тестів',
+        bench_honest: 'Чесна оцінка: AST-графи, FTS5-пошук, CamelCase-токенізація та дедуплікація працюють 100% офлайн у режимі noop (підтверджено інтеграційними тестами RetrievalQualityHarnessTests на реальному SQLite WAL). Для пошуку синонімів потрібні реальні ембединги (Ollama, Foundry Local або OpenAI), а SavedTokens — це орієнтовна метрика (~4 символи на токен без повторних читань).',
+        qs_kicker: 'ЗАПУСК ЗА 60 СЕКУНД',
+        qs_title: 'Локально на .NET 11 або через Docker Compose',
+        qs_desc: 'Запускайте у приватному офлайн-режимі з єдиним файлом SQLite WAL, підключайте Claude Code hooks і MCP одним кліком у Settings та відкривайте дашборд на 127.0.0.1:47923.',
+        copy_cmd: 'Скопіювати команди запуску',
+        copied_cmd: 'Скопійовано ✓',
+        footer_built: 'Спроєктовано та розроблено:'
+      }
+    };
+
+    const SEARCH_PRESETS = [
+      {
+        label: 'validateToken (CamelCase)',
+        query: 'validateToken',
+        scope: 'All project files (unscoped)',
+        tokens: '["validate", "token"]',
+        filterNote: 'Splits camelCase -> FTS5 MATCH + 1-hop graph neighbors; unscoped production code outranks tests/.',
+        alloc: { arch: 10, mem: 14, issue: 6, hits: 60, reserve: 10 },
+        usedLabel: '1,800 / 2,000 tokens packed (12% unused memories rolled into Primary Hits)',
+        hits: [
+          { path: 'src/Billing/BillingTokenValidator.cs::ValidateToken', score: '0.942' },
+          { path: 'src/Auth/TokenSigningKeyProvider.cs::VerifySignature', score: '0.861' },
+          { path: 'tests/BillingTokenValidatorTests.cs (downranked test)', score: '0.518' }
+        ]
+      },
+      {
+        label: 'tests/ scoped query',
+        query: 'TokenScope tests/',
+        scope: 'scope: ["tests/"]',
+        tokens: '["token", "scope"]',
+        filterNote: 'Explicit tests/ scope disables test noise downranking so test fixtures surface at full rank.',
+        alloc: { arch: 10, mem: 10, issue: 5, hits: 65, reserve: 10 },
+        usedLabel: '1,790 / 2,000 tokens packed (record struct hits ranked top)',
+        hits: [
+          { path: 'tests/Billing/TokenScopeTests.cs::TokenScope_Equality', score: '0.938' },
+          { path: 'src/Billing/TokenScope.cs (record struct reference)', score: '0.804' },
+          { path: 'tests/Integration/HostAuthScopeTests.cs', score: '0.761' }
+        ]
+      },
+      {
+        label: '"thanks looks good" hook',
+        query: 'thanks looks good',
+        scope: 'UserPromptSubmit Chatter Filter',
+        tokens: 'skipped (acknowledgement)',
+        filterNote: 'Event logged in background session history; retrieval skipped to inject 0 unnecessary tokens.',
+        alloc: { arch: 0, mem: 0, issue: 0, hits: 0, reserve: 100 },
+        usedLabel: '0 tokens injected — conversational chatter filtered out automatically',
+        hits: [
+          { path: 'Hook invocation persisted asynchronously -> SessionHistory', score: '0 tok' }
+        ]
+      }
+    ];
+
+    const MCP_TOOLS = [
+      { name: 'context_search', group: 'search', desc: 'Hybrid code + docs + memories packed into a TokenBudget' },
+      { name: 'context_expand', group: 'search', desc: 'Expand symbol/file node at L0, L1_Summary, or L2_Full' },
+      { name: 'context_get', group: 'search', desc: 'Direct full L2 source retrieval by graph node id' },
+      { name: 'code_search', group: 'search', desc: 'Targeted hybrid code search with path/symbol filters' },
+      { name: 'symbol_search', group: 'search', desc: 'Exact/prefix lookup across AST-indexed symbols' },
+      { name: 'project_info', group: 'search', desc: 'Project metadata, indexed counts & capability status' },
+      { name: 'graph_neighbors', group: 'graph', desc: 'Reachable callers, calls & references within N hops' },
+      { name: 'graph_neighborhood', group: 'graph', desc: 'Subgraph nodes + edges payload for graph exploration' },
+      { name: 'graph_path', group: 'graph', desc: 'Shortest dependency path between any two code nodes' },
+      { name: 'graph_impact', group: 'graph', desc: 'Blast radius: transitive callers, implementers & tests' },
+      { name: 'memory_search', group: 'memory', desc: 'Hybrid search across durable project engineering facts' },
+      { name: 'memory_get', group: 'memory', desc: 'Fetch single memory record + evidence & verification state' },
+      { name: 'memory_remember', group: 'memory', desc: 'Persist typed Decision / Architecture / Issue notes' },
+      { name: 'memory_forget', group: 'memory', desc: 'Delete memory with linked evidence & entity records' },
+      { name: 'session_search', group: 'sessions', desc: 'List Claude Code sessions filtered by session id' },
+      { name: 'session_get', group: 'sessions', desc: 'Inspect session metadata, events & summary' },
+      { name: 'session_summary_search', group: 'sessions', desc: 'Hybrid search across cross-session /compact checkpoints' }
+    ];
+
+    const MEM_STAGES = [
+      { title: '1. Hook Event Capture', rule: 'SessionStart, UserPromptSubmit, PostToolUse, PostCompact, Stop, SessionEnd append fast WAL rows and return 200 OK.' },
+      { title: '2. Structured Extraction', rule: 'Batches session turns into typed facts (Decision, Architecture, Issue, Constraint) plus file links.' },
+      { title: '3. Online Merge Guard', rule: 'MemoryRelationJudge checks cosine similarity + Jaccard overlap + shared strong code entities to avoid duplicates.' },
+      { title: '4. Batch Reconsolidation', rule: 'Clusters active & contested memories, merges redundant facts into canonical notes, retires obsolete logs.' },
+      { title: '5. Code Verification Check', rule: 'MemoryCodeChecker checks referenced files & symbols against AST index -> Verified / Refuted / Unknown.' }
+    ];
+
+    const MODULES = {
+      dashboard: {
+        img: 'assets/screenshots/dashboard.png',
+        badge: 'LIVE SIGNALR TELEMETRY',
+        en: {
+          title: 'Project Overview, Job Queue KPIs & Hook Stream',
+          desc: 'Monitor pending, running, failed, and completed background jobs alongside real-time Claude hook invocations powered by SignalR.',
+          bullets: [
+            'Decomposed OnPush KPI cards + cleanup/retry-all/force-restart controls',
+            'Coalesced throttled reload timers prevent API storms on bursty edits',
+            'Auto-bootstraps localhost admin token without manual login prompts'
+          ]
+        },
+        uk: {
+          title: 'Огляд проєкту, KPI черги задач і потік хуків',
+          desc: 'Відстежуйте pending/running/failed/done задачі та живі виклики Claude-хуків через SignalR.',
+          bullets: [
+            'Декомпозовані OnPush KPI-картки з керуванням чергою та retry-all',
+            'Throttled-перезавантаження захищають API при масових змінах файлів',
+            'Автоматичний localhost bootstrap токена адміністратора без форм входу'
+          ]
+        }
+      },
+      graph: {
+        img: 'assets/screenshots/graph.png',
+        badge: 'TREE-SITTER AST + VIS-NETWORK',
+        en: {
+          title: 'Interactive Call Graph & Blast Radius Explorer',
+          desc: 'Inspect callers, callees, interface implementers, inheritance chains, and covering [Fact]/[Theory] tests without leaving the browser.',
+          bullets: [
+            'Supports C#, TypeScript, TSX, JavaScript, JSX, and Python AST parsing',
+            'Autocomplete symbol selector with instant hop depth & edge kind filters',
+            'InMemoryGraphCache isolates caller CancellationToken to avoid cache poisoning'
+          ]
+        },
+        uk: {
+          title: 'Інтерактивний граф викликів і Blast Radius',
+          desc: 'Досліджуйте викликачів, реалізації інтерфейсів, наслідування та пов’язані тести [Fact]/[Theory].',
+          bullets: [
+            'Парсинг AST для C#, TypeScript, TSX, JavaScript, JSX та Python без LLM',
+            'Автодоповнення символів із фільтрами глибини переходів і типів ребер',
+            'Потокобезпечний InMemoryGraphCache з ізоляцією скасування'
+          ]
+        }
+      },
+      search: {
+        img: 'assets/screenshots/search.png',
+        badge: 'HYBRID RETRIEVAL',
+        en: {
+          title: 'Hybrid Search Playground (FTS5 + Vector + Graph)',
+          desc: 'Run live queries against the indexed repository, inspect FTS5 + sqlite-vec + graph blend scores, and adjust token budgets interactively.',
+          bullets: [
+            'CamelCase & snake_case identifier splitting with contextual snippets',
+            'Test-noise downranking on unscoped queries; full rank when scoped to tests/',
+            'Inspect packed L0/L1/L2 context blocks before Claude Code consumes them'
+          ]
+        },
+        uk: {
+          title: 'Тестовий майданчик гібридного пошуку',
+          desc: 'Запускайте живі запити по індексу, перевіряйте комбіновані оцінки та наповнення TokenBudget.',
+          bullets: [
+            'Розбиття CamelCase/snake_case і точні сніпети навколо збігів',
+            'Зниження пріоритету тестів за замовчуванням і повний ранг із tests/',
+            'Прозорий перегляд рівнів розкриття L0/L1/L2'
+          ]
+        }
+      },
+      memories: {
+        img: 'assets/screenshots/memories.png',
+        badge: 'PERSISTENT PROJECT KNOWLEDGE',
+        en: {
+          title: 'Structured Long-Term Memory Repository',
+          desc: 'Browse, edit, verify against code, or retire engineering decisions, architectural constraints, and discovered bug notes.',
+          bullets: [
+            'Typed categories: Architecture, Decision, Constraint, Behavior, Issue',
+            'Code verification status badge (Verified, Refuted, Unknown) per note',
+            'Per-provider sqlite-vec vector tables avoid dimension collisions'
+          ]
+        },
+        uk: {
+          title: 'Сховище довгострокових знань проєкту',
+          desc: 'Переглядайте, редагуйте, звіряйте з кодом або архівуйте архітектурні рішення та обмеження.',
+          bullets: [
+            'Типізовані категорії: Architecture, Decision, Constraint, Behavior, Issue',
+            'Бейдж перевірки коду (Verified, Refuted, Unknown) для кожної нотатки',
+            'Ізольовані векторні таблиці sqlite-vec під кожного провайдера'
+          ]
+        }
+      },
+      consolidation: {
+        img: 'assets/screenshots/consolidation.png',
+        badge: 'ONLINE & BATCH CONSOLIDATION',
+        en: {
+          title: 'Cluster Consolidation & Conflict Preview Dialog',
+          desc: 'Preview duplicate clusters, inspect canonical merge proposals, and commit idempotent consolidation updates cleanly.',
+          bullets: [
+            'Offline fallback combines cosine distance, Jaccard overlap & shared entities',
+            'Explicit Contested state preserves conflicting facts until reviewed',
+            'Accessible OnPush ModalShell with Escape & keyboard focus support'
+          ]
+        },
+        uk: {
+          title: 'Діалог консолідації та вирішення конфліктів',
+          desc: 'Попередньо переглядайте кластери дублікатів, канонічні злиття та перевіряйте суперечливі факти.',
+          bullets: [
+            'Офлайн-фолбек поєднує косинусну схожість, Jaccard і спільні сутності коду',
+            'Явний статус Contested не губить суперечності до перевірки',
+            'Доступний OnPush ModalShell із клавіатурною навігацією та Escape'
+          ]
+        }
+      },
+      sessions: {
+        img: 'assets/screenshots/sessions.png',
+        badge: 'CROSS-SESSION CHECKPOINTS',
+        en: {
+          title: 'Claude Code Sessions & /compact Checkpoints',
+          desc: 'Inspect full timeline events per Claude session plus structured Completed, Decisions, OpenIssues, and NextSteps summaries.',
+          bullets: [
+            'Preserves working context across /compact resets and multi-day work',
+            'Vector + lexical search across historical session summaries (session_summary_search)',
+            'Safe cancellation of stale requests when switching active projects'
+          ]
+        },
+        uk: {
+          title: 'Сесії Claude Code та чекпойнти /compact',
+          desc: 'Переглядайте події кожної сесії та структуровані підсумки Completed, Decisions, OpenIssues, NextSteps.',
+          bullets: [
+            'Зберігає робочий контекст після /compact і між робочими днями',
+            'Гібридний пошук за підсумками минулих сесій (session_summary_search)',
+            'Автоматичне скасування попередніх запитів при перемиканні проєкту'
+          ]
+        }
+      },
+      usage: {
+        img: 'assets/screenshots/usage.png',
+        badge: 'TAILWIND SVG TELEMETRY',
+        en: {
+          title: 'Token Usage, Cost Attribution & Dedup Savings Charts',
+          desc: 'Interactive custom SVG donut & bar charts track provider spend alongside McpSavingsTracker estimated tokens saved.',
+          bullets: [
+            'Zero chart library bloat — custom OnPush accessible SVG charts',
+            '10-minute / file-change dedup cooldown keeps token savings realistic',
+            'Interactive bar & slice selection with aria-pressed states'
+          ]
+        },
+        uk: {
+          title: 'SVG-графіки використання токенів та економії',
+          desc: 'Власні інтерактивні SVG-графіки відстежують витрати AI-провайдерів і реальну економію від дедуплікації.',
+          bullets: [
+            'Жодних сторонніх chart-бібліотек — легкі OnPush SVG-графіки з Tailwind',
+            '10-хвилинний cooldown у McpSavingsTracker захищає від завищення метрик',
+            'Клавіатурне та клік-виділення сегментів з aria-pressed'
+          ]
+        }
+      },
+      projects: {
+        img: 'assets/screenshots/projects.png',
+        badge: 'ISOLATED MULTI-TENANCY',
+        en: {
+          title: 'Multi-Project Registry & Per-Project Token Scopes',
+          desc: 'Register local repositories via filesystem browser, trigger incremental reindexes, and rotate project-scoped bearer tokens.',
+          bullets: [
+            'Only SHA-256 BearerTokenHash stored in SQLite — tokens never cross projects',
+            'File watcher queues bounded by SemaphoreSlim & tracked IAsyncDisposable shutdown',
+            'Automatic per-project fairness lanes in JobDispatcher'
+          ]
+        },
+        uk: {
+          title: 'Мультипроєктний реєстр та ізоляція токенів',
+          desc: 'Додавайте локальні репозиторії, запускайте інкрементальну індексацію та оновлюйте токени проєктів.',
+          bullets: [
+            'У SQLite зберігається лише SHA-256 хеш — токен одного проєкту не діє в іншому',
+            'File watcher обмежений SemaphoreSlim з безпечним завершенням IAsyncDisposable',
+            'Чесне планування фонових задач по проєктах через JobDispatcher'
+          ]
+        }
+      },
+      settings: {
+        img: 'assets/screenshots/settings.png',
+        badge: 'RUNTIME HOT-SWAP & CLAUDE INSTALLER',
+        en: {
+          title: 'Runtime Provider Switcher & 1-Click Claude Setup',
+          desc: 'Hot-swap embedding/chat providers per project without restarts and generate backed-up .mcp.json, hooks, and SKILL.md.',
+          bullets: [
+            'Switch between NoOp, Ollama, Foundry Local, OpenAI, and Anthropic live',
+            'Writes cross-platform .ps1 and .sh hook scripts safely with backups',
+            'Unsaved settings forms are preserved during background SignalR reloads'
+          ]
+        },
+        uk: {
+          title: 'Гаряча зміна AI-провайдерів та інсталятор Claude',
+          desc: 'Перемикайте моделі без рестарту сервера й генеруйте .mcp.json, хуки та SKILL.md з резервними копіями.',
+          bullets: [
+            'Підтримка NoOp, Ollama, Foundry Local, OpenAI та Anthropic на льоту',
+            'Кросплатформні .ps1 та .sh скрипти хуків із бекапами конфігів',
+            'Незбережені зміни форми не губляться під час фонових оновлень'
+          ]
+        }
+      }
+    };
+
+    const FEATURES_12 = [
+      {
+        tone: ['rgba(6,182,212,0.14)', 'rgba(6,182,212,0.36)', '#22d3ee'],
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>',
+        en: ['Hybrid FTS5 + Vector + Graph Search', 'Blends normalized lexical BM25, sqlite-vec cosine similarity, and 1-hop AST proximity, with CamelCase splitting & test noise downranking.'],
+        uk: ['Гібридний пошук FTS5 + Vector + Graph', 'Поєднує BM25, косинусну схожість sqlite-vec та 1-hop граф, з розбиттям CamelCase і фільтрацією тестового шуму.']
+      },
+      {
+        tone: ['rgba(16,185,129,0.14)', 'rgba(16,185,129,0.36)', '#34d399'],
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 10h10M7 14h6"/></svg>',
+        en: ['TokenBudget Carry-Forward Knapsack', 'Allocates strict budgets across architecture summary, memories, open issues, and code hits — rolling unused slice tokens directly into code hits.'],
+        uk: ['Пакування за суворим TokenBudget', 'Розподіляє бюджет між архітектурою, пам’яттю, відкритими проблемами та кодом — невикористані токени переходять у primary hits.']
+      },
+      {
+        tone: ['rgba(99,102,241,0.14)', 'rgba(99,102,241,0.36)', '#818cf8'],
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.8 6.8 6.2 16M13.2 6.8 17.8 16M7.2 18h9.6"/></svg>',
+        en: ['Tree-sitter AST & Blast Radius', 'Deterministic parsing for C#, TypeScript, TSX, JS, and Python mapping callers, interface implementers, and [Fact]/[Theory] test links with zero LLM cost.'],
+        uk: ['Tree-sitter AST і Blast Radius', 'Детермінований парсинг C#, TS, TSX, JS та Python для пошуку викликачів, реалізацій інтерфейсів і тестів без жодного виклику LLM.']
+      },
+      {
+        tone: ['rgba(245,158,11,0.14)', 'rgba(245,158,11,0.36)', '#fbbf24'],
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h10M4 17h13"/><circle cx="19" cy="15" r="3"/></svg>',
+        en: ['Incremental SymbolDiffer Preservation', 'Hashes signatures and bodies independently so untouched symbols keep existing embeddings and cross-file incoming graph edges across edits.'],
+        uk: ['Інкрементальний SymbolDiffer', 'Хешує сигнатури й тіла символів окремо — незмінені шматки зберігають векторні ембединги та вхідні ребра графа.']
+      },
+      {
+        tone: ['rgba(6,182,212,0.14)', 'rgba(6,182,212,0.36)', '#22d3ee'],
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4"/></svg>',
+        en: ['17 Targeted MCP Server Tools', 'Streamable HTTP (/mcp) exposes search, L0/L1/L2 expansion, graph path/impact, durable memories, and session checkpoint lookup tools.'],
+        uk: ['17 цільових MCP-інструментів', 'Streamable HTTP (/mcp) відкриває пошук, розкриття L0/L1/L2, аналіз графа/впливу, довгострокову пам’ять і історію сесій.']
+      },
+      {
+        tone: ['rgba(16,185,129,0.14)', 'rgba(16,185,129,0.36)', '#34d399'],
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg>',
+        en: ['6 Claude Hooks & Chatter Guard', 'Fast-ack /hooks/* endpoints record SessionStart through SessionEnd while filtering conversational chatter ("thanks", "ok") out of retrieval.'],
+        uk: ['6 хуків Claude і фільтр шуму', 'Швидкі /hooks/* ендпойнти логують весь цикл сесії та відсікають зайвий пошук для коротких фраз на кшталт "ok" чи "thanks".']
+      },
+      {
+        tone: ['rgba(168,85,247,0.14)', 'rgba(168,85,247,0.36)', '#c084fc'],
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a7 7 0 0 0-7 7c0 2.7 1.5 5 3.8 6.2L9 20h6l.2-3.8A7 7 0 0 0 12 3z"/></svg>',
+        en: ['Online + Batch Memory Consolidation', 'Deduplicates facts on insert and runs cluster reconsolidation offline or with an LLM to keep architectural notes concise and contradiction-aware.'],
+        uk: ['Онлайн і пакетна консолідація пам’яті', 'Об’єднує дублікати на вставці та кластерно консолідує знання, позначаючи суперечливі твердження статусом Contested.']
+      },
+      {
+        tone: ['rgba(244,63,94,0.14)', 'rgba(244,63,94,0.36)', '#fb7185'],
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+        en: ['Code Verification & Secret Redaction', 'MemoryCodeChecker checks symbol paths against the live AST index while SecretRedactor scrubs tokens and keys before external LLM calls.'],
+        uk: ['Перевірка за кодом і SecretRedactor', 'MemoryCodeChecker звіряє нотатки з реальними символами індексу, а SecretRedactor вирізає ключі перед зовнішніми LLM.']
+      },
+      {
+        tone: ['rgba(6,182,212,0.14)', 'rgba(6,182,212,0.36)', '#22d3ee'],
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
+        en: ['Angular 22 + Tailwind CSS v4 SPA', 'Material-free standalone components with ChangeDetectionStrategy.OnPush, Signals, coalesced 401 refresh interceptor, and live SignalR reconnects.'],
+        uk: ['Angular 22 + Tailwind CSS v4 SPA', 'Легкі standalone-компоненти з OnPush, Signals, об’єднаним оновленням 401-токенів і надійним перепідключенням SignalR.']
+      },
+      {
+        tone: ['rgba(16,185,129,0.14)', 'rgba(16,185,129,0.36)', '#34d399'],
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="18" cy="18" r="2"/></svg>',
+        en: ['Bounded JobDispatcher Lanes', 'Per-project fairness queues, exponential retry backoff, clean IAsyncDisposable shutdown, and optional Redis multi-host signaling.'],
+        uk: ['Черга JobDispatcher із чесними смугами', 'Окремі черги на кожен проєкт, експоненційний backoff ретраїв, коректне завершення та опційний Redis для мультихосту.']
+      },
+      {
+        tone: ['rgba(245,158,11,0.14)', 'rgba(245,158,11,0.36)', '#fbbf24'],
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>',
+        en: ['Hot-Swappable AI Providers', 'Integrated Microsoft.Extensions.AI adapters let every project toggle NoOp, Ollama, Foundry Local, OpenAI, or Anthropic at runtime.'],
+        uk: ['Гаряче перемикання AI-провайдерів', 'Адаптери Microsoft.Extensions.AI дозволяють змінювати NoOp, Ollama, Foundry Local, OpenAI чи Anthropic без перезапуску.']
+      },
+      {
+        tone: ['rgba(99,102,241,0.14)', 'rgba(99,102,241,0.36)', '#818cf8'],
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
+        en: ['Fail-Closed Single-File WAL Security', 'Per-project SHA-256 hashed bearer tokens isolate scopes while keeping all code, chunks, and provider-keyed vector tables inside one local SQLite WAL file.'],
+        uk: ['Ізольована локальна SQLite WAL безпека', 'Попроєктні SHA-256 токени суворо розділяють доступ, а всі дані та векторні таблиці лежать локально в єдиній базі SQLite WAL.']
+      }
+    ];
+
+    const QUICK_START = {
+      docker: `export CONTEXT_PLATFORM_ADMIN_TOKEN="$(openssl rand -base64 32)"\ndocker compose up -d --build\n# Open http://127.0.0.1:47923`,
+      local: `git clone https://github.com/dellik95/context-platform.git\ncd context-platform/apps/host/Context.Dashboard/context.dashboard.client\nnpm ci && npm run build\ncd ../Context.Dashboard.Server\ndotnet run   # Dashboard + MCP live at http://127.0.0.1:47923`,
+      claude: `# From Dashboard -> Settings -> "Register Claude Code integration"\n# Or via API:\ncurl -X POST http://127.0.0.1:47923/api/projects/{projectId}/claude/install \\\n  -H "Authorization: Bearer <ADMIN_TOKEN>"\n# Writes .mcp.json + .claude/settings.json + hooks + SKILL.md (with backups)`
+    };
+
+    function renderLab() {
+      const body = document.getElementById('lab-body');
+      const statusPill = document.getElementById('lab-status-pill');
+      if (!body) return;
+
+      document.querySelectorAll('.lab-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-lab-tab') === activeLab);
+      });
+
+      if (activeLab === 'search') {
+        statusPill.textContent = 'MODE: HYBRID SEARCH + KNAPSACK PACKER';
+        const p = SEARCH_PRESETS[activeSearchPreset] || SEARCH_PRESETS[0];
+        body.innerHTML = `
+          <div class="lab-presets">
+            ${SEARCH_PRESETS.map((item, idx) => `
+              <button type="button" class="preset-btn ${idx === activeSearchPreset ? 'active' : ''}" data-search-preset="${idx}">${item.label}</button>
+            `).join('')}
+          </div>
+          <div class="lab-grid-2">
+            <div class="lab-panel">
+              <h4>Query Normalization &amp; TokenBudget Allocation</h4>
+              <div style="font-size:13px;color:var(--ink-2);margin-bottom:8px;">
+                <strong>Query:</strong> <code>${p.query}</code> · <strong>Scope:</strong> ${p.scope}
+              </div>
+              <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px;">
+                <strong>FTS5 Tokens:</strong> <code>${p.tokens}</code><br/>${p.filterNote}
+              </div>
+              <div class="budget-track" aria-label="Token budget distribution">
+                <div class="budget-seg" style="width:${p.alloc.arch}%;background:#818cf8;" title="Architecture ${p.alloc.arch}%"></div>
+                <div class="budget-seg" style="width:${p.alloc.mem}%;background:#34d399;" title="Memories ${p.alloc.mem}%"></div>
+                <div class="budget-seg" style="width:${p.alloc.issue}%;background:#fbbf24;" title="Open Issues ${p.alloc.issue}%"></div>
+                <div class="budget-seg" style="width:${p.alloc.hits}%;background:#06b6d4;" title="Primary Code Hits ${p.alloc.hits}%"></div>
+                <div class="budget-seg" style="width:${p.alloc.reserve}%;background:rgba(148,163,184,0.3);" title="Safety Reserve ${p.alloc.reserve}%"></div>
+              </div>
+              <div style="font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--cyan-bright);">${p.usedLabel}</div>
+            </div>
+            <div class="lab-panel">
+              <h4>Ranked ContextPack Output</h4>
+              ${p.hits.map(h => `
+                <div class="hit-row">
+                  <span class="mono" style="font-size:12px;overflow-wrap:anywhere;">${h.path}</span>
+                  <span class="hit-score">${h.score}</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      } else if (activeLab === 'graph') {
+        statusPill.textContent = 'MODE: TREE-SITTER AST BLAST RADIUS';
+        const isMethod = activeGraphMode === 'method';
+        body.innerHTML = `
+          <div class="lab-presets">
+            <button type="button" class="preset-btn ${isMethod ? 'active' : ''}" data-graph-mode="method">Target: BillingTokenValidator.ValidateToken (Method)</button>
+            <button type="button" class="preset-btn ${!isMethod ? 'active' : ''}" data-graph-mode="class">Target: BillingTokenValidator (Class Roll-Up)</button>
+          </div>
+          <div class="lab-grid-2">
+            <div class="lab-panel">
+              <h4>Alphabetical Cross-File Resolution &amp; Blast Radius</h4>
+              <p style="font-size:13px;color:var(--ink-2);margin-bottom:12px;">
+                Even when callers (<code>AlphaController.cs</code>) index earlier alphabetically than targets (<code>BillingTokenValidator.cs</code>), the two-phase pipeline resolves cross-file edges and expression-bodied property callers accurately.
+              </p>
+              <div class="hit-row">
+                <span>Incoming Direct &amp; Transitive Callers</span>
+                <span class="hit-score">${isMethod ? '4 callers' : '6 callers'}</span>
+              </div>
+              <div class="hit-row">
+                <span>Covering Test Links ([Fact] / [Theory])</span>
+                <span class="hit-score">1 covering test</span>
+              </div>
+              <div class="hit-row">
+                <span>Incremental SymbolDiffer Hash Guard</span>
+                <span class="hit-score">Preserved on untouched nodes</span>
+              </div>
+            </div>
+            <div class="lab-panel">
+              <h4>Resolved Dependency Trace</h4>
+              <div class="code-box" style="margin:0;">AlphaController.cs
+  └─▶ InvokeBillingCheck (expression-bodied / ctor caller)
+        └─▶ BillingTokenValidator.ValidateToken
+              ├─ Verified Test: BillingTokenValidatorTests [Fact]
+              └─ Roll-up Parent: ${isMethod ? 'Scoped to ValidateToken' : 'Includes all class members (6 callers)'}</div>
+            </div>
+          </div>
+        `;
+      } else {
+        statusPill.textContent = 'MODE: MEMORY STATE MACHINE + 17 MCP TOOLS';
+        const filteredTools = activeMcpGroup === 'all' ? MCP_TOOLS : MCP_TOOLS.filter(t => t.group === activeMcpGroup);
+        body.innerHTML = `
+          <div class="lab-presets">
+            ${MEM_STAGES.map((st, idx) => `
+              <button type="button" class="preset-btn ${idx === activeMemStage ? 'active' : ''}" data-mem-stage="${idx}">${st.title}</button>
+            `).join('')}
+          </div>
+          <div class="lab-panel" style="margin-bottom:16px;">
+            <h4>${MEM_STAGES[activeMemStage].title}</h4>
+            <p style="font-size:13.5px;color:var(--ink-2);">${MEM_STAGES[activeMemStage].rule}</p>
+          </div>
+          <div class="mcp-filter-row">
+            ${['all', 'search', 'graph', 'memory', 'sessions'].map(g => `
+              <button type="button" class="preset-btn ${activeMcpGroup === g ? 'active' : ''}" data-mcp-group="${g}">${g === 'all' ? 'All 17 MCP Tools' : g.toUpperCase()}</button>
+            `).join('')}
+          </div>
+          <div class="mcp-pill-grid">
+            ${filteredTools.map(t => `
+              <div class="mcp-tool-chip">
+                <code>${t.name}</code>
+                <span style="color:var(--muted);">${t.desc}</span>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }
+    }
+
+    function renderExplorer() {
+      const screen = document.getElementById('exp-screen');
+      if (!screen) return;
+      const mod = MODULES[activeModuleKey] || MODULES.dashboard;
+      const copy = mod[currentLang] || mod.en;
+      const zoomText = I18N[currentLang].zoom_hint;
+
+      document.querySelectorAll('#exp-tabs .exp-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-mod') === activeModuleKey);
+      });
+
+      screen.innerHTML = `
+        <div>
+          <span class="tour-badge" style="margin-bottom:6px;">${mod.badge}</span>
+          <h3 class="exp-mod-title">${copy.title}</h3>
+          <p class="exp-mod-desc">${copy.desc}</p>
+        </div>
+        <ul class="exp-bullets">
+          ${copy.bullets.map(b => `<li>${b}</li>`).join('')}
+        </ul>
+        <div class="exp-shot-frame">
+          <img src="${mod.img}" alt="${copy.title}" class="zoomable-shot" data-caption="${copy.title}" />
+          <button type="button" class="zoom-hint" data-zoom-trigger>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35M11 8v6M8 11h6"/></svg>
+            <span>${zoomText}</span>
+          </button>
+        </div>
+      `;
+    }
+
+    function renderBento12() {
+      const grid = document.getElementById('bento-12-grid');
+      if (!grid) return;
+      grid.innerHTML = FEATURES_12.map(item => {
+        const [title, desc] = item[currentLang];
+        const [bg, bd, fg] = item.tone;
+        return `
+          <article class="f-card">
+            <div class="f-icon" style="--ic-bg:${bg};--ic-bd:${bd};--ic-fg:${fg};">${item.icon}</div>
+            <h4>${title}</h4>
+            <p>${desc}</p>
+          </article>
+        `;
+      }).join('');
+    }
+
+    function renderQuickStart() {
+      const pre = document.getElementById('qs-code');
+      if (!pre) return;
+      document.querySelectorAll('[data-qs]').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-qs') === activeQsTab);
+      });
+      pre.textContent = QUICK_START[activeQsTab] || QUICK_START.docker;
+    }
+
+    function applyLanguage(lang) {
+      currentLang = lang === 'uk' ? 'uk' : 'en';
+      document.documentElement.lang = currentLang;
+      try { localStorage.setItem('ol_cv_lang', currentLang); } catch (e) {}
+      document.querySelectorAll('[data-lang-btn]').forEach(b => b.classList.toggle('active', b.getAttribute('data-lang-btn') === currentLang));
+      const dict = I18N[currentLang];
+      document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        if (dict[key]) el.textContent = dict[key];
+      });
+      renderExplorer();
+      renderBento12();
+    }
+
+    function applyTheme(theme) {
+      const t = theme === 'light' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+      try { localStorage.setItem('ol_cv_theme', t); } catch (e) {}
+      document.querySelectorAll('[data-theme-btn]').forEach(b => b.classList.toggle('active', b.getAttribute('data-theme-btn') === t));
+    }
+
+    // Event Delegation
+    document.addEventListener('click', e => {
+      const langBtn = e.target.closest('[data-lang-btn]');
+      if (langBtn) return applyLanguage(langBtn.getAttribute('data-lang-btn'));
+
+      const themeBtn = e.target.closest('[data-theme-btn]');
+      if (themeBtn) return applyTheme(themeBtn.getAttribute('data-theme-btn'));
+
+      const labTab = e.target.closest('[data-lab-tab]');
+      if (labTab) { activeLab = labTab.getAttribute('data-lab-tab'); return renderLab(); }
+
+      const sp = e.target.closest('[data-search-preset]');
+      if (sp) { activeSearchPreset = parseInt(sp.getAttribute('data-search-preset'), 10) || 0; return renderLab(); }
+
+      const gm = e.target.closest('[data-graph-mode]');
+      if (gm) { activeGraphMode = gm.getAttribute('data-graph-mode'); return renderLab(); }
+
+      const ms = e.target.closest('[data-mem-stage]');
+      if (ms) { activeMemStage = parseInt(ms.getAttribute('data-mem-stage'), 10) || 0; return renderLab(); }
+
+      const mg = e.target.closest('[data-mcp-group]');
+      if (mg) { activeMcpGroup = mg.getAttribute('data-mcp-group'); return renderLab(); }
+
+      const modBtn = e.target.closest('[data-mod]');
+      if (modBtn) { activeModuleKey = modBtn.getAttribute('data-mod'); return renderExplorer(); }
+
+      const qsBtn = e.target.closest('[data-qs]');
+      if (qsBtn) { activeQsTab = qsBtn.getAttribute('data-qs'); return renderQuickStart(); }
+
+      const zoomBtn = e.target.closest('[data-zoom-trigger]');
+      if (zoomBtn) {
+        const img = zoomBtn.closest('.tour-visual-inner, .stage-main-frame, .exp-shot-frame')?.querySelector('.zoomable-shot');
+        if (img) openLightbox(img);
+        return;
+      }
+
+      const shot = e.target.closest('img.zoomable-shot');
+      if (shot) openLightbox(shot);
+    });
+
+    const lb = document.getElementById('cp-lightbox');
+    const lbImg = document.getElementById('lb-img');
+    const lbCap = document.getElementById('lb-caption');
+    function openLightbox(img) {
+      lbImg.src = img.src;
+      lbCap.textContent = img.getAttribute('data-caption') || img.alt;
+      lb.classList.add('open');
+    }
+    document.getElementById('lb-close').addEventListener('click', () => lb.classList.remove('open'));
+    lb.addEventListener('click', e => { if (e.target === lb) lb.classList.remove('open'); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') lb.classList.remove('open'); });
+
+    document.getElementById('copy-qs-btn').addEventListener('click', e => {
+      const code = QUICK_START[activeQsTab] || QUICK_START.docker;
+      navigator.clipboard?.writeText(code).catch(() => {});
+      e.target.textContent = I18N[currentLang].copied_cmd;
+      setTimeout(() => { e.target.textContent = I18N[currentLang].copy_cmd; }, 2200);
+    });
+
+    // Parallax & Scroll Progress
+    let ticking = false;
+    function onScroll() {
+      const y = window.scrollY;
+      const docH = document.documentElement.scrollHeight - window.innerHeight;
+      document.getElementById('scroll-progress').style.width = (docH > 0 ? Math.min(100, (y / docH) * 100) : 0) + '%';
+      document.querySelectorAll('[data-parallax]').forEach(el => {
+        const sp = parseFloat(el.getAttribute('data-parallax')) || 0;
+        el.style.transform = `translate3d(0, ${(-y * sp * 0.65).toFixed(1)}px, 0)`;
+      });
+      ticking = false;
+    }
+    window.addEventListener('scroll', () => { if (!ticking) { requestAnimationFrame(onScroll); ticking = true; } }, { passive: true });
+
+    const heroStage = document.getElementById('hero-stage');
+    const stageTilt = document.getElementById('stage-tilt');
+    if (heroStage && stageTilt) {
+      heroStage.addEventListener('mousemove', e => {
+        const r = heroStage.getBoundingClientRect();
+        const x = ((e.clientX - r.left) / r.width - 0.5) * 5;
+        const y = ((e.clientY - r.top) / r.height - 0.5) * -4.5;
+        stageTilt.style.transform = `rotateY(${x.toFixed(2)}deg) rotateX(${y.toFixed(2)}deg)`;
+      });
+      heroStage.addEventListener('mouseleave', () => { stageTilt.style.transform = 'rotateY(0deg) rotateX(0deg)'; });
+    }
+
+    const revObs = new IntersectionObserver(entries => {
+      entries.forEach(ent => {
+        if (ent.isIntersecting) {
+          ent.target.classList.add('visible');
+          revObs.unobserve(ent.target);
+        }
+      });
+    }, { threshold: 0.1 });
+    document.querySelectorAll('.reveal').forEach(el => revObs.observe(el));
+
+    // Support Portfolio iframe sync
+    window.addEventListener('message', ev => {
+      if (ev.data && ev.data.type === 'OL_SET_LANG') applyLanguage(ev.data.lang);
+      if (ev.data && ev.data.type === 'OL_SET_THEME') applyTheme(ev.data.theme);
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    const paramLang = params.get('lang');
+    let initLang = paramLang === 'uk' ? 'uk' : 'en';
+    let initTheme = 'dark';
+    try {
+      if (!paramLang) initLang = localStorage.getItem('ol_cv_lang') || 'en';
+      initTheme = localStorage.getItem('ol_cv_theme') || 'dark';
+    } catch (e) {}
+
+    renderLab();
+    renderQuickStart();
+    applyTheme(initTheme);
+    applyLanguage(initLang);
+  </script>
+</body>
+</html>
