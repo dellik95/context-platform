@@ -1,5 +1,7 @@
 # Context Platform
 
+[Project landing](https://dellik95.github.io/context-platform/) · [Portfolio](https://dellik95.github.io/portfolio/) · [Qandivo](https://dellik95.github.io/portfolio/qandivo/) · [Kadex UI component library](https://dellik95.github.io/portfolio/kadex-ui/)
+
 **Language / Мова:** English | [Українська (посібник)](docs/uk/USER_GUIDE.md) · **Live Product Showcase:** [dellik95.github.io/context-platform](https://dellik95.github.io/context-platform/)
 
 **Local-first long-term memory, hybrid code search, and call-graph impact analysis for AI coding agents (Claude Code / MCP).**
